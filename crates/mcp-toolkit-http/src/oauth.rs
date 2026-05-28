@@ -24,6 +24,10 @@ pub const OAUTH_AUTHZ_WELL_KNOWN_PATH: &str = "/.well-known/oauth-authorization-
 pub const OIDC_WELL_KNOWN_PATH: &str = "/.well-known/openid-configuration";
 /// Standard bearer method for HTTP Authorization headers.
 pub const BEARER_METHOD_HEADER: &str = "header";
+/// OAuth 2.0 Authorization Code grant type.
+pub const GRANT_TYPE_AUTHORIZATION_CODE: &str = "authorization_code";
+/// OAuth 2.0 Device Authorization Grant type.
+pub const GRANT_TYPE_DEVICE_CODE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// OAuth 2.0 Authorization Server metadata (RFC 8414).
 ///
