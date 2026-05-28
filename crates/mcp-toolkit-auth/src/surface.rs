@@ -92,6 +92,8 @@ pub struct IssuerEntry {
     pub registration_endpoint: Option<String>,
     pub jwks_uri: Option<String>,
     pub introspection_endpoint: Option<String>,
+    pub device_authorization_endpoint: Option<String>,
+    pub grant_types_supported: Option<Vec<String>>,
     pub realm: String,
     pub scopes_supported: Vec<String>,
     pub allowed_client_ids: HashSet<String>,
@@ -119,6 +121,8 @@ impl IssuerEntry {
             registration_endpoint: metadata.registration_endpoint,
             jwks_uri: metadata.jwks_uri,
             introspection_endpoint: metadata.introspection_endpoint,
+            device_authorization_endpoint: metadata.device_authorization_endpoint,
+            grant_types_supported: metadata.grant_types_supported,
             realm: realm.into(),
             scopes_supported,
             allowed_client_ids,
@@ -254,6 +258,8 @@ pub fn authorization_server_metadata_from_oidc(
         registration_endpoint: oidc.registration_endpoint.clone(),
         jwks_uri: Some(oidc.jwks_uri.clone()),
         introspection_endpoint: oidc.introspection_endpoint.clone(),
+        device_authorization_endpoint: oidc.device_authorization_endpoint.clone(),
+        grant_types_supported: oidc.grant_types_supported.clone(),
     };
     validate_authorization_server_metadata(&metadata)?;
     Ok(metadata)
@@ -305,6 +311,22 @@ fn validate_authorization_server_metadata(
         .is_some_and(|value| value.trim().is_empty())
     {
         return Err(AuthSurfaceError::EmptyField("introspection_endpoint"));
+    }
+    if metadata
+        .device_authorization_endpoint
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(AuthSurfaceError::EmptyField(
+            "device_authorization_endpoint",
+        ));
+    }
+    if metadata
+        .grant_types_supported
+        .as_ref()
+        .is_some_and(|values| values.iter().any(|value| value.trim().is_empty()))
+    {
+        return Err(AuthSurfaceError::EmptyField("grant_types_supported"));
     }
     Ok(())
 }
@@ -492,6 +514,15 @@ impl IssuerRegistry {
                     },
                 )?;
             }
+            if let Some(device_authorization_endpoint) = &entry.device_authorization_endpoint {
+                validate_absolute_url(device_authorization_endpoint, allow_insecure_http).map_err(
+                    |err| AuthSurfaceError::InvalidUrl {
+                        field: "device_authorization_endpoint",
+                        value: device_authorization_endpoint.clone(),
+                        reason: err.to_string(),
+                    },
+                )?;
+            }
             validate_absolute_url(&resource_url, allow_insecure_http).map_err(|err| {
                 AuthSurfaceError::InvalidUrl {
                     field: "resource_url",
@@ -513,6 +544,8 @@ impl IssuerRegistry {
                 registration_endpoint: entry.registration_endpoint.clone(),
                 jwks_uri: entry.jwks_uri.clone(),
                 introspection_endpoint: entry.introspection_endpoint.clone(),
+                device_authorization_endpoint: entry.device_authorization_endpoint.clone(),
+                grant_types_supported: entry.grant_types_supported.clone(),
             };
 
             let runtime = Arc::new(IssuerRuntime {
@@ -1101,6 +1134,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1239,6 +1274,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1283,6 +1320,8 @@ mod tests {
             registration_endpoint: Some("https://issuer.test/register".to_string()),
             jwks_uri: Some("https://issuer.test/jwks".to_string()),
             introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
         };
         let resolved = resolve_authorization_server_metadata(
             &AuthorizationServerMetadataSource::Explicit(metadata.clone()),
@@ -1301,6 +1340,8 @@ mod tests {
                 registration_endpoint: None,
                 jwks_uri: None,
                 introspection_endpoint: None,
+                device_authorization_endpoint: None,
+                grant_types_supported: None,
             }),
         )
         .expect_err("blank issuer should be rejected");
@@ -1316,6 +1357,11 @@ mod tests {
             registration_endpoint: Some("https://issuer.test/register".to_string()),
             jwks_uri: "https://issuer.test/jwks".to_string(),
             introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
+            device_authorization_endpoint: Some("https://issuer.test/device".to_string()),
+            grant_types_supported: Some(vec![
+                "authorization_code".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+            ]),
         };
         let resolved = resolve_authorization_server_metadata(
             &AuthorizationServerMetadataSource::OidcDiscovery(oidc),
@@ -1336,6 +1382,17 @@ mod tests {
             resolved.introspection_endpoint.as_deref(),
             Some("https://issuer.test/introspect")
         );
+        assert_eq!(
+            resolved.device_authorization_endpoint.as_deref(),
+            Some("https://issuer.test/device")
+        );
+        assert_eq!(
+            resolved.grant_types_supported,
+            Some(vec![
+                "authorization_code".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_string()
+            ])
+        );
     }
 
     #[test]
@@ -1349,6 +1406,11 @@ mod tests {
                 registration_endpoint: None,
                 jwks_uri: Some("https://issuer.test/jwks".to_string()),
                 introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
+                device_authorization_endpoint: Some("https://issuer.test/device".to_string()),
+                grant_types_supported: Some(vec![
+                    "authorization_code".to_string(),
+                    "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+                ]),
             }),
             "test",
             vec!["ops:read".to_string()],
@@ -1366,6 +1428,17 @@ mod tests {
             entry.introspection_endpoint.as_deref(),
             Some("https://issuer.test/introspect")
         );
+        assert_eq!(
+            entry.device_authorization_endpoint.as_deref(),
+            Some("https://issuer.test/device")
+        );
+        assert_eq!(
+            entry.grant_types_supported,
+            Some(vec![
+                "authorization_code".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_string()
+            ])
+        );
     }
 
     #[test]
@@ -1379,6 +1452,8 @@ mod tests {
                 registration_endpoint: Some("https://issuer.test/register".to_string()),
                 jwks_uri: None,
                 introspection_endpoint: None,
+                device_authorization_endpoint: None,
+                grant_types_supported: None,
             }),
             "test",
             vec!["ops:read".to_string()],
@@ -1433,6 +1508,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1501,6 +1578,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1552,6 +1631,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1602,6 +1683,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1671,6 +1754,8 @@ mod tests {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),

@@ -159,6 +159,10 @@ pub struct OidcDiscovery {
     pub jwks_uri: String,
     #[serde(rename = "introspection_endpoint")]
     pub introspection_endpoint: Option<String>,
+    #[serde(rename = "device_authorization_endpoint")]
+    pub device_authorization_endpoint: Option<String>,
+    #[serde(rename = "grant_types_supported")]
+    pub grant_types_supported: Option<Vec<String>>,
 }
 
 /// Performs OIDC discovery to retrieve authorization server metadata.

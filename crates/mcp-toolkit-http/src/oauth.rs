@@ -49,6 +49,12 @@ pub struct AuthorizationServerMetadata {
     /// Optional introspection endpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub introspection_endpoint: Option<String>,
+    /// Optional OAuth device authorization endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_authorization_endpoint: Option<String>,
+    /// Optional supported OAuth grant types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_types_supported: Option<Vec<String>>,
 }
 
 /// URL validation failures for OAuth metadata configuration.

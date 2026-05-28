@@ -42,6 +42,8 @@ async fn auth_surface_contract_serves_discovery_and_challenges_missing_token() {
             registration_endpoint: None,
             jwks_uri: None,
             introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
         }),
         "toolkit-test",
         vec!["tool:read".to_string(), "tool:write".to_string()],
