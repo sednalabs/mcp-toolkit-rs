@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/mcp-toolkit",
+  "crates/mcp-toolkit-core",
+  "crates/mcp-toolkit-auth",
+  "crates/mcp-toolkit-docs",
+  "crates/mcp-toolkit-http",
+  "crates/mcp-toolkit-observability",
+  "crates/mcp-toolkit-policy-core",
+  "crates/mcp-toolkit-policy-conformance",
+  "crates/mcp-toolkit-policy-ffi",
+  "crates/mcp-toolkit-policy-kernel-adapters",
+  "crates/mcp-toolkit-policy-runtime",
+  "crates/mcp-toolkit-postgres",
+  "crates/mcp-toolkit-process",
+  "crates/mcp-toolkit-gemini",
+  "crates/mcp-toolkit-testing",
+]

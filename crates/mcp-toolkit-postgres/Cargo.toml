@@ -1,0 +1,20 @@
+[package]
+name = "mcp-toolkit-postgres"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "PostgreSQL connection and TLS helpers for Rust MCP services."
+repository = "https://github.com/sednalabs/mcp-rs-toolkit"
+readme = "../../README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+form_urlencoded = "1.2.2"
+rustls = { version = "0.23.35", features = ["ring"] }
+rustls-native-certs = "0.8.1"
+tokio = { version = "1.49.0", features = ["io-util", "rt", "sync"] }
+tokio-postgres = "0.7.15"
+tokio-postgres-rustls = "0.13.0"

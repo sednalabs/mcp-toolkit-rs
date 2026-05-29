@@ -1,0 +1,17 @@
+[package]
+name = "mcp-toolkit-testing"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Testing helpers for Rust MCP server and tool-surface contracts."
+repository = "https://github.com/sednalabs/mcp-rs-toolkit"
+readme = "../../README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http" }
+serde = "1.0.228"
+serde_json = "1.0.149"

@@ -1,0 +1,237 @@
+//! # Host Header Helpers
+//!
+//! Shared parsing and validation helpers for Host headers and base URL derivation.
+//!
+//! ## Ownership
+//! This module owns the logic for parsing and allowlist-based validation of HTTP
+//! Host headers.
+//!
+//! ## Non-ownership
+//! This module does not manage the transport layer; it relies on the caller
+//! to extract and provide HTTP headers.
+//!
+//! ## Policy & Guarantees
+//! * **DNS Rebinding Defense**: Enforces strict allowlist validation for Host headers.
+//! * **Header Trust**: Honors `x-forwarded-proto` only for scheme derivation.
+//!
+//! ## Caller Responsibility
+//! Callers are responsible for:
+//! * Providing a defined set of allowed hostnames.
+//! * Handling validation error responses appropriately for their API surface.
+//!
+//! ## References
+//! * RFC 3986: URI syntax (host/port formatting).
+
+use std::collections::HashSet;
+use std::net::Ipv6Addr;
+
+use http::header::HOST;
+use http::{HeaderMap, StatusCode};
+
+/// Parsed host header components.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedHost {
+    /// The hostname (lowercased, without brackets).
+    pub host: String,
+    /// Optional numeric port.
+    pub port: Option<String>,
+    /// True when the host was an IPv6 literal.
+    pub ipv6: bool,
+}
+
+/// Host header validation failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostValidationError {
+    MissingHost,
+    InvalidHost,
+    NotAllowed,
+}
+
+impl HostValidationError {
+    /// Returns the HTTP status code for the validation failure.
+    pub fn status_code(self) -> StatusCode {
+        match self {
+            HostValidationError::MissingHost | HostValidationError::InvalidHost => {
+                StatusCode::BAD_REQUEST
+            }
+            HostValidationError::NotAllowed => StatusCode::FORBIDDEN,
+        }
+    }
+
+    /// Returns a short response body for the validation failure.
+    pub fn message(self) -> &'static str {
+        match self {
+            HostValidationError::MissingHost => "Missing Host header",
+            HostValidationError::InvalidHost => "Invalid Host header",
+            HostValidationError::NotAllowed => "Host not allowed",
+        }
+    }
+}
+
+/// Parses a Host header value into host/port components.
+pub fn parse_host_header(header: &str) -> Option<ParsedHost> {
+    let trimmed = header.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host = rest[..end].to_lowercase();
+        if host.parse::<Ipv6Addr>().is_err() {
+            return None;
+        }
+        let remainder = &rest[end + 1..];
+        let port = match remainder {
+            "" => None,
+            _ => {
+                let port = remainder.strip_prefix(':')?;
+                Some(normalize_port(port)?)
+            }
+        };
+        if host.is_empty() {
+            return None;
+        }
+        return Some(ParsedHost {
+            host,
+            port,
+            ipv6: true,
+        });
+    }
+    let (host, port) = match trimmed.split_once(':') {
+        Some((host, port)) => (host, Some(normalize_port(port)?)),
+        None => (trimmed, None),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(ParsedHost {
+        host: host.to_lowercase(),
+        port,
+        ipv6: false,
+    })
+}
+
+/// Validates that a request Host header is present, well-formed, and allowlisted.
+pub fn validate_host_header(
+    headers: &HeaderMap,
+    allowed_hosts: &HashSet<String>,
+) -> Result<ParsedHost, HostValidationError> {
+    let host_header = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(HostValidationError::MissingHost)?;
+    let parsed = parse_host_header(host_header).ok_or(HostValidationError::InvalidHost)?;
+    if !allowed_hosts.contains(&parsed.host) {
+        return Err(HostValidationError::NotAllowed);
+    }
+    Ok(parsed)
+}
+
+/// Derives the base URL from request headers with allowlist enforcement.
+pub fn base_url(
+    headers: &HeaderMap,
+    allowed_hosts: &HashSet<String>,
+    default_host: &str,
+) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("http");
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_host_header)
+        .filter(|parsed| allowed_hosts.contains(&parsed.host))
+        .map(format_host)
+        .unwrap_or_else(|| default_host.to_string());
+    format!("{scheme}://{host}")
+}
+
+fn normalize_port(port: &str) -> Option<String> {
+    let trimmed = port.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn format_host(parsed: ParsedHost) -> String {
+    let host = if parsed.ipv6 {
+        format!("[{}]", parsed.host)
+    } else {
+        parsed.host
+    };
+    match parsed.port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base_url, parse_host_header, validate_host_header, HostValidationError};
+    use std::collections::HashSet;
+
+    use http::{header::HOST, HeaderMap};
+
+    #[test]
+    fn parses_ipv4_host_and_port() {
+        let parsed = parse_host_header("example.com:8080").expect("parsed");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port.as_deref(), Some("8080"));
+        assert!(!parsed.ipv6);
+    }
+
+    #[test]
+    fn rejects_non_ipv6_extra_colon_segments() {
+        assert!(parse_host_header("example.com:80:90").is_none());
+    }
+
+    #[test]
+    fn parses_ipv6_literal() {
+        let parsed = parse_host_header("[::1]:9412").expect("parsed");
+        assert_eq!(parsed.host, "::1");
+        assert_eq!(parsed.port.as_deref(), Some("9412"));
+        assert!(parsed.ipv6);
+    }
+
+    #[test]
+    fn rejects_bracketed_hostnames() {
+        assert!(parse_host_header("[example.com]").is_none());
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "[localhost]".parse().expect("header"));
+        let allowed: HashSet<String> = ["localhost".to_string()].into_iter().collect();
+        let err = validate_host_header(&headers, &allowed).expect_err("error");
+        assert_eq!(err, HostValidationError::InvalidHost);
+    }
+
+    #[test]
+    fn validate_host_header_rejects_unknown() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com".parse().expect("header"));
+        let allowed: HashSet<String> = ["localhost".to_string()].into_iter().collect();
+        let err = validate_host_header(&headers, &allowed).expect_err("error");
+        assert_eq!(err, HostValidationError::NotAllowed);
+    }
+
+    #[test]
+    fn base_url_falls_back_to_default() {
+        let headers = HeaderMap::new();
+        let allowed: HashSet<String> = ["localhost".to_string()].into_iter().collect();
+        let url = base_url(&headers, &allowed, "localhost:1234");
+        assert_eq!(url, "http://localhost:1234");
+    }
+
+    #[test]
+    fn base_url_falls_back_to_default_on_malformed_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com:80:90".parse().expect("header"));
+        let allowed: HashSet<String> = ["example.com".to_string()].into_iter().collect();
+        let url = base_url(&headers, &allowed, "localhost:1234");
+        assert_eq!(url, "http://localhost:1234");
+    }
+}

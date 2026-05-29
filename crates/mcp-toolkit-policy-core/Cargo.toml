@@ -1,0 +1,27 @@
+[package]
+name = "mcp-toolkit-policy-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure policy primitives and deterministic validators for Rust MCP services."
+repository = "https://github.com/sednalabs/mcp-rs-toolkit"
+readme = "../../README.md"
+publish = false
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sql_policy_conformance"
+path = "src/bin/sql_policy_conformance.rs"
+required-features = ["conformance"]
+
+[features]
+default = []
+conformance = []
+
+[dependencies]
+regex = "1.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

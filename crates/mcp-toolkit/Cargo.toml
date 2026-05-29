@@ -1,0 +1,32 @@
+[package]
+name = "mcp-toolkit"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Umbrella crate for reusable Rust MCP toolkit components."
+repository = "https://github.com/sednalabs/mcp-rs-toolkit"
+readme = "../../README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mcp-toolkit-core = { version = "0.1.0", path = "../mcp-toolkit-core" }
+mcp-toolkit-auth = { version = "0.1.0", path = "../mcp-toolkit-auth", optional = true }
+mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http", optional = true }
+mcp-toolkit-policy-core = { version = "0.1.0", path = "../mcp-toolkit-policy-core", optional = true }
+mcp-toolkit-policy-ffi = { version = "0.1.0", path = "../mcp-toolkit-policy-ffi", optional = true }
+mcp-toolkit-policy-runtime = { version = "0.1.0", path = "../mcp-toolkit-policy-runtime", optional = true }
+mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", optional = true }
+mcp-toolkit-gemini = { version = "0.1.0", path = "../mcp-toolkit-gemini", optional = true }
+
+[features]
+default = []
+full = ["auth", "http", "policy", "policy-ffi", "process", "gemini"]
+auth = ["mcp-toolkit-auth"]
+http = ["mcp-toolkit-http"]
+policy = ["mcp-toolkit-policy-core", "mcp-toolkit-policy-runtime"]
+policy-ffi = ["mcp-toolkit-policy-ffi"]
+process = ["mcp-toolkit-process"]
+gemini = ["mcp-toolkit-gemini"]

@@ -1,0 +1,52 @@
+name: codeql-query-tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/codeql/actions-workflow-security/**"
+      - ".github/workflows/codeql-query-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/codeql/actions-workflow-security/**"
+      - ".github/workflows/codeql-query-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-query-tests::${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actions-workflow-security:
+    name: Actions workflow security query tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        # actions/checkout v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Set up CodeQL
+        # github/codeql-action v4
+        id: setup-codeql
+        uses: github/codeql-action/setup-codeql@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
+
+      - name: Install query pack dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" pack install .github/codeql/actions-workflow-security
+
+      - name: Compile Actions workflow security queries
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" query compile \
+            --search-path .github/codeql \
+            .github/codeql/actions-workflow-security/*.ql

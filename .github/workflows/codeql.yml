@@ -1,0 +1,120 @@
+name: codeql
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/codeql/**"
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "crates/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/codeql/**"
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "crates/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql::${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+            config_file: ./.codeql-runtime/codeql-actions.yml
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare Actions CodeQL query pack config
+        if: ${{ matrix.language == 'actions' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .codeql-runtime
+          pack_path="./.github/codeql/actions-workflow-security"
+
+          if [[ '${{ github.event_name }}' == 'pull_request' &&
+            '${{ github.event.pull_request.head.repo.full_name }}' != '${{ github.repository }}' ]]; then
+            trusted_root="${GITHUB_WORKSPACE}/.codeql-runtime/trusted-base"
+            trusted_pack="./.codeql-runtime/trusted-base/.github/codeql/actions-workflow-security"
+            mkdir -p "${trusted_root}"
+
+            if git fetch --no-tags --depth=1 origin '${{ github.event.pull_request.base.sha }}' &&
+              git archive '${{ github.event.pull_request.base.sha }}' .github/codeql/actions-workflow-security |
+                tar -x -C "${trusted_root}"; then
+              pack_path="${trusted_pack}"
+            else
+              echo "::warning title=CodeQL Actions query pack bootstrap::Trusted base query pack was unavailable; using the checked-out pack for this run."
+            fi
+          fi
+
+          {
+            echo "name: mcp-rs-toolkit-codeql-actions-runtime"
+            echo
+            echo "queries:"
+            echo "  - uses: security-and-quality"
+            echo "  - uses: ${pack_path}"
+            echo
+            echo "threat-models: local"
+          } > .codeql-runtime/codeql-actions.yml
+
+      - name: Initialize CodeQL
+        # github/codeql-action v4
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: ${{ matrix.config_file }}
+
+      - name: Perform CodeQL analysis
+        # github/codeql-action v4
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  results:
+    name: CodeQL required gate
+    needs:
+      - analyze
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    steps:
+      - name: Summarize
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "analyze: ${{ needs.analyze.result }}"
+          if [[ '${{ needs.analyze.result }}' != 'success' ]]; then
+            echo 'CodeQL analysis failed.'
+            exit 1
+          fi

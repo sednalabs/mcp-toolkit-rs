@@ -1,0 +1,514 @@
+//! # Streamable HTTP Service Builders
+//!
+//! Helpers for constructing loopback-friendly Streamable HTTP MCP services.
+//!
+//! ## Ownership
+//! This module owns the builder infrastructure for constructing `StreamableHttpService`
+//! instances with bounded session management and standardized loopback configurations.
+//!
+//! ## Non-ownership
+//! This module does not manage transport-level security (TLS) or the underlying
+//! MCP service lifecycle beyond session sweep cleanup.
+//!
+//! ## Policy & Guarantees
+//! * **Bounded Concurrency**: Limits session capacity to reduce the risk of memory exhaustion.
+//! * **Loopback-First**: Employs conservative loopback defaults for host allowlisting.
+//! * **Stateful Request Routing**: Provides handlers to route MCP requests to the
+//!   correct session context.
+//!
+//! ## Caller Responsibility
+//! Callers are responsible for:
+//! * Configuring appropriate session capacities (`max_sessions`, `channel_capacity`).
+//! * Ensuring that host allowlists match their deployment environment requirements.
+//!
+//! ## References
+//! * [MCP HTTP Transport](https://modelcontextprotocol.io/docs/concepts/transports#http-sse)
+
+use std::sync::Arc;
+
+use axum::body::{to_bytes, Body};
+use http::{HeaderMap, Method, Request, Response, StatusCode};
+use rmcp::{
+    transport::streamable_http_server::{
+        session::{
+            local::{LocalSessionManager, SessionConfig},
+            SessionManager,
+        },
+        StreamableHttpServerConfig, StreamableHttpService,
+    },
+    RoleServer,
+};
+use serde_json::json;
+use tokio::time::{Duration, MissedTickBehavior};
+
+use crate::session::{BoundedSessionManager, RecordingSessionManager, SessionLifecycleConfig};
+
+const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
+
+/// Bounded local Streamable HTTP service configuration.
+#[derive(Debug, Clone)]
+pub struct LocalStreamableHttpServiceConfig {
+    pub max_sessions: usize,
+    pub allow_resume: bool,
+    pub session_config: SessionConfig,
+    pub server_config: StreamableHttpServerConfig,
+}
+
+impl Default for LocalStreamableHttpServiceConfig {
+    fn default() -> Self {
+        Self {
+            max_sessions: 32,
+            allow_resume: false,
+            session_config: SessionConfig::default(),
+            server_config: StreamableHttpServerConfig::default(),
+        }
+    }
+}
+
+/// Shared runtime components for a local Streamable HTTP MCP service.
+pub struct LocalStreamableHttpServiceRuntime<S> {
+    pub session_manager: Arc<BoundedSessionManager>,
+    pub service: StreamableHttpService<S, RecordingSessionManager>,
+}
+
+/// Builds a bounded local Streamable HTTP service runtime.
+pub fn build_local_streamable_http_service<S>(
+    service_factory: impl Fn() -> Result<S, std::io::Error> + Send + Sync + 'static,
+    config: LocalStreamableHttpServiceConfig,
+) -> LocalStreamableHttpServiceRuntime<S>
+where
+    S: rmcp::Service<RoleServer> + Send + 'static,
+{
+    let disconnected_idle_timeout = config
+        .session_config
+        .keep_alive
+        .or(Some(SessionConfig::DEFAULT_KEEP_ALIVE));
+    let enable_background_session_sweeper =
+        config.allow_resume && disconnected_idle_timeout.is_some();
+    let lifecycle_config = if config.allow_resume {
+        SessionLifecycleConfig::connected(disconnected_idle_timeout)
+    } else {
+        SessionLifecycleConfig::default()
+    };
+
+    let mut session_config = config.session_config;
+    if config.allow_resume {
+        session_config.keep_alive = None;
+    }
+
+    let session_manager = Arc::new(BoundedSessionManager::new_with_lifecycle(
+        LocalSessionManager::default(),
+        config.max_sessions,
+        config.allow_resume,
+        session_config,
+        lifecycle_config,
+    ));
+    let recording_session_manager =
+        Arc::new(RecordingSessionManager::new(session_manager.clone(), None));
+    let sweep_token = config.server_config.cancellation_token.child_token();
+    let service = StreamableHttpService::new(
+        service_factory,
+        recording_session_manager,
+        config.server_config,
+    );
+    if enable_background_session_sweeper {
+        let sweep_sessions = session_manager.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = sweep_token.cancelled() => break,
+                    _ = ticker.tick() => {
+                        sweep_sessions.sweep_expired_sessions().await;
+                    }
+                }
+            }
+        });
+    }
+    LocalStreamableHttpServiceRuntime {
+        session_manager,
+        service,
+    }
+}
+
+/// Routes stateful `/mcp` requests, handling session validation and error responses.
+///
+/// # Security
+/// * Assumes caller-provided host/auth guards are already applied.
+pub async fn handle_stateful_mcp_request<S, M>(
+    service: StreamableHttpService<S, M>,
+    session_manager: Arc<BoundedSessionManager>,
+    req: Request<Body>,
+) -> Response<Body>
+where
+    S: rmcp::Service<RoleServer> + Send + 'static,
+    M: SessionManager + Send + Sync + 'static,
+{
+    let method = req.method().clone();
+    let session_id = session_id_from_headers(req.headers());
+
+    match method {
+        Method::POST => {
+            if let Some(session_id) = session_id.clone() {
+                if session_exists(&session_manager, &session_id).await {
+                    return forward_service(service, req).await;
+                }
+                return session_error(
+                    StatusCode::NOT_FOUND,
+                    "Invalid or expired session ID.",
+                    "Re-initialize with POST /mcp to obtain a new session id.",
+                );
+            }
+
+            let (parts, body) = req.into_parts();
+            let bytes = match to_bytes(body, usize::MAX).await {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    return session_error(
+                        StatusCode::BAD_REQUEST,
+                        "Failed to read request body.",
+                        "Retry the request.",
+                    );
+                }
+            };
+            if is_initialize_payload(&bytes) {
+                let req = Request::from_parts(parts, Body::from(bytes));
+                return forward_service(service, req).await;
+            }
+            session_error(
+                StatusCode::BAD_REQUEST,
+                "Missing session ID.",
+                "Initialize with POST /mcp to obtain a session id.",
+            )
+        }
+        Method::GET | Method::DELETE => {
+            let Some(session_id) = session_id else {
+                return session_error(
+                    StatusCode::BAD_REQUEST,
+                    "Missing session ID.",
+                    "Initialize with POST /mcp to obtain a session id.",
+                );
+            };
+            if !session_exists(&session_manager, &session_id).await {
+                return session_error(
+                    StatusCode::NOT_FOUND,
+                    "Invalid or expired session ID.",
+                    "Re-initialize with POST /mcp to obtain a new session id.",
+                );
+            }
+            forward_service(service, req).await
+        }
+        _ => session_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Method not allowed.",
+            "Use POST /mcp to initialize, then reuse the session id for later requests.",
+        ),
+    }
+}
+
+async fn forward_service<S, M>(
+    service: StreamableHttpService<S, M>,
+    req: Request<Body>,
+) -> Response<Body>
+where
+    S: rmcp::Service<RoleServer> + Send + 'static,
+    M: SessionManager + Send + Sync + 'static,
+{
+    service.handle(req).await.map(Body::new)
+}
+
+fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(MCP_SESSION_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn is_initialize_payload(body: &[u8]) -> bool {
+    if body.is_empty() {
+        return false;
+    }
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    match payload {
+        serde_json::Value::Object(map) => map
+            .get("method")
+            .and_then(|value| value.as_str())
+            .map(|method| method == "initialize")
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn session_error(status: StatusCode, message: &str, hint: &str) -> Response<Body> {
+    let body = json!({
+        "status": "error",
+        "error": message,
+        "hint": hint,
+    });
+    Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap_or_else(|_| Response::new(Body::from("{\"status\":\"error\"}")))
+}
+
+async fn session_exists(session_manager: &BoundedSessionManager, session_id: &str) -> bool {
+    session_manager
+        .has_session(&session_id.into())
+        .await
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use axum::body::Body;
+    use bytes::Bytes;
+    use http::{
+        header::{ACCEPT, CONTENT_TYPE, HOST},
+        Request, StatusCode,
+    };
+    use http_body_util::{BodyExt, Full};
+    use rmcp::{
+        handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+        model::{ServerCapabilities, ServerInfo},
+        schemars, tool, tool_router,
+        transport::streamable_http_server::SessionManager,
+        ServerHandler,
+    };
+
+    use super::{
+        build_local_streamable_http_service, handle_stateful_mcp_request,
+        LocalStreamableHttpServiceConfig, SessionConfig,
+    };
+
+    #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+    struct SumRequest {
+        pub a: i32,
+        pub b: i32,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, Clone)]
+    struct Calculator {
+        tool_router: ToolRouter<Self>,
+    }
+
+    impl Calculator {
+        fn new() -> Self {
+            Self {
+                tool_router: Self::tool_router(),
+            }
+        }
+    }
+
+    #[tool_router]
+    impl Calculator {
+        #[tool(description = "Calculate the sum of two numbers")]
+        fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
+            (a + b).to_string()
+        }
+    }
+
+    impl ServerHandler for Calculator {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+                .with_instructions("A simple calculator")
+        }
+    }
+
+    const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
+    const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
+
+    #[tokio::test]
+    async fn build_local_streamable_http_service_preserves_bounds_and_hosts() {
+        let config = LocalStreamableHttpServiceConfig {
+            max_sessions: 9,
+            server_config:
+                rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
+                    .with_allowed_hosts(["localhost", "127.0.0.1"]),
+            ..Default::default()
+        };
+        let runtime = build_local_streamable_http_service(|| Ok(Calculator::new()), config);
+
+        let stats = runtime.session_manager.stats().await;
+        assert_eq!(stats.max_sessions, 9);
+        assert_eq!(
+            runtime.service.config.allowed_hosts,
+            vec!["localhost".to_string(), "127.0.0.1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn build_local_streamable_http_service_uses_connected_lifecycle_when_resume_enabled() {
+        let config = LocalStreamableHttpServiceConfig {
+            allow_resume: true,
+            ..Default::default()
+        };
+        let runtime = build_local_streamable_http_service(|| Ok(Calculator::new()), config);
+
+        let stats = runtime.session_manager.stats().await;
+        assert!(stats.resume_enabled);
+        assert_eq!(
+            stats.lifecycle_mode,
+            crate::session::SessionLifecycleMode::ConnectedUnboundedDisconnectedIdle
+        );
+    }
+
+    #[tokio::test]
+    async fn connected_local_streamable_service_expires_disconnected_session_after_idle_timeout() {
+        let mut session_config = SessionConfig::default();
+        session_config.keep_alive = Some(Duration::from_secs(1));
+
+        let config = LocalStreamableHttpServiceConfig {
+            allow_resume: true,
+            session_config,
+            ..Default::default()
+        };
+        let runtime = build_local_streamable_http_service(|| Ok(Calculator::new()), config);
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(ACCEPT, ACCEPT_STREAMABLE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(INIT_BODY))
+            .expect("request");
+
+        let response = runtime.service.handle(request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let session_id = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .expect("session id");
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        runtime.session_manager.sweep_expired_sessions().await;
+
+        let exists = runtime
+            .session_manager
+            .has_session(&session_id.into())
+            .await
+            .expect("has_session");
+        assert!(!exists, "expected disconnected session to expire");
+
+        let stats = runtime.session_manager.stats().await;
+        assert_eq!(stats.active_sessions, 0);
+        assert_eq!(stats.lifecycle_disconnected_sessions, 0);
+        assert_eq!(stats.lifecycle_expired_sessions_total, 1);
+    }
+
+    #[tokio::test]
+    async fn built_service_handles_initialize_request() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let request: Request<Full<Bytes>> = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(ACCEPT, ACCEPT_STREAMABLE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::from(Bytes::from_static(INIT_BODY.as_bytes())))
+            .expect("request");
+
+        let response = runtime.service.handle(request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().contains_key("mcp-session-id"),
+            "expected initialize response to create a session"
+        );
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(
+            body_text.contains("protocolVersion") && body_text.contains("serverInfo"),
+            "expected initialize result in response body, got: {body_text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_stateful_mcp_request_rejects_missing_session_get() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let request = Request::builder()
+            .method("GET")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .body(Body::empty())
+            .expect("request");
+
+        let response =
+            handle_stateful_mcp_request(runtime.service.clone(), runtime.session_manager, request)
+                .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body_text.contains("Missing session ID."));
+        assert!(body_text.contains("POST /mcp"));
+    }
+
+    #[tokio::test]
+    async fn handle_stateful_mcp_request_rejects_non_initialize_post_without_session() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+            ))
+            .expect("request");
+
+        let response =
+            handle_stateful_mcp_request(runtime.service.clone(), runtime.session_manager, request)
+                .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body_text.contains("Missing session ID."));
+    }
+
+    #[tokio::test]
+    async fn handle_stateful_mcp_request_forwards_initialize_post() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(ACCEPT, ACCEPT_STREAMABLE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(INIT_BODY))
+            .expect("request");
+
+        let response =
+            handle_stateful_mcp_request(runtime.service.clone(), runtime.session_manager, request)
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("mcp-session-id"));
+    }
+}
