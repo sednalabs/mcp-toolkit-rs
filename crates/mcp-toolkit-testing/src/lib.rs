@@ -29,6 +29,7 @@ use serde_json::{Map, Value};
 use std::path::Path;
 
 pub mod auth_surface_contract;
+pub use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 
 /// Environment variable for opting into tool schema snapshot updates.
 pub const UPDATE_TOOL_SNAPSHOTS_ENV: &str = "MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS";
@@ -60,26 +61,6 @@ impl Default for SnapshotAssertionOptions {
     fn default() -> Self {
         Self::from_env()
     }
-}
-
-/// Generates a deterministic JSON snapshot from a list of tools.
-pub fn tool_schema_snapshot_value<T>(tools: &[T]) -> Result<Value, serde_json::Error>
-where
-    T: Serialize,
-{
-    let mut serialized = Vec::with_capacity(tools.len());
-    for tool in tools {
-        serialized.push(serde_json::to_value(tool)?);
-    }
-    serialized.sort_by_key(tool_sort_key);
-    Ok(canonicalize_json(Value::Object(Map::from_iter([
-        (
-            "schema".to_string(),
-            Value::String("mcp_tool_schema_snapshot".to_string()),
-        ),
-        ("version".to_string(), Value::Number(1.into())),
-        ("tools".to_string(), Value::Array(serialized)),
-    ]))))
 }
 
 /// Asserts that tool schema output matches a committed snapshot file.
@@ -226,15 +207,6 @@ fn write_snapshot(path: &Path, value: &Value) -> std::io::Result<()> {
     let rendered = serde_json::to_string_pretty(value)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
     std::fs::write(path, format!("{rendered}\n"))
-}
-
-fn tool_sort_key(value: &Value) -> String {
-    value
-        .as_object()
-        .and_then(|object| object.get("name"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| value.to_string())
 }
 
 fn canonicalize_json(value: Value) -> Value {
