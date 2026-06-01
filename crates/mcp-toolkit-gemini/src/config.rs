@@ -7,14 +7,16 @@
 //! execution policies, including allowlists and retry budget settings.
 //!
 //! ## Non-ownership
-//! This module does not manage secret retrieval (e.g., API keys) or direct model
-//! invocation; it focuses solely on defining and validating the execution environment.
+//! This module does not manage direct model invocation; it focuses solely on
+//! defining and validating the execution environment.
 //!
 //! ## Policy & Guarantees
 //! * **Deterministic Parsing**: Provides structured conversion of environment variables
 //!   into type-safe execution configurations.
 //! * **Policy Defaults**: Enforces deny-by-default behavior for downstream MCP server
 //!   access to mitigate risks associated with unintended tool fan-out.
+//! * **API-key-only Auth**: Requires `GEMINI_API_KEY`; account-based Gemini CLI
+//!   authentication and inherited home-directory credentials are unsupported.
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for:
@@ -90,10 +92,10 @@ pub enum AskGeminiPolicy {
 /// Raw execution policy fields prior to normalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeminiExecutionRawConfig {
+    pub gemini_api_key: Option<String>,
     pub gemini_bin: String,
     pub gemini_default_model: Option<String>,
     pub gemini_model_allowlist: Vec<String>,
-    pub gemini_home_dir: Option<String>,
     pub gemini_allowed_server_names: String,
     pub gemini_include_directories: Vec<String>,
     pub gemini_retry_429_enabled: bool,
@@ -108,13 +110,13 @@ pub struct GeminiExecutionRawConfig {
 impl Default for GeminiExecutionRawConfig {
     fn default() -> Self {
         Self {
+            gemini_api_key: None,
             gemini_bin: "gemini".to_string(),
             gemini_default_model: None,
             gemini_model_allowlist: DEFAULT_GEMINI_MODEL_ALLOWLIST
                 .split(',')
                 .map(str::to_string)
                 .collect(),
-            gemini_home_dir: None,
             gemini_allowed_server_names: "__none__".to_string(),
             gemini_include_directories: Vec::new(),
             gemini_retry_429_enabled: false,
@@ -144,6 +146,7 @@ impl GeminiExecutionRawConfig {
         F: Fn(&str) -> Option<String>,
     {
         Ok(Self {
+            gemini_api_key: env_optional_string(&lookup, "GEMINI_API_KEY"),
             gemini_bin: env_setting(&lookup, "GEMINI_CLI_BIN", "gemini"),
             gemini_default_model: env_optional_string(&lookup, "GEMINI_MCP_DEFAULT_MODEL"),
             gemini_model_allowlist: env_csv(
@@ -151,7 +154,6 @@ impl GeminiExecutionRawConfig {
                 "GEMINI_MCP_ALLOWED_MODELS",
                 DEFAULT_GEMINI_MODEL_ALLOWLIST,
             ),
-            gemini_home_dir: env_optional_string(&lookup, "GEMINI_MCP_HOME_DIR"),
             gemini_allowed_server_names: env_setting(
                 &lookup,
                 "GEMINI_MCP_ALLOWED_SERVER_NAMES",
@@ -182,17 +184,20 @@ impl GeminiExecutionRawConfig {
 
     /// Converts raw fields into a normalized execution configuration.
     pub fn to_execution_config(&self) -> Result<GeminiExecutionConfig, String> {
+        let api_key = self.gemini_api_key.as_deref().ok_or_else(|| {
+            "GEMINI_API_KEY is required; account-based Gemini CLI auth is not supported".to_string()
+        })?;
         let allowed_mcp_servers =
             AllowedMcpServers::parse_csv(&self.gemini_allowed_server_names)
                 .map_err(|err| format!("invalid GEMINI_MCP_ALLOWED_SERVER_NAMES: {err}"))?;
         let ask_gemini_policy = parse_ask_gemini_policy(&self.gemini_ask_gemini_mode)?;
 
         Ok(GeminiExecutionConfig {
+            api_key: api_key.to_string(),
             gemini_bin: self.gemini_bin.clone(),
             default_model: self.gemini_default_model.clone(),
             model_allowlist: self.gemini_model_allowlist.clone(),
             allowed_mcp_servers,
-            home_dir: self.gemini_home_dir.clone(),
             timeout: Duration::from_secs(self.gemini_timeout_seconds),
             include_directories: self.gemini_include_directories.clone(),
             retry_429_enabled: self.gemini_retry_429_enabled,
@@ -293,11 +298,14 @@ fn parse_ask_gemini_policy(value: &str) -> Result<AskGeminiPolicy, String> {
 /// Runtime execution settings for Gemini CLI-backed tooling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeminiExecutionConfig {
+    /// API key passed to the Gemini CLI as `GEMINI_API_KEY`.
+    ///
+    /// Account-based Gemini CLI auth is intentionally unsupported.
+    pub api_key: String,
     pub gemini_bin: String,
     pub default_model: Option<String>,
     pub model_allowlist: Vec<String>,
     pub allowed_mcp_servers: AllowedMcpServers,
-    pub home_dir: Option<String>,
     /// Maximum wall-clock time for a single Gemini CLI invocation.
     pub timeout: Duration,
     /// Additional workspace roots Gemini may read during execution.
@@ -319,11 +327,11 @@ pub struct GeminiExecutionConfig {
 impl Default for GeminiExecutionConfig {
     fn default() -> Self {
         Self {
+            api_key: String::new(),
             gemini_bin: "gemini".to_string(),
             default_model: None,
             model_allowlist: Vec::new(),
             allowed_mcp_servers: AllowedMcpServers::None,
-            home_dir: None,
             timeout: Duration::from_secs(3600),
             include_directories: Vec::new(),
             retry_429_enabled: false,
@@ -380,6 +388,7 @@ mod tests {
     #[test]
     fn raw_defaults_match_current_runtime_contract() {
         let raw = GeminiExecutionRawConfig::default();
+        assert_eq!(raw.gemini_api_key, None);
         assert_eq!(raw.gemini_bin, "gemini");
         assert_eq!(raw.gemini_allowed_server_names, "__none__");
         assert_eq!(raw.gemini_timeout_seconds, 3600);
@@ -396,6 +405,7 @@ mod tests {
     #[test]
     fn raw_loader_parses_env_map_overrides() {
         let mut env = HashMap::new();
+        env.insert("GEMINI_API_KEY".to_string(), "test-api-key".to_string());
         env.insert("GEMINI_CLI_BIN".to_string(), "/usr/bin/gemini".to_string());
         env.insert(
             "GEMINI_MCP_DEFAULT_MODEL".to_string(),
@@ -436,6 +446,7 @@ mod tests {
         env.insert("GEMINI_MCP_TIMEOUT_SECONDS".to_string(), "99".to_string());
 
         let raw = GeminiExecutionRawConfig::from_env_map(&env).expect("parse env map");
+        assert_eq!(raw.gemini_api_key.as_deref(), Some("test-api-key"));
         assert_eq!(raw.gemini_bin, "/usr/bin/gemini");
         assert_eq!(raw.gemini_default_model.as_deref(), Some("gemini-3-pro"));
         assert_eq!(raw.gemini_model_allowlist, vec!["m1", "m2", "m3"]);
@@ -476,10 +487,10 @@ mod tests {
     #[test]
     fn raw_to_normalized_execution_config_converts_policy_fields() {
         let raw = GeminiExecutionRawConfig {
+            gemini_api_key: Some("test-api-key".to_string()),
             gemini_bin: "/bin/gemini".to_string(),
             gemini_default_model: Some("gemini-3-pro".to_string()),
             gemini_model_allowlist: vec!["gemini-3-pro".to_string(), "gemini-3-flash".to_string()],
-            gemini_home_dir: Some("/tmp/home".to_string()),
             gemini_allowed_server_names: "ops,codebase_search_mcp".to_string(),
             gemini_include_directories: vec!["/repo".to_string()],
             gemini_retry_429_enabled: true,
@@ -494,6 +505,7 @@ mod tests {
         let normalized = raw
             .to_execution_config()
             .expect("convert raw to normalized config");
+        assert_eq!(normalized.api_key, "test-api-key");
         assert_eq!(normalized.gemini_bin, "/bin/gemini");
         assert_eq!(normalized.default_model.as_deref(), Some("gemini-3-pro"));
         assert_eq!(
@@ -504,7 +516,6 @@ mod tests {
             normalized.allowed_mcp_servers,
             AllowedMcpServers::Names(vec!["ops".to_string(), "codebase_search_mcp".to_string()])
         );
-        assert_eq!(normalized.home_dir.as_deref(), Some("/tmp/home"));
         assert_eq!(normalized.include_directories, vec!["/repo".to_string()]);
         assert!(normalized.retry_429_enabled);
         assert_eq!(normalized.retry_429_window, Duration::from_secs(120));
@@ -521,6 +532,7 @@ mod tests {
     #[test]
     fn raw_to_normalized_rejects_invalid_allowlist_policy() {
         let raw = GeminiExecutionRawConfig {
+            gemini_api_key: Some("test-api-key".to_string()),
             gemini_allowed_server_names: ",  ,".to_string(),
             ..GeminiExecutionRawConfig::default()
         };
@@ -533,6 +545,7 @@ mod tests {
     #[test]
     fn raw_to_normalized_rejects_invalid_ask_policy() {
         let raw = GeminiExecutionRawConfig {
+            gemini_api_key: Some("test-api-key".to_string()),
             gemini_ask_gemini_mode: "unknown".to_string(),
             ..GeminiExecutionRawConfig::default()
         };
@@ -543,8 +556,19 @@ mod tests {
     }
 
     #[test]
+    fn raw_to_normalized_requires_api_key() {
+        let raw = GeminiExecutionRawConfig::default();
+        let err = raw
+            .to_execution_config()
+            .expect_err("missing API key should fail");
+        assert!(err.contains("GEMINI_API_KEY is required"));
+        assert!(err.contains("account-based Gemini CLI auth is not supported"));
+    }
+
+    #[test]
     fn load_execution_config_from_env_map_is_additive_and_deterministic() {
         let mut env = HashMap::new();
+        env.insert("GEMINI_API_KEY".to_string(), "test-api-key".to_string());
         env.insert(
             "GEMINI_MCP_ALLOWED_SERVER_NAMES".to_string(),
             "__none__".to_string(),
@@ -556,6 +580,7 @@ mod tests {
         env.insert("GEMINI_MCP_TIMEOUT_SECONDS".to_string(), "3".to_string());
 
         let config = load_execution_config_from_env_map(&env).expect("load normalized config");
+        assert_eq!(config.api_key, "test-api-key");
         assert_eq!(config.allowed_mcp_servers, AllowedMcpServers::None);
         assert_eq!(config.ask_gemini_policy, AskGeminiPolicy::Freeform);
         assert_eq!(config.timeout, Duration::from_secs(3));

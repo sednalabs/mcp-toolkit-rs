@@ -162,11 +162,11 @@ printf 'ok-after-429-retry\n'
 async fn default_policy_passes_explicit_none_allowlist() {
     let script_path = make_fake_gemini_script("none");
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
         allowed_mcp_servers: AllowedMcpServers::None,
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: false,
         retry_429_window: Duration::ZERO,
@@ -201,6 +201,7 @@ async fn default_policy_passes_explicit_none_allowlist() {
 async fn named_allowlist_is_forwarded_and_none_not_used() {
     let script_path = make_fake_gemini_script("named");
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
@@ -208,7 +209,6 @@ async fn named_allowlist_is_forwarded_and_none_not_used() {
             "ops".to_string(),
             "codebase_search_mcp".to_string(),
         ]),
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: false,
         retry_429_window: Duration::ZERO,
@@ -245,11 +245,11 @@ async fn named_allowlist_is_forwarded_and_none_not_used() {
 async fn codebase_tool_falls_back_to_stdin_when_arg_prompt_is_rejected_by_gemini() {
     let script_path = make_fake_gemini_script_with_stdin_fallback("stdin-fallback");
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
         allowed_mcp_servers: AllowedMcpServers::None,
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: false,
         retry_429_window: Duration::ZERO,
@@ -282,11 +282,11 @@ async fn codebase_tool_falls_back_to_stdin_when_arg_prompt_is_rejected_by_gemini
 async fn sandbox_false_forces_child_gemini_sandbox_off() {
     let script_path = make_fake_gemini_script_printing_sandbox_env("sandbox-off");
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
         allowed_mcp_servers: AllowedMcpServers::None,
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: false,
         retry_429_window: Duration::ZERO,
@@ -318,11 +318,11 @@ async fn sandbox_false_forces_child_gemini_sandbox_off() {
 async fn sandbox_true_passes_sandbox_flag() {
     let script_path = make_fake_gemini_script_printing_sandbox_env("sandbox-on");
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
         allowed_mcp_servers: AllowedMcpServers::None,
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: false,
         retry_429_window: Duration::ZERO,
@@ -353,11 +353,11 @@ async fn sandbox_true_passes_sandbox_flag() {
 async fn retries_429_until_success_within_retry_window() {
     let script_path = make_fake_gemini_script_retrying_429("retry-429-success", 2);
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
         allowed_mcp_servers: AllowedMcpServers::None,
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: true,
         retry_429_window: Duration::from_secs(15),
@@ -386,11 +386,11 @@ async fn retries_429_until_success_within_retry_window() {
 async fn stops_retrying_429_after_retry_window_expires() {
     let script_path = make_fake_gemini_script_retrying_429("retry-429-expire", 1000);
     let config = GeminiExecutionConfig {
+        api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
         default_model: None,
         model_allowlist: Vec::new(),
         allowed_mcp_servers: AllowedMcpServers::None,
-        home_dir: None,
         include_directories: Vec::new(),
         retry_429_enabled: true,
         retry_429_window: Duration::from_millis(120),

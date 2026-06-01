@@ -7,18 +7,20 @@
 //! contracts for interacting with Gemini models and associated CLI tools.
 //!
 //! ## Non-ownership
-//! This module does not manage the underlying model runtime, network connectivity
-//! to Gemini APIs, or the authentication credentials for those services.
+//! This module does not manage the underlying model runtime or network
+//! connectivity to Gemini APIs.
 //!
 //! ## Policy & Guarantees
 //! * **Safe Execution**: Invokes Gemini CLI via direct subprocess execution to avoid
 //!   shell-injection vulnerabilities.
 //! * **Exposure Policy**: Implements an explicit allowlist for downstream MCP tool
 //!   servers to mitigate accidental exposure of the local tool surface.
+//! * **API-key-only Auth**: Requires `GEMINI_API_KEY` and does not support
+//!   browser, account, or inherited home-directory Gemini CLI authentication.
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for:
-//! * Supplying valid execution configurations and credentials.
+//! * Supplying valid execution configurations with a `GEMINI_API_KEY`.
 //! * Defining and maintaining a secure allowlist of downstream MCP servers.
 //!
 //! ## References

@@ -9,13 +9,14 @@
 //! ## Security Boundaries
 //! * Executes Gemini without shell interpolation.
 //! * Applies MCP allowlist flags from config.
+//! * Requires API-key authentication and clears inherited environment state before spawn.
 //!
 //! ## References
 //! * `mcp-workspace/toolkits/mcp-toolkit-rs/crates/mcp-toolkit-gemini`
 
 use std::collections::HashSet;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 use tokio::io::AsyncReadExt;
@@ -75,6 +76,7 @@ pub struct GeminiResponse {
 /// Error variants for Gemini process execution.
 #[derive(Debug)]
 pub enum GeminiExecutionError {
+    MissingApiKey,
     SpawnFailed(String),
     Cancelled,
     TimedOut { seconds: u64 },
@@ -85,6 +87,10 @@ pub enum GeminiExecutionError {
 impl fmt::Display for GeminiExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingApiKey => write!(
+                f,
+                "GEMINI_API_KEY is required; account-based Gemini CLI auth is not supported"
+            ),
             Self::SpawnFailed(message) => write!(f, "failed to spawn gemini: {message}"),
             Self::Cancelled => write!(f, "gemini command cancelled"),
             Self::TimedOut { seconds } => {
@@ -187,6 +193,15 @@ fn build_gemini_command_spec(
 ) -> Result<GeminiCommandSpec, GeminiExecutionError> {
     let mut args = Vec::new();
     let mut env = Vec::new();
+    let api_key = config.api_key.trim();
+    if api_key.is_empty() {
+        return Err(GeminiExecutionError::MissingApiKey);
+    }
+
+    env.push(("GEMINI_API_KEY".to_string(), api_key.to_string()));
+    if let Some(path) = std::env::var_os("PATH") {
+        env.push(("PATH".to_string(), path.to_string_lossy().to_string()));
+    }
 
     for arg in config.allowed_mcp_servers.as_cli_args() {
         args.push(arg);
@@ -215,10 +230,6 @@ fn build_gemini_command_spec(
         // Prevent host-level defaults (e.g. GEMINI_SANDBOX=true in service env)
         // from forcing sandbox mode when the tool request did not ask for it.
         env.push(("GEMINI_SANDBOX".to_string(), "false".to_string()));
-    }
-
-    if let Some(home_dir) = config.home_dir.as_deref() {
-        env.push(("HOME".to_string(), home_dir.to_string()));
     }
 
     let stdin_payload = match request.prompt_transport {
@@ -250,6 +261,7 @@ async fn execute_gemini_once(
 ) -> Result<GeminiResponse, GeminiExecutionError> {
     let spec = build_gemini_command_spec(config, request)?;
     let mut command = Command::new(&spec.bin);
+    command.env_clear();
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     if spec.stdin_payload.is_some() {
@@ -409,9 +421,6 @@ fn resolve_gemini_binary(raw: &str) -> String {
     if let Some(resolved) = resolve_from_path(raw) {
         return resolved;
     }
-    if let Some(resolved) = resolve_from_user_home(raw) {
-        return resolved;
-    }
 
     raw.to_string()
 }
@@ -423,63 +432,6 @@ fn resolve_from_path(binary: &str) -> Option<String> {
             if is_executable(&candidate) {
                 return Some(candidate.to_string_lossy().into_owned());
             }
-        }
-    }
-    None
-}
-
-fn resolve_from_user_home(binary: &str) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let home = PathBuf::from(home);
-
-    let local_candidate = home.join(".local").join("bin").join(binary);
-    if is_executable(&local_candidate) {
-        return Some(local_candidate.to_string_lossy().into_owned());
-    }
-
-    let nvm_dir = std::env::var("NVM_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join(".nvm").join("versions").join("node"));
-    if let Some(resolved) = resolve_nvm_version(binary, &nvm_dir) {
-        return Some(resolved);
-    }
-
-    let current_dir = nvm_dir.join("current").join("bin").join(binary);
-    if is_executable(&current_dir) {
-        return Some(current_dir.to_string_lossy().into_owned());
-    }
-
-    None
-}
-
-fn resolve_nvm_version(binary: &str, nvm_dir: &Path) -> Option<String> {
-    let base = if nvm_dir.ends_with("node") {
-        nvm_dir.to_path_buf()
-    } else if nvm_dir
-        .file_name()
-        .and_then(|file_name| file_name.to_str())
-        .is_some_and(|file_name| file_name.starts_with('v'))
-    {
-        nvm_dir.parent().unwrap_or(nvm_dir).to_path_buf()
-    } else {
-        nvm_dir.join("node")
-    };
-    let mut versions = Vec::new();
-    let mut current = std::fs::read_dir(&base).ok()?;
-    while let Some(Ok(entry)) = current.next() {
-        let file_name = entry.file_name();
-        let version = file_name.to_string_lossy();
-        if version.starts_with('v') {
-            versions.push(file_name);
-        }
-    }
-    versions.sort();
-    versions.reverse();
-
-    for version in versions {
-        let candidate = base.join(version).join("bin").join(binary);
-        if is_executable(&candidate) {
-            return Some(candidate.to_string_lossy().into_owned());
         }
     }
     None
@@ -594,6 +546,7 @@ mod tests {
     fn command_spec_matrix_ask_gemini_arg_prompt() {
         let include_dir = make_temp_dir("ask");
         let config = GeminiExecutionConfig {
+            api_key: "test-api-key".to_string(),
             default_model: None,
             allowed_mcp_servers: AllowedMcpServers::Names(vec!["ops".to_string()]),
             include_directories: vec![include_dir.display().to_string()],
@@ -622,6 +575,12 @@ mod tests {
         assert!(spec
             .env
             .iter()
+            .any(|(key, value)| key == "GEMINI_API_KEY" && value == "test-api-key"));
+        assert!(spec.env.iter().any(|(key, _)| key == "PATH"));
+        assert!(!spec.env.iter().any(|(key, _)| key == "HOME"));
+        assert!(spec
+            .env
+            .iter()
             .any(|(key, value)| key == "GEMINI_SANDBOX" && value == "false"));
         assert!(spec.stdin_payload.is_none());
         let _ = std::fs::remove_dir_all(include_dir);
@@ -632,6 +591,7 @@ mod tests {
         let include_dir = make_temp_dir("scout");
         let request_dir = make_temp_dir("scout-request");
         let config = GeminiExecutionConfig {
+            api_key: "test-api-key".to_string(),
             allowed_mcp_servers: AllowedMcpServers::None,
             include_directories: vec![include_dir.display().to_string()],
             ..GeminiExecutionConfig::default()
@@ -670,6 +630,7 @@ mod tests {
     #[test]
     fn command_spec_matrix_codebase_investigator_uses_default_model_with_sandbox() {
         let config = GeminiExecutionConfig {
+            api_key: "test-api-key".to_string(),
             default_model: Some("gemini-3-flash-preview".to_string()),
             allowed_mcp_servers: AllowedMcpServers::All,
             ..GeminiExecutionConfig::default()
@@ -695,5 +656,18 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg == "--allowed-mcp-server-names"));
+    }
+
+    #[test]
+    fn command_spec_requires_api_key() {
+        let config = GeminiExecutionConfig::default();
+        let request = GeminiRequest {
+            prompt: "hello".to_string(),
+            ..GeminiRequest::default()
+        };
+
+        let err = build_gemini_command_spec(&config, &request)
+            .expect_err("missing API key should fail before command construction");
+        assert!(matches!(err, super::GeminiExecutionError::MissingApiKey));
     }
 }

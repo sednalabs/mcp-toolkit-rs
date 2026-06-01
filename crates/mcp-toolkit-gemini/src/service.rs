@@ -558,6 +558,7 @@ fn model_not_allowed_issue(allowlist: &[String]) -> ValidationIssue {
 
 fn classify_execution_error(err: &GeminiExecutionError) -> ErrorCategory {
     match err {
+        GeminiExecutionError::MissingApiKey => ErrorCategory::AuthSessionInvalid,
         GeminiExecutionError::FailedExit { stderr, .. } => classify_stderr_error(stderr),
         GeminiExecutionError::InvalidIncludeDirectory { .. } => ErrorCategory::FileAccess,
         GeminiExecutionError::SpawnFailed(_)
@@ -1485,7 +1486,10 @@ mod tests {
 
     #[test]
     fn from_raw_config_uses_normalized_policy_path() {
-        let raw = crate::config::GeminiExecutionRawConfig::default();
+        let raw = crate::config::GeminiExecutionRawConfig {
+            gemini_api_key: Some("test-api-key".to_string()),
+            ..crate::config::GeminiExecutionRawConfig::default()
+        };
         let server = super::GeminiMcp::from_raw_config(raw).expect("raw config conversion");
         let names = server.tool_names();
         assert!(names.iter().any(|name| name == "ask-gemini"));
