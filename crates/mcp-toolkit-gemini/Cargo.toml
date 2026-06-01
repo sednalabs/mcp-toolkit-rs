@@ -9,7 +9,7 @@ repository = "https://github.com/sednalabs/mcp-rs-toolkit"
 path = "src/lib.rs"
 
 [dependencies]
-rmcp = { version = "0.14.0", features = ["server", "macros", "schemars"] }
+rmcp = { version = "1.5.0", features = ["server", "macros", "schemars"] }
 schemars = "1.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

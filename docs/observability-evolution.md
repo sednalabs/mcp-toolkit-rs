@@ -117,7 +117,7 @@ Implementation acceptance:
    - existing server startup behavior is unchanged.
 2. `tracing-bridge`:
    - event/span helpers compile and emit sanitized context;
-   - secret and control-character adversarial tests pass.
+   - secret and control-character misuse tests pass.
 3. `metrics-facade`:
    - counter/gauge/histogram helpers compile;
    - label sanitization and cardinality guard tests pass.
