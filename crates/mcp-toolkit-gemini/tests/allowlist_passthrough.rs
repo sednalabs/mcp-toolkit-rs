@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -8,9 +9,26 @@ use mcp_toolkit_gemini::{
 };
 
 #[cfg(unix)]
-fn make_fake_gemini_script(prefix: &str) -> PathBuf {
+fn write_executable_script(script_path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
 
+    let tmp_path = script_path.with_extension("tmp");
+    let mut file = fs::File::create(&tmp_path).expect("create fake gemini script");
+    file.write_all(script.as_bytes())
+        .expect("write fake gemini script");
+    file.sync_all().expect("sync fake gemini script");
+    drop(file);
+
+    let mut perms = fs::metadata(&tmp_path)
+        .expect("stat fake gemini script")
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&tmp_path, perms).expect("chmod fake gemini script");
+    fs::rename(&tmp_path, script_path).expect("install fake gemini script");
+}
+
+#[cfg(unix)]
+fn make_fake_gemini_script(prefix: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "mcp-toolkit-gemini-tests-{}-{}",
         std::process::id(),
@@ -23,13 +41,7 @@ fn make_fake_gemini_script(prefix: &str) -> PathBuf {
 set -euo pipefail
 printf '%s\n' "$@"
 "#;
-    fs::write(&script_path, script).expect("write fake gemini script");
-
-    let mut perms = fs::metadata(&script_path)
-        .expect("stat fake gemini script")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).expect("chmod fake gemini script");
+    write_executable_script(&script_path, script);
 
     script_path
 }
@@ -43,8 +55,6 @@ fn cleanup_parent(path: &Path) {
 
 #[cfg(unix)]
 fn make_fake_gemini_script_with_stdin_fallback(prefix: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = std::env::temp_dir().join(format!(
         "mcp-toolkit-gemini-tests-{}-{}",
         std::process::id(),
@@ -71,21 +81,13 @@ fi
 
 printf '{\"ok\": true}\n'
 "#;
-    fs::write(&script_path, script).expect("write fake gemini fallback script");
-
-    let mut perms = fs::metadata(&script_path)
-        .expect("stat fake gemini fallback script")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).expect("chmod fake gemini fallback script");
+    write_executable_script(&script_path, script);
 
     script_path
 }
 
 #[cfg(unix)]
 fn make_fake_gemini_script_printing_sandbox_env(prefix: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = std::env::temp_dir().join(format!(
         "mcp-toolkit-gemini-tests-{}-{}",
         std::process::id(),
@@ -100,21 +102,13 @@ set -euo pipefail
 printf 'sandbox=%s\n' "${GEMINI_SANDBOX-<unset>}"
 printf '%s\n' "$@"
 "#;
-    fs::write(&script_path, script).expect("write fake gemini env script");
-
-    let mut perms = fs::metadata(&script_path)
-        .expect("stat fake gemini env script")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).expect("chmod fake gemini env script");
+    write_executable_script(&script_path, script);
 
     script_path
 }
 
 #[cfg(unix)]
 fn make_fake_gemini_script_retrying_429(prefix: &str, failures_before_success: usize) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = std::env::temp_dir().join(format!(
         "mcp-toolkit-gemini-tests-{}-{}",
         std::process::id(),
@@ -146,13 +140,7 @@ printf 'ok-after-429-retry\n'
         counter_file = counter_path.display(),
         failures_before_success = failures_before_success
     );
-    fs::write(&script_path, script).expect("write fake gemini retry script");
-
-    let mut perms = fs::metadata(&script_path)
-        .expect("stat fake gemini retry script")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).expect("chmod fake gemini retry script");
+    write_executable_script(&script_path, &script);
 
     script_path
 }
