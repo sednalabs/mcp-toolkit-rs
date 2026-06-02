@@ -147,3 +147,5 @@ jobs:
           git add crates/mcp-toolkit-http/src/oauth.rs crates/mcp-toolkit-auth/src/config.rs crates/mcp-toolkit-auth/src/surface.rs crates/mcp-toolkit-auth/tests/auth_surface_contract.rs docs/auth-surface.md .github/workflows/codex-device-auth-metadata-patch.yml
           git commit -m "Carry device authorization endpoint in auth metadata"
           git push origin HEAD:codex/ops-device-auth-metadata
+
+# trigger: 2026-06-02T00:00:00Z
