@@ -1,0 +1,149 @@
+name: Codex Device Auth Metadata Patch
+
+on:
+  push:
+    branches:
+      - codex/ops-device-auth-metadata
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch device authorization metadata carry-through
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing expected text in {path}: {old[:120]!r}")
+              text = text.replace(old, new, 1)
+              p.write_text(text)
+
+          def replace_all(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count == 0:
+                  raise SystemExit(f"missing expected text in {path}: {old[:120]!r}")
+              text = text.replace(old, new)
+              p.write_text(text)
+              return count
+
+          oauth = "crates/mcp-toolkit-http/src/oauth.rs"
+          replace_once(
+              oauth,
+              "    /// OAuth token endpoint.\n    pub token_endpoint: String,\n    /// Optional dynamic client registration endpoint.",
+              "    /// OAuth token endpoint.\n    pub token_endpoint: String,\n    /// Optional OAuth 2.0 Device Authorization Grant endpoint (RFC 8628).\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub device_authorization_endpoint: Option<String>,\n    /// Optional dynamic client registration endpoint.",
+          )
+
+          config = "crates/mcp-toolkit-auth/src/config.rs"
+          replace_once(
+              config,
+              "    #[serde(rename = \"token_endpoint\")]\n    pub token_endpoint: Option<String>,\n    #[serde(rename = \"registration_endpoint\")]",
+              "    #[serde(rename = \"token_endpoint\")]\n    pub token_endpoint: Option<String>,\n    #[serde(rename = \"device_authorization_endpoint\")]\n    pub device_authorization_endpoint: Option<String>,\n    #[serde(rename = \"registration_endpoint\")]",
+          )
+
+          surface = "crates/mcp-toolkit-auth/src/surface.rs"
+          replace_once(
+              surface,
+              "    pub authorization_endpoint: String,\n    pub token_endpoint: String,\n    pub registration_endpoint: Option<String>,",
+              "    pub authorization_endpoint: String,\n    pub token_endpoint: String,\n    pub device_authorization_endpoint: Option<String>,\n    pub registration_endpoint: Option<String>,",
+          )
+          replace_once(
+              surface,
+              "            token_endpoint: metadata.token_endpoint,\n            registration_endpoint: metadata.registration_endpoint,",
+              "            token_endpoint: metadata.token_endpoint,\n            device_authorization_endpoint: metadata.device_authorization_endpoint,\n            registration_endpoint: metadata.registration_endpoint,",
+          )
+          replace_once(
+              surface,
+              "                    || entry\n                        .registration_endpoint\n                        .as_deref()",
+              "                    || entry\n                        .device_authorization_endpoint\n                        .as_deref()\n                        .is_some_and(url_uses_insecure_http)\n                    || entry\n                        .registration_endpoint\n                        .as_deref()",
+          )
+          replace_once(
+              surface,
+              "        token_endpoint: token_endpoint.to_string(),\n        registration_endpoint: oidc.registration_endpoint.clone(),",
+              "        token_endpoint: token_endpoint.to_string(),\n        device_authorization_endpoint: oidc.device_authorization_endpoint.clone(),\n        registration_endpoint: oidc.registration_endpoint.clone(),",
+          )
+          replace_once(
+              surface,
+              "    if metadata\n        .registration_endpoint\n        .as_deref()",
+              "    if metadata\n        .device_authorization_endpoint\n        .as_deref()\n        .is_some_and(|value| value.trim().is_empty())\n    {\n        return Err(AuthSurfaceError::EmptyField(\"device_authorization_endpoint\"));\n    }\n    if metadata\n        .registration_endpoint\n        .as_deref()",
+          )
+          replace_once(
+              surface,
+              "            if let Some(registration_endpoint) = &entry.registration_endpoint {",
+              "            if let Some(device_authorization_endpoint) = &entry.device_authorization_endpoint {\n                validate_absolute_url(device_authorization_endpoint, allow_insecure_http).map_err(\n                    |err| AuthSurfaceError::InvalidUrl {\n                        field: \"device_authorization_endpoint\",\n                        value: device_authorization_endpoint.clone(),\n                        reason: err.to_string(),\n                    },\n                )?;\n            }\n            if let Some(registration_endpoint) = &entry.registration_endpoint {",
+          )
+          replace_once(
+              surface,
+              "                token_endpoint: entry.token_endpoint.clone(),\n                registration_endpoint: entry.registration_endpoint.clone(),",
+              "                token_endpoint: entry.token_endpoint.clone(),\n                device_authorization_endpoint: entry.device_authorization_endpoint.clone(),\n                registration_endpoint: entry.registration_endpoint.clone(),",
+          )
+          replace_all(
+              surface,
+              "            token_endpoint: \"https://issuer.test/token\".to_string(),\n            registration_endpoint:",
+              "            token_endpoint: \"https://issuer.test/token\".to_string(),\n            device_authorization_endpoint: None,\n            registration_endpoint:",
+          )
+          replace_all(
+              surface,
+              "                token_endpoint: \"https://issuer.test/token\".to_string(),\n                registration_endpoint:",
+              "                token_endpoint: \"https://issuer.test/token\".to_string(),\n                device_authorization_endpoint: None,\n                registration_endpoint:",
+          )
+          replace_once(
+              surface,
+              "            token_endpoint: Some(\"https://issuer.test/token\".to_string()),\n            registration_endpoint: Some(\"https://issuer.test/register\".to_string()),",
+              "            token_endpoint: Some(\"https://issuer.test/token\".to_string()),\n            device_authorization_endpoint: Some(\"https://issuer.test/device\".to_string()),\n            registration_endpoint: Some(\"https://issuer.test/register\".to_string()),",
+          )
+          replace_once(
+              surface,
+              "        assert_eq!(resolved.token_endpoint, \"https://issuer.test/token\");\n        assert_eq!(\n            resolved.registration_endpoint.as_deref(),",
+              "        assert_eq!(resolved.token_endpoint, \"https://issuer.test/token\");\n        assert_eq!(\n            resolved.device_authorization_endpoint.as_deref(),\n            Some(\"https://issuer.test/device\")\n        );\n        assert_eq!(\n            resolved.registration_endpoint.as_deref(),",
+          )
+          replace_once(
+              surface,
+              "        assert_eq!(entry.token_endpoint, \"https://issuer.test/token\");\n        assert_eq!(entry.jwks_uri.as_deref(), Some(\"https://issuer.test/jwks\"));",
+              "        assert_eq!(entry.token_endpoint, \"https://issuer.test/token\");\n        assert_eq!(entry.device_authorization_endpoint, None);\n        assert_eq!(entry.jwks_uri.as_deref(), Some(\"https://issuer.test/jwks\"));",
+          )
+
+          test = "crates/mcp-toolkit-auth/tests/auth_surface_contract.rs"
+          replace_once(
+              test,
+              "            token_endpoint: \"https://issuer.example/oauth/token\".to_string(),\n            registration_endpoint: None,",
+              "            token_endpoint: \"https://issuer.example/oauth/token\".to_string(),\n            device_authorization_endpoint: Some(\"https://issuer.example/oauth/device\".to_string()),\n            registration_endpoint: None,",
+          )
+          replace_once(
+              test,
+              "    contract.assert_resource_metadata(&payload);\n\n    let challenge_response = service",
+              "    contract.assert_resource_metadata(&payload);\n\n    let authz_response = service\n        .call(\n            Request::builder()\n                .uri(\"/.well-known/oauth-authorization-server/mcp\")\n                .body(Body::empty())\n                .expect(\"request\"),\n        )\n        .await\n        .expect(\"authorization metadata response\");\n    let (parts, body) = authz_response.into_parts();\n    assert_eq!(parts.status, StatusCode::OK);\n    let payload_bytes = to_bytes(body, usize::MAX)\n        .await\n        .expect(\"authorization metadata body\");\n    let payload: Value = serde_json::from_slice(&payload_bytes).expect(\"authorization json\");\n    assert_eq!(\n        payload[\"device_authorization_endpoint\"].as_str(),\n        Some(\"https://issuer.example/oauth/device\")\n    );\n\n    let challenge_response = service",
+          )
+
+          docs = "docs/auth-surface.md"
+          replace_once(
+              docs,
+              "`registration_endpoint` is published only when the configured metadata source\nprovides one. For OIDC-derived metadata that means reflecting the issuer's\nadvertised endpoint; for explicit metadata it means serving the caller-supplied\nendpoint. The toolkit still does not proxy or implement dynamic client registration.",
+              "`registration_endpoint` and `device_authorization_endpoint` are published only\nwhen the configured metadata source provides them. For OIDC-derived metadata that\nmeans reflecting the issuer's advertised endpoints; for explicit metadata it means\nserving the caller-supplied endpoints. The toolkit still does not proxy or\nimplement dynamic client registration or device-code issuance.",
+          )
+      - name: Format and test focused crates
+        run: |
+          cargo fmt --check
+          cargo test -p mcp-toolkit-http -p mcp-toolkit-auth -p mcp-toolkit-testing auth_surface_contract --all-features
+      - name: Remove temporary workflow
+        run: rm -f .github/workflows/codex-device-auth-metadata-patch.yml
+      - name: Commit hosted patch result
+        run: |
+          git config user.name "codex-hosted-patch"
+          git config user.email "codex-hosted-patch@users.noreply.github.com"
+          git status --short
+          git add crates/mcp-toolkit-http/src/oauth.rs crates/mcp-toolkit-auth/src/config.rs crates/mcp-toolkit-auth/src/surface.rs crates/mcp-toolkit-auth/tests/auth_surface_contract.rs docs/auth-surface.md .github/workflows/codex-device-auth-metadata-patch.yml
+          git commit -m "Carry device authorization endpoint in auth metadata"
+          git push origin HEAD:codex/ops-device-auth-metadata
