@@ -179,3 +179,24 @@ async fn route_bundle_preserves_port_qualified_host_allowlist() {
         .expect("missing port health response");
     assert_eq!(missing_port.status(), 403);
 }
+
+#[tokio::test]
+async fn route_bundle_accepts_uri_authority_when_host_header_is_absent() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["example.com:8080"])
+        .build(|| Ok(TestMcp::new()));
+    let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("http://example.com:8080/health")
+                .body(Body::empty())
+                .expect("absolute-uri health request"),
+        )
+        .await
+        .expect("absolute-uri health response");
+
+    assert_eq!(response.status(), 200);
+}

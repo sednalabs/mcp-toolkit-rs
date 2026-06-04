@@ -30,7 +30,7 @@ use axum::{
 };
 use http::{header::CONTENT_TYPE, Method, StatusCode};
 use mcp_toolkit_http::{
-    host::validate_host_authority_header,
+    host::validate_request_authority,
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
     streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
@@ -731,7 +731,9 @@ async fn host_guard<S>(
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    if let Err(err) = validate_host_authority_header(req.headers(), &state.allowed_hosts) {
+    if let Err(err) =
+        validate_request_authority(Some(req.uri()), req.headers(), &state.allowed_hosts)
+    {
         return plain_response(err.status_code(), err.message());
     }
 

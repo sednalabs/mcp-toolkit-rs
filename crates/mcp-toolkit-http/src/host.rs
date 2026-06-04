@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::net::Ipv6Addr;
 
 use http::header::HOST;
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, StatusCode, Uri};
 
 /// Parsed host header components.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,11 +146,19 @@ pub fn validate_host_authority_header(
     headers: &HeaderMap,
     allowed_hosts: &[String],
 ) -> Result<HostAuthority, HostValidationError> {
-    let host_header = headers
-        .get(HOST)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(HostValidationError::MissingHost)?;
-    let parsed = parse_host_authority(host_header).ok_or(HostValidationError::InvalidHost)?;
+    validate_request_authority(None, headers, allowed_hosts)
+}
+
+/// Validates a request authority from `Host` or, when `Host` is absent, from the URI.
+///
+/// This preserves rmcp Streamable HTTP host validation behavior for HTTP/2 and
+/// nested-router call paths where `Host` may be represented as `:authority`.
+pub fn validate_request_authority(
+    uri: Option<&Uri>,
+    headers: &HeaderMap,
+    allowed_hosts: &[String],
+) -> Result<HostAuthority, HostValidationError> {
+    let parsed = request_authority(uri, headers)?;
     if !host_authority_is_allowed(&parsed, allowed_hosts) {
         return Err(HostValidationError::NotAllowed);
     }
@@ -208,6 +216,21 @@ fn host_authority_is_allowed(host: &HostAuthority, allowed_hosts: &[String]) -> 
 fn parse_host_authority(header: &str) -> Option<HostAuthority> {
     let authority = http::uri::Authority::try_from(header.trim()).ok()?;
     Some(normalize_authority(authority.host(), authority.port_u16()))
+}
+
+fn request_authority(
+    uri: Option<&Uri>,
+    headers: &HeaderMap,
+) -> Result<HostAuthority, HostValidationError> {
+    if let Some(host_header) = headers.get(HOST) {
+        let host_header = host_header
+            .to_str()
+            .map_err(|_| HostValidationError::InvalidHost)?;
+        return parse_host_authority(host_header).ok_or(HostValidationError::InvalidHost);
+    }
+    uri.and_then(Uri::authority)
+        .map(|authority| normalize_authority(authority.host(), authority.port_u16()))
+        .ok_or(HostValidationError::MissingHost)
 }
 
 fn parse_allowed_authority(allowed: &str) -> Option<HostAuthority> {
@@ -332,6 +355,28 @@ mod tests {
         let parsed = validate_host_authority_header(&headers, &[]).expect("allowed host");
         assert_eq!(parsed.host, "example.com");
         assert_eq!(parsed.port, Some(8081));
+    }
+
+    #[test]
+    fn validate_request_authority_falls_back_to_uri_authority_when_host_absent() {
+        let headers = HeaderMap::new();
+        let uri = "http://example.com:8080/mcp".parse().expect("absolute URI");
+        let allowed = ["example.com:8080".to_string()];
+        let parsed =
+            super::validate_request_authority(Some(&uri), &headers, &allowed).expect("authority");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, Some(8080));
+    }
+
+    #[test]
+    fn validate_request_authority_prefers_invalid_host_over_uri_fallback() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com:80:90".parse().expect("header"));
+        let uri = "http://example.com:8080/mcp".parse().expect("absolute URI");
+        let allowed = ["example.com:8080".to_string()];
+        let err = super::validate_request_authority(Some(&uri), &headers, &allowed)
+            .expect_err("invalid host wins");
+        assert_eq!(err, HostValidationError::InvalidHost);
     }
 
     #[test]
