@@ -20,13 +20,18 @@ mcp-toolkit-policy-ffi = { version = "0.1.0", path = "../mcp-toolkit-policy-ffi"
 mcp-toolkit-policy-runtime = { version = "0.1.0", path = "../mcp-toolkit-policy-runtime", optional = true }
 mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", optional = true }
 mcp-toolkit-gemini = { version = "0.1.0", path = "../mcp-toolkit-gemini", optional = true }
+mcp-toolkit-server = { version = "0.1.0", path = "../mcp-toolkit-server", optional = true }
 
 [features]
 default = []
-full = ["auth", "http", "policy", "policy-ffi", "process", "gemini"]
+full = ["auth", "http", "policy", "policy-ffi", "process", "gemini", "server"]
 auth = ["mcp-toolkit-auth"]
 http = ["mcp-toolkit-http"]
 policy = ["mcp-toolkit-policy-core", "mcp-toolkit-policy-runtime"]
 policy-ffi = ["mcp-toolkit-policy-ffi"]
 process = ["mcp-toolkit-process"]
 gemini = ["mcp-toolkit-gemini"]
+server = ["mcp-toolkit-server", "mcp-toolkit-server/full"]
+server-stdio = ["mcp-toolkit-server", "mcp-toolkit-server/stdio"]
+server-http = ["mcp-toolkit-server", "mcp-toolkit-server/http"]
+server-auth = ["mcp-toolkit-server", "mcp-toolkit-server/auth"]

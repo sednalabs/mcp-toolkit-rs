@@ -25,6 +25,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-policy-kernel-adapters` | Compatibility adapters for exact external policy-kernel parity work. |
 | `mcp-toolkit-postgres` | PostgreSQL connection and TLS helpers. |
 | `mcp-toolkit-process` | Process and signal helpers. |
+| `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract test helpers. |
 | `mcp-toolkit-docs` | Documentation and tool metadata helpers. |
 | `mcp-toolkit-gemini` | Optional process-backed Gemini CLI integration helpers. |
@@ -52,7 +53,7 @@ selection:
 [dependencies]
 mcp-toolkit = {
   git = "https://github.com/sednalabs/mcp-rs-toolkit",
-  features = ["auth", "http", "policy", "process"]
+  features = ["auth", "http", "policy", "process", "server"]
 }
 ```
 
@@ -75,9 +76,12 @@ stable public surface:
    `tools/list` contract.
 3. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery and Protected Resource Metadata.
-4. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+4. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+   local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
+   the default MCP route bundle.
+5. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-5. Add policy crates only when the service has an authorization, SQL
+6. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 ## Example: Lock A Tool Schema
@@ -135,8 +139,8 @@ Dependency policy is documented in `docs/dependency-governance.md`.
 - `docs/observability-evolution.md` and `docs/observability-rollout.md` cover
   observability adapters and adoption.
 - `docs/security-profiles.md` describes auth profile selection.
-- `docs/server-composition-layer.md` sketches a future optional HTTP server
-  composition layer.
+- `docs/server-composition-layer.md` describes the optional stdio and HTTP
+  server composition layer.
 - `docs/sql-policy-kernel-conformance.md` documents SQL policy vector
   conformance.
 - `docs/tool-inventory-migration.md` and `docs/tool-schema-snapshots.md` cover

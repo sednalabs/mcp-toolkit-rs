@@ -1,6 +1,6 @@
 # Rust Server Composition Layer
 
-This note scopes a possible public-generic server composition layer for
+This note scopes the public-generic server composition layer for
 `mcp-rs-toolkit`.
 
 The goal is not to turn the toolkit into an application framework. The goal is
@@ -19,8 +19,8 @@ Rust MCP services often repeat the same setup work:
 - graceful shutdown and bind handling;
 - request-level observability scaffolding.
 
-That repetition is a signal that a small composition layer could help, as long
-as it stays optional and transport-specific.
+That repetition is a signal that a small composition layer helps, as long as it
+stays optional and transport-specific.
 
 ## Possible Extraction Targets
 
@@ -98,27 +98,29 @@ The composition layer should not absorb:
 
 Those concerns belong in reference services or reference architectures.
 
-## Proposed Shape
+## Implemented First Slice
 
-The likely shape is a small, opinionated assembly crate or module family layered
-above the existing low-level crates:
+The first slice lives in `crates/mcp-toolkit-server`. It is a small, opinionated
+assembly crate layered above the existing low-level crates:
 
 - `mcp-toolkit-auth`;
 - `mcp-toolkit-http`;
 - `mcp-toolkit-core`;
 - `mcp-toolkit-observability`.
 
-Possible public pieces:
+Current public pieces:
 
-- `auth_surface_runtime`;
-- `streamable_http_runtime`;
-- `discovery_routes`;
-- `serve_http`;
-- `request_observability`.
+- `stdio::serve_stdio` for the common stdio startup and wait loop;
+- `auth::AuthSurfaceBuilder` for auth-surface normalization and layer assembly;
+- `http::HttpBindSafety` for fail-closed non-loopback bind posture checks;
+- `http::LocalMcpHttpRuntimeBuilder` for bounded Streamable HTTP sessions and
+  optional stateless fallback;
+- `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
+  OAuth-not-configured placeholder discovery routes, and host guarding.
 
-Whether these land as one crate or a small family should be decided only after
-the first extraction pass. The guiding rule is to keep the public API small and
-obviously reusable.
+The guiding rule remains: keep the public API small and obviously reusable.
+Service-specific health payloads, attestation payloads, backend clients, tool
+handlers, and product policy stay in service repositories.
 
 ## Adoption Posture
 
@@ -131,16 +133,17 @@ The composition layer should support three adoption styles:
 3. No adoption: stdio-only or highly specialized services should not be forced
    into the composition layer.
 
-## First Implementation Slice
+## Next Implementation Slices
 
-The first code slice should stay narrow:
+The next slices should build on this crate rather than copying old wiring:
 
-1. inventory the common inputs and outputs for auth-surface and streamable HTTP
-   runtime helpers;
-2. extract one helper family with focused tests;
-3. prove it in one or two reference services;
-4. only then decide whether broader route-bundle extraction is worth the API
-   surface.
+1. add maintained starter templates for curated stdio and hosted HTTP/auth
+   servers;
+2. expand reusable contract tests for auth metadata, host rejection, sessions,
+   tool schema snapshots, and stdio callability;
+3. prove the API in one reference server slice;
+4. keep route-bundle additions driven by repeated adopter code, not speculative
+   framework growth.
 
 That keeps the toolkit public, composable, and honest about what is truly
 shared.
