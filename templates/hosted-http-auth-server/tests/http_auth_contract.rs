@@ -1,6 +1,6 @@
 use axum::body::{to_bytes, Body};
 use hosted_http_auth_server::{build_router, HostedHttpConfig};
-use http::{header, Request, StatusCode};
+use http::{header, HeaderMap, Request, StatusCode};
 use mcp_toolkit_testing::auth_surface_contract::AuthSurfaceContract;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -66,7 +66,8 @@ async fn auth_surface_serves_prm_and_challenges_missing_token() {
     let payload: Value = serde_json::from_slice(&bytes).expect("discovery json");
     contract.assert_resource_metadata(&payload);
 
-    let challenge = router
+    let post_challenge = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -80,11 +81,72 @@ async fn auth_surface_serves_prm_and_challenges_missing_token() {
                 .expect("initialize request"),
         )
         .await
-        .expect("challenge response");
-    let (parts, _body) = challenge.into_parts();
+        .expect("post challenge response");
+    let (parts, _body) = post_challenge.into_parts();
     assert_eq!(parts.status, StatusCode::UNAUTHORIZED);
-    let header = parts
-        .headers
+    assert_missing_token_challenge(&contract, &parts.headers);
+
+    let get_challenge = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .body(Body::empty())
+                .expect("get challenge request"),
+        )
+        .await
+        .expect("get challenge response");
+    let (parts, _body) = get_challenge.into_parts();
+    assert_eq!(parts.status, StatusCode::UNAUTHORIZED);
+    assert_missing_token_challenge(&contract, &parts.headers);
+}
+
+#[tokio::test]
+async fn mcp_route_rejects_bad_hosts_before_auth_challenge() {
+    let router = build_router(HostedHttpConfig::local_dev()).expect("router");
+
+    let post_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "example.com")
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+                ))
+                .expect("bad-host post request"),
+        )
+        .await
+        .expect("bad-host post response");
+    assert_eq!(post_response.status(), StatusCode::FORBIDDEN);
+    assert!(!post_response
+        .headers()
+        .contains_key(header::WWW_AUTHENTICATE));
+
+    let get_response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/mcp")
+                .header("host", "example.com")
+                .body(Body::empty())
+                .expect("bad-host get request"),
+        )
+        .await
+        .expect("bad-host get response");
+    assert_eq!(get_response.status(), StatusCode::FORBIDDEN);
+    assert!(!get_response
+        .headers()
+        .contains_key(header::WWW_AUTHENTICATE));
+}
+
+fn assert_missing_token_challenge(contract: &AuthSurfaceContract<'_>, headers: &HeaderMap) {
+    let header = headers
         .get(header::WWW_AUTHENTICATE)
         .and_then(|value| value.to_str().ok())
         .expect("bearer challenge");

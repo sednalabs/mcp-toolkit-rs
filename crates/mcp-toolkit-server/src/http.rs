@@ -578,17 +578,17 @@ where
                 router = router.route(&path, get(oauth_protected_resource_not_configured));
             }
         }
-        if self.include_host_guard {
-            router = router.layer(middleware::from_fn_with_state(
-                state.clone(),
-                host_guard::<S>,
-            ));
-        }
         #[cfg(feature = "auth")]
         {
             if let Some(layer) = self.auth_layer {
                 router = router.layer(layer);
             }
+        }
+        if self.include_host_guard {
+            router = router.layer(middleware::from_fn_with_state(
+                state.clone(),
+                host_guard::<S>,
+            ));
         }
         router.with_state(state)
     }
