@@ -5,6 +5,8 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/**"
+      - "docs/**"
+      - "README.md"
       - "templates/**"
       - ".github/workflows/rust-baseline.yml"
   push:
@@ -14,6 +16,8 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/**"
+      - "docs/**"
+      - "README.md"
       - "templates/**"
       - ".github/workflows/rust-baseline.yml"
   workflow_dispatch:

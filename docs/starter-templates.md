@@ -5,6 +5,10 @@ starters. They are intentionally small applications, not hidden framework
 examples: each template has its own manifest, README, tests, workflow, and
 schema snapshot.
 
+Use this page with `docs/golden-path.md`: the templates show the first copyable
+server shape, while the golden path covers crate selection, review handoff,
+hosted validation, and release evidence.
+
 ## Curated Stdio Intent Server
 
 Use `templates/curated-stdio-intent-server` when the server should run as a

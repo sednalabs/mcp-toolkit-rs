@@ -37,6 +37,9 @@ Gemini CLI authentication.
 
 ## Quick Start
 
+For the complete server creation, validation, review, and release route, start
+with `docs/golden-path.md`.
+
 Add the specific crates you need from Git:
 
 ```toml
@@ -88,6 +91,11 @@ For a copyable starting point, see `templates/curated-stdio-intent-server` for
 stdio intent tools and `templates/hosted-http-auth-server` for hosted HTTP with
 OAuth Protected Resource Metadata, bearer challenges, host guarding, schema
 snapshots, and contract tests.
+
+For existing service adoption, migrate one runtime seam at a time and prove the
+before/after contract through GitHub-hosted validation. The checklist in
+`docs/golden-path.md` defines the expected handoff, review gate, and release
+evidence.
 
 ## Example: Lock A Tool Schema
 
@@ -143,6 +151,8 @@ Dependency policy is documented in `docs/dependency-governance.md`.
   gates.
 - `docs/ecosystem-map.md` explains where toolkit, reference architecture, and
   service-specific code should live.
+- `docs/golden-path.md` is the end-to-end path for creating, validating,
+  reviewing, releasing, and adopting toolkit-built MCP servers.
 - `docs/observability-evolution.md` and `docs/observability-rollout.md` cover
   observability adapters and adoption.
 - `docs/security-profiles.md` describes auth profile selection.

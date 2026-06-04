@@ -154,3 +154,7 @@ The remaining slices should build on this crate rather than copying old wiring:
 
 That keeps the toolkit public, composable, and honest about what is truly
 shared.
+
+Use `docs/golden-path.md` when turning this composition layer into a new server
+or an adoption PR. The golden path defines the expected contract tests,
+GitHub-hosted validation evidence, review gate handoff, and release checklist.
