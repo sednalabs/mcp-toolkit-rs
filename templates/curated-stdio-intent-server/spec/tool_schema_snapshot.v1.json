@@ -1,0 +1,40 @@
+{
+  "schema": "mcp_tool_schema_snapshot",
+  "tools": [
+    {
+      "description": "Summarize the current state for a named target.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "title": "BriefRequest",
+        "type": "object"
+      },
+      "name": "brief_target"
+    },
+    {
+      "description": "Fetch a focused detail view by tracking id.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "tracking_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tracking_id"
+        ],
+        "title": "DetailRequest",
+        "type": "object"
+      },
+      "name": "detail_by_tracking_id"
+    }
+  ],
+  "version": 1
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "mcp_tool_schema_snapshot",
+  "tools": [
+    {
+      "description": "Read a status summary for one component.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "StatusRequest",
+        "type": "object"
+      },
+      "name": "read_status"
+    }
+  ],
+  "version": 1
+}

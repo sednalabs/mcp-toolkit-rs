@@ -84,6 +84,11 @@ stable public surface:
 6. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
+For a copyable starting point, see `templates/curated-stdio-intent-server` for
+stdio intent tools and `templates/hosted-http-auth-server` for hosted HTTP with
+OAuth Protected Resource Metadata, bearer challenges, host guarding, schema
+snapshots, and contract tests.
+
 ## Example: Lock A Tool Schema
 
 ```rust
@@ -141,6 +146,8 @@ Dependency policy is documented in `docs/dependency-governance.md`.
 - `docs/security-profiles.md` describes auth profile selection.
 - `docs/server-composition-layer.md` describes the optional stdio and HTTP
   server composition layer.
+- `docs/starter-templates.md` explains the maintained server starter templates
+  and their validation contracts.
 - `docs/sql-policy-kernel-conformance.md` documents SQL policy vector
   conformance.
 - `docs/tool-inventory-migration.md` and `docs/tool-schema-snapshots.md` cover

@@ -47,5 +47,10 @@ pub use mcp_toolkit_process as process;
 #[cfg(feature = "gemini")]
 pub use mcp_toolkit_gemini as gemini;
 
-#[cfg(feature = "server")]
+#[cfg(any(
+    feature = "server",
+    feature = "server-stdio",
+    feature = "server-http",
+    feature = "server-auth"
+))]
 pub use mcp_toolkit_server as server;

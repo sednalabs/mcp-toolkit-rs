@@ -5,6 +5,7 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/**"
+      - "templates/**"
       - ".github/workflows/rust-baseline.yml"
   push:
     branches:
@@ -13,6 +14,7 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/**"
+      - "templates/**"
       - ".github/workflows/rust-baseline.yml"
   workflow_dispatch:
 
@@ -69,3 +71,18 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --all-targets --all-features
+
+      - name: Check template formatting
+        run: |
+          cargo fmt --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all --check
+          cargo fmt --manifest-path templates/hosted-http-auth-server/Cargo.toml --all --check
+
+      - name: Run template clippy
+        run: |
+          cargo clippy --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Run template tests
+        run: |
+          cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
+          cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features

@@ -135,14 +135,21 @@ The composition layer should support three adoption styles:
 
 ## Next Implementation Slices
 
-The next slices should build on this crate rather than copying old wiring:
+Maintained starter templates now cover the first adoption path:
 
-1. add maintained starter templates for curated stdio and hosted HTTP/auth
-   servers;
-2. expand reusable contract tests for auth metadata, host rejection, sessions,
+- `templates/curated-stdio-intent-server` shows a small stdio server with typed
+  intent tools, explicit inventory metadata, tool-schema snapshots, and a real
+  JSON-RPC stdio smoke test.
+- `templates/hosted-http-auth-server` shows hosted Streamable HTTP assembly,
+  host guarding, OAuth Protected Resource Metadata, bearer challenges, device
+  authorization metadata, tool-schema snapshots, and route-level contract tests.
+
+The remaining slices should build on this crate rather than copying old wiring:
+
+1. expand reusable contract tests for auth metadata, host rejection, sessions,
    tool schema snapshots, and stdio callability;
-3. prove the API in one reference server slice;
-4. keep route-bundle additions driven by repeated adopter code, not speculative
+2. prove the API in one reference server slice;
+3. keep route-bundle additions driven by repeated adopter code, not speculative
    framework growth.
 
 That keeps the toolkit public, composable, and honest about what is truly
