@@ -18,7 +18,7 @@
 //! * **DESIGN**: `docs/server-composition-layer.md`
 //! * **HTTP**: `crates/mcp-toolkit-http/src/streamable.rs`
 
-use std::{collections::HashSet, fmt, net::SocketAddr, sync::Arc};
+use std::{fmt, net::SocketAddr, sync::Arc};
 
 use axum::{
     body::{to_bytes, Body},
@@ -30,7 +30,7 @@ use axum::{
 };
 use http::{header::CONTENT_TYPE, Method, StatusCode};
 use mcp_toolkit_http::{
-    host::validate_host_header,
+    host::validate_host_authority_header,
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
     streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
@@ -346,7 +346,7 @@ impl LocalMcpHttpRuntimeBuilder {
             session_manager: stateful.session_manager,
             stateful_service: stateful.service,
             stateless_service,
-            allowed_hosts: allowed_hosts.into_iter().collect(),
+            allowed_hosts,
         }
     }
 }
@@ -360,7 +360,7 @@ pub struct LocalMcpHttpRuntime<S> {
     /// Optional stateless fallback service.
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
     /// Allowed Host header values copied from the stateful server config.
-    pub allowed_hosts: HashSet<String>,
+    pub allowed_hosts: Vec<String>,
 }
 
 impl<S> LocalMcpHttpRuntime<S>
@@ -398,7 +398,7 @@ pub struct LocalMcpHttpState<S> {
     /// Optional stateless fallback service.
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
     /// Allowed Host header values for the route-bundle host guard.
-    pub allowed_hosts: HashSet<String>,
+    pub allowed_hosts: Vec<String>,
     /// True when bearer authentication is active above the route bundle.
     pub auth_enabled: bool,
 }
@@ -731,7 +731,7 @@ async fn host_guard<S>(
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    if let Err(err) = validate_host_header(req.headers(), &state.allowed_hosts) {
+    if let Err(err) = validate_host_authority_header(req.headers(), &state.allowed_hosts) {
         return plain_response(err.status_code(), err.message());
     }
 

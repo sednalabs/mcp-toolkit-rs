@@ -39,6 +39,15 @@ pub struct ParsedHost {
     pub ipv6: bool,
 }
 
+/// Normalized HTTP authority for Host header allowlist matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostAuthority {
+    /// The hostname (lowercased, without IPv6 brackets).
+    pub host: String,
+    /// Optional numeric port.
+    pub port: Option<u16>,
+}
+
 /// Host header validation failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostValidationError {
@@ -127,6 +136,27 @@ pub fn validate_host_header(
     Ok(parsed)
 }
 
+/// Validates a request Host header against hostname or `host:port` allowlist entries.
+///
+/// This mirrors rmcp Streamable HTTP host allowlist semantics:
+/// * an empty allowlist permits all well-formed Host headers,
+/// * a bare hostname permits any port for that host,
+/// * a `host:port` entry permits only that exact port.
+pub fn validate_host_authority_header(
+    headers: &HeaderMap,
+    allowed_hosts: &[String],
+) -> Result<HostAuthority, HostValidationError> {
+    let host_header = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(HostValidationError::MissingHost)?;
+    let parsed = parse_host_authority(host_header).ok_or(HostValidationError::InvalidHost)?;
+    if !host_authority_is_allowed(&parsed, allowed_hosts) {
+        return Err(HostValidationError::NotAllowed);
+    }
+    Ok(parsed)
+}
+
 /// Derives the base URL from request headers with allowlist enforcement.
 pub fn base_url(
     headers: &HeaderMap,
@@ -159,6 +189,51 @@ fn normalize_port(port: &str) -> Option<String> {
     }
 }
 
+fn host_authority_is_allowed(host: &HostAuthority, allowed_hosts: &[String]) -> bool {
+    if allowed_hosts.is_empty() {
+        return true;
+    }
+    allowed_hosts
+        .iter()
+        .filter_map(|allowed| parse_allowed_authority(allowed))
+        .any(|allowed| {
+            allowed.host == host.host
+                && match allowed.port {
+                    Some(port) => host.port == Some(port),
+                    None => true,
+                }
+        })
+}
+
+fn parse_host_authority(header: &str) -> Option<HostAuthority> {
+    let authority = http::uri::Authority::try_from(header.trim()).ok()?;
+    Some(normalize_authority(authority.host(), authority.port_u16()))
+}
+
+fn parse_allowed_authority(allowed: &str) -> Option<HostAuthority> {
+    let allowed = allowed.trim();
+    if allowed.is_empty() {
+        return None;
+    }
+    if let Ok(authority) = http::uri::Authority::try_from(allowed) {
+        return Some(normalize_authority(authority.host(), authority.port_u16()));
+    }
+    Some(normalize_authority(allowed, None))
+}
+
+fn normalize_authority(host: &str, port: Option<u16>) -> HostAuthority {
+    HostAuthority {
+        host: normalize_authority_host(host),
+        port,
+    }
+}
+
+fn normalize_authority_host(host: &str) -> String {
+    host.trim_matches('[')
+        .trim_matches(']')
+        .to_ascii_lowercase()
+}
+
 fn format_host(parsed: ParsedHost) -> String {
     let host = if parsed.ipv6 {
         format!("[{}]", parsed.host)
@@ -173,7 +248,10 @@ fn format_host(parsed: ParsedHost) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_url, parse_host_header, validate_host_header, HostValidationError};
+    use super::{
+        base_url, parse_host_header, validate_host_authority_header, validate_host_header,
+        HostValidationError,
+    };
     use std::collections::HashSet;
 
     use http::{header::HOST, HeaderMap};
@@ -216,6 +294,44 @@ mod tests {
         let allowed: HashSet<String> = ["localhost".to_string()].into_iter().collect();
         let err = validate_host_header(&headers, &allowed).expect_err("error");
         assert_eq!(err, HostValidationError::NotAllowed);
+    }
+
+    #[test]
+    fn validate_host_authority_header_honors_port_qualified_allowlist() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com:8080".parse().expect("header"));
+        let allowed = ["example.com:8080".to_string()];
+        let parsed = validate_host_authority_header(&headers, &allowed).expect("allowed host");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, Some(8080));
+    }
+
+    #[test]
+    fn validate_host_authority_header_rejects_wrong_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com:8081".parse().expect("header"));
+        let allowed = ["example.com:8080".to_string()];
+        let err = validate_host_authority_header(&headers, &allowed).expect_err("error");
+        assert_eq!(err, HostValidationError::NotAllowed);
+    }
+
+    #[test]
+    fn validate_host_authority_header_allows_any_port_for_bare_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com:8081".parse().expect("header"));
+        let allowed = ["example.com".to_string()];
+        let parsed = validate_host_authority_header(&headers, &allowed).expect("allowed host");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, Some(8081));
+    }
+
+    #[test]
+    fn validate_host_authority_header_allows_all_when_allowlist_empty() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, "example.com:8081".parse().expect("header"));
+        let parsed = validate_host_authority_header(&headers, &[]).expect("allowed host");
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, Some(8081));
     }
 
     #[test]

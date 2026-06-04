@@ -130,3 +130,52 @@ async fn route_bundle_rejects_unknown_host() {
 
     assert_eq!(response.status(), 403);
 }
+
+#[tokio::test]
+async fn route_bundle_preserves_port_qualified_host_allowlist() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["example.com:8080"])
+        .build(|| Ok(TestMcp::new()));
+    let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
+
+    let allowed = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "example.com:8080")
+                .body(Body::empty())
+                .expect("allowed health request"),
+        )
+        .await
+        .expect("allowed health response");
+    assert_eq!(allowed.status(), 200);
+
+    let wrong_port = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "example.com:8081")
+                .body(Body::empty())
+                .expect("wrong port health request"),
+        )
+        .await
+        .expect("wrong port health response");
+    assert_eq!(wrong_port.status(), 403);
+
+    let missing_port = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "example.com")
+                .body(Body::empty())
+                .expect("missing port health request"),
+        )
+        .await
+        .expect("missing port health response");
+    assert_eq!(missing_port.status(), 403);
+}
