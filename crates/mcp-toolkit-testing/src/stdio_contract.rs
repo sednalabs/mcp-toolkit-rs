@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -108,10 +108,28 @@ impl StdioMcpProcess {
     /// # Panics
     /// Panics if the response does not arrive before the default timeout.
     pub fn response(&self, id: u64) -> Value {
+        self.response_with_timeout(id, DEFAULT_TIMEOUT)
+    }
+
+    /// Wait for a response with the matching JSON-RPC id and explicit timeout.
+    ///
+    /// The timeout is an absolute deadline, not a per-message timeout. Noisy
+    /// servers can emit notifications or unrelated responses without extending
+    /// the wait forever.
+    ///
+    /// # Panics
+    /// Panics if the response does not arrive before `timeout`.
+    pub fn response_with_timeout(&self, id: u64, timeout: Duration) -> Value {
+        let deadline = Instant::now() + timeout;
         loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| {
+                    panic!("timed out waiting for JSON-RPC response id {id}");
+                });
             let value = self
                 .responses
-                .recv_timeout(DEFAULT_TIMEOUT)
+                .recv_timeout(remaining)
                 .unwrap_or_else(|_| panic!("timed out waiting for JSON-RPC response id {id}"));
             if value.get("id") == Some(&json!(id)) {
                 return value;
@@ -167,6 +185,8 @@ pub fn assert_stdio_tools_list(exe: impl AsRef<OsStr>, expected_names: &[&str]) 
 mod tests {
     use super::StdioMcpProcess;
     use serde_json::json;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn response_ignores_unrelated_ids_until_match() {
@@ -191,5 +211,39 @@ mod tests {
 
         let response = process.response(7);
         assert_eq!(response["result"], json!({"ok": true}));
+    }
+
+    #[test]
+    fn response_timeout_is_absolute_across_unrelated_messages() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || loop {
+            if tx
+                .send(json!({"jsonrpc":"2.0","id":99,"result":{}}))
+                .is_err()
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        });
+
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sleeper");
+        let stdin = child.stdin.take().expect("stdin");
+        let process = StdioMcpProcess {
+            child,
+            stdin,
+            responses: rx,
+        };
+
+        let start = Instant::now();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process.response_with_timeout(7, Duration::from_millis(50));
+        }));
+        assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 }

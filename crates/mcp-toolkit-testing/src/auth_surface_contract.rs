@@ -491,7 +491,14 @@ fn strings_from_value(value: Option<&Value>) -> Vec<String> {
 }
 
 fn assert_optional_string(payload: &Value, key: &str, expected: Option<&str>) {
-    assert_eq!(payload.get(key).and_then(Value::as_str), expected, "{key}");
+    match (payload.get(key), expected) {
+        (None, None) => {}
+        (Some(value), Some(expected)) => {
+            assert_eq!(value.as_str(), Some(expected), "{key}");
+        }
+        (None, Some(expected)) => panic!("expected metadata field {key}={expected:?}"),
+        (Some(value), None) => panic!("did not expect metadata field {key}: {value}"),
+    }
 }
 
 #[cfg(test)]
@@ -575,6 +582,31 @@ mod tests {
             "urn:ietf:params:oauth:grant-type:device_code",
         ])
         .assert_metadata(&payload);
+    }
+
+    #[test]
+    fn authorization_server_metadata_contract_rejects_unexpected_optional_shapes() {
+        for unexpected in [
+            serde_json::Value::Null,
+            serde_json::json!({"href": "https://issuer.example/register"}),
+        ] {
+            let payload = serde_json::json!({
+                "issuer": "https://issuer.example",
+                "authorization_endpoint": "https://issuer.example/oauth/authorize",
+                "token_endpoint": "https://issuer.example/oauth/token",
+                "registration_endpoint": unexpected,
+            });
+
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                AuthorizationServerMetadataContract::new(
+                    "https://issuer.example",
+                    "https://issuer.example/oauth/authorize",
+                    "https://issuer.example/oauth/token",
+                )
+                .assert_metadata(&payload);
+            }))
+            .is_err());
+        }
     }
 
     #[test]
