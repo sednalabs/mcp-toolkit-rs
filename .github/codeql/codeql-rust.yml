@@ -1,0 +1,8 @@
+name: mcp-rs-toolkit-codeql-rust
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - crates
+  - templates
