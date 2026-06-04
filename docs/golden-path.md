@@ -1,7 +1,9 @@
 # Golden Path For Rust MCP Servers
 
 This guide is the end-to-end route for creating, validating, reviewing, and
-releasing a Rust MCP server with `mcp-rs-toolkit`.
+releasing a Rust MCP server with `mcp-rs-toolkit`. For the operational checklist
+that turns this route into a repeatable delivery lane, see
+`docs/new-server-delivery-lane.md`.
 
 The toolkit should make common MCP server work easy without becoming a product
 framework. Keep backend clients, domain tools, deployment policy, and
@@ -34,6 +36,11 @@ Copy the template into the service repository, rename the package, then replace
 only the example tool handlers and config with service-specific code. Keep the
 template's validation tests unless the service has a documented reason to use a
 stronger local equivalent.
+
+Before adding generic API, SQL, or HTTP escape hatches, define three to seven
+first-class intent tools that answer the primary operator questions. The
+delivery-lane checklist in `docs/new-server-delivery-lane.md` records the
+required evidence for that tool-design gate.
 
 ## 3. Pick Crates By Boundary
 
@@ -132,6 +139,11 @@ The reviewer should inspect the diff and validation evidence, then either
 approve the gate or leave concrete required fixes. A green workflow is evidence,
 not a substitute for reviewing whether the abstraction stayed inside the
 toolkit boundary.
+
+Use `docs/new-server-delivery-lane.md` as the review checklist for new server
+work. It pins the seven required gates: template selection, intent-tool design,
+toolkit contract tests, domain output tests, GitHub validation, reviewer
+sidecar signoff, and proven promotion.
 
 ## 7. Release Checklist
 
