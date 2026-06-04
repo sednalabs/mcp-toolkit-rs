@@ -29,6 +29,7 @@ use serde_json::{Map, Value};
 use std::path::Path;
 
 pub mod auth_surface_contract;
+pub mod stdio_contract;
 pub use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 
 /// Environment variable for opting into tool schema snapshot updates.

@@ -1,7 +1,10 @@
 use axum::body::{to_bytes, Body};
 use hosted_http_auth_server::{build_router, HostedHttpConfig};
-use http::{header, HeaderMap, Request, StatusCode};
-use mcp_toolkit_testing::auth_surface_contract::AuthSurfaceContract;
+use http::{Request, StatusCode};
+use mcp_toolkit_testing::auth_surface_contract::{
+    assert_forbidden_without_bearer_challenge, AuthSurfaceContract,
+    AuthorizationServerMetadataContract,
+};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -66,6 +69,36 @@ async fn auth_surface_serves_prm_and_challenges_missing_token() {
     let payload: Value = serde_json::from_slice(&bytes).expect("discovery json");
     contract.assert_resource_metadata(&payload);
 
+    let authorization_metadata = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/.well-known/oauth-authorization-server/mcp")
+                .header("host", "127.0.0.1")
+                .body(Body::empty())
+                .expect("authorization metadata request"),
+        )
+        .await
+        .expect("authorization metadata response");
+    let (parts, body) = authorization_metadata.into_parts();
+    assert_eq!(parts.status, StatusCode::OK);
+    let bytes = to_bytes(body, usize::MAX)
+        .await
+        .expect("authorization metadata body");
+    let payload: Value = serde_json::from_slice(&bytes).expect("authorization metadata json");
+    AuthorizationServerMetadataContract::new(
+        "http://issuer.example",
+        "http://issuer.example/oauth/authorize",
+        "http://issuer.example/oauth/token",
+    )
+    .with_device_authorization_endpoint("http://issuer.example/oauth/device")
+    .with_grant_types_supported(&[
+        "authorization_code",
+        "urn:ietf:params:oauth:grant-type:device_code",
+    ])
+    .assert_metadata(&payload);
+
     let post_challenge = router
         .clone()
         .oneshot(
@@ -83,8 +116,7 @@ async fn auth_surface_serves_prm_and_challenges_missing_token() {
         .await
         .expect("post challenge response");
     let (parts, _body) = post_challenge.into_parts();
-    assert_eq!(parts.status, StatusCode::UNAUTHORIZED);
-    assert_missing_token_challenge(&contract, &parts.headers);
+    contract.assert_missing_token_response(parts.status, &parts.headers);
 
     let get_challenge = router
         .clone()
@@ -99,8 +131,7 @@ async fn auth_surface_serves_prm_and_challenges_missing_token() {
         .await
         .expect("get challenge response");
     let (parts, _body) = get_challenge.into_parts();
-    assert_eq!(parts.status, StatusCode::UNAUTHORIZED);
-    assert_missing_token_challenge(&contract, &parts.headers);
+    contract.assert_missing_token_response(parts.status, &parts.headers);
 }
 
 #[tokio::test]
@@ -123,10 +154,7 @@ async fn mcp_route_rejects_bad_hosts_before_auth_challenge() {
         )
         .await
         .expect("bad-host post response");
-    assert_eq!(post_response.status(), StatusCode::FORBIDDEN);
-    assert!(!post_response
-        .headers()
-        .contains_key(header::WWW_AUTHENTICATE));
+    assert_forbidden_without_bearer_challenge(post_response.status(), post_response.headers());
 
     let get_response = router
         .oneshot(
@@ -139,16 +167,5 @@ async fn mcp_route_rejects_bad_hosts_before_auth_challenge() {
         )
         .await
         .expect("bad-host get response");
-    assert_eq!(get_response.status(), StatusCode::FORBIDDEN);
-    assert!(!get_response
-        .headers()
-        .contains_key(header::WWW_AUTHENTICATE));
-}
-
-fn assert_missing_token_challenge(contract: &AuthSurfaceContract<'_>, headers: &HeaderMap) {
-    let header = headers
-        .get(header::WWW_AUTHENTICATE)
-        .and_then(|value| value.to_str().ok())
-        .expect("bearer challenge");
-    contract.assert_missing_token_challenge(header);
+    assert_forbidden_without_bearer_challenge(get_response.status(), get_response.headers());
 }

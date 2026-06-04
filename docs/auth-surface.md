@@ -172,7 +172,10 @@ This first slice currently covers:
 - RFC 6750 `error` and `error_description` fields are optional for missing-token challenges and are not part of this shared conformance requirement
 - the shared helper accepts the RFC 9110 `1*SP` separator between `Bearer` and auth-params, but still rejects tabs/newlines and malformed non-space separators
 - the shared helper intentionally does not parse the full Bearer auth-param grammar or re-interpret `scope` as generic content
-- reusable assertions for this slice live in `mcp-toolkit-testing::auth_surface_contract::AuthSurfaceContract`
+- reusable assertions for this slice live in `mcp-toolkit-testing::auth_surface_contract`, including:
+  - `AuthSurfaceContract` for PRM and missing-token bearer challenges
+  - `AuthorizationServerMetadataContract` for issuer metadata, device authorization endpoints, and grant type lists
+  - `assert_forbidden_without_bearer_challenge` for pre-auth guard failures such as host rejection
 
 This first slice does not yet cover invalid-token, insufficient-scope, or auth-server
 discovery variants.

@@ -135,6 +135,8 @@ Dependency policy is documented in `docs/dependency-governance.md`.
 
 - `docs/auth-surface.md` explains the OAuth, Protected Resource Metadata, and
   bearer-enforcement contract.
+- `docs/contract-testing.md` covers reusable hard-path test helpers for stdio,
+  auth metadata, bearer challenges, host guards, and snapshots.
 - `docs/deferred-loading-and-tool-search.md` covers lightweight tool discovery
   and deferred loading.
 - `docs/dependency-governance.md` defines dependency selection and update

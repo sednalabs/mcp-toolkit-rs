@@ -8,6 +8,8 @@ use mcp_toolkit_http::oauth::{resource_metadata_hint, BEARER_METHOD_HEADER};
 use serde_json::Value;
 use std::collections::HashMap;
 
+use http::{header, HeaderMap, StatusCode};
+
 /// Contract assertions for a single auth-surface PRM discovery and core missing-token case.
 ///
 /// # Errors
@@ -145,6 +147,169 @@ impl<'a> AuthSurfaceContract<'a> {
             );
         }
     }
+
+    /// Assert that HTTP response headers include the expected missing-token
+    /// bearer challenge.
+    ///
+    /// # Panics
+    /// Panics when `WWW-Authenticate` is missing or malformed.
+    pub fn assert_missing_token_challenge_headers(&self, headers: &HeaderMap) {
+        let challenge = headers
+            .get(header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .expect("expected bearer challenge header");
+        self.assert_missing_token_challenge(challenge);
+    }
+
+    /// Assert that an HTTP response is a missing-token challenge for this auth
+    /// surface contract.
+    ///
+    /// # Panics
+    /// Panics when the status is not `401 Unauthorized` or the challenge
+    /// headers do not match the contract.
+    pub fn assert_missing_token_response(&self, status: StatusCode, headers: &HeaderMap) {
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        self.assert_missing_token_challenge_headers(headers);
+    }
+}
+
+/// Expected OAuth authorization-server metadata for one issuer.
+#[derive(Debug, Clone)]
+pub struct AuthorizationServerMetadataContract<'a> {
+    issuer: &'a str,
+    authorization_endpoint: &'a str,
+    token_endpoint: &'a str,
+    registration_endpoint: Option<&'a str>,
+    jwks_uri: Option<&'a str>,
+    introspection_endpoint: Option<&'a str>,
+    device_authorization_endpoint: Option<&'a str>,
+    grant_types_supported: &'a [&'a str],
+}
+
+impl<'a> AuthorizationServerMetadataContract<'a> {
+    /// Build a new authorization-server metadata contract with required
+    /// endpoint fields.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn new(issuer: &'a str, authorization_endpoint: &'a str, token_endpoint: &'a str) -> Self {
+        Self {
+            issuer,
+            authorization_endpoint,
+            token_endpoint,
+            registration_endpoint: None,
+            jwks_uri: None,
+            introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: &[],
+        }
+    }
+
+    /// Expect a dynamic client registration endpoint.
+    #[must_use]
+    pub fn with_registration_endpoint(mut self, endpoint: &'a str) -> Self {
+        self.registration_endpoint = Some(endpoint);
+        self
+    }
+
+    /// Expect a JWK set URI.
+    #[must_use]
+    pub fn with_jwks_uri(mut self, uri: &'a str) -> Self {
+        self.jwks_uri = Some(uri);
+        self
+    }
+
+    /// Expect an introspection endpoint.
+    #[must_use]
+    pub fn with_introspection_endpoint(mut self, endpoint: &'a str) -> Self {
+        self.introspection_endpoint = Some(endpoint);
+        self
+    }
+
+    /// Expect an OAuth device authorization endpoint.
+    #[must_use]
+    pub fn with_device_authorization_endpoint(mut self, endpoint: &'a str) -> Self {
+        self.device_authorization_endpoint = Some(endpoint);
+        self
+    }
+
+    /// Expect the exact ordered grant type list emitted by the server.
+    #[must_use]
+    pub fn with_grant_types_supported(mut self, grant_types: &'a [&'a str]) -> Self {
+        self.grant_types_supported = grant_types;
+        self
+    }
+
+    /// Assert the authorization-server metadata JSON object.
+    ///
+    /// # Panics
+    /// Panics when the payload differs from the configured contract.
+    pub fn assert_metadata(&self, payload: &Value) {
+        assert_eq!(
+            payload.get("issuer").and_then(Value::as_str),
+            Some(self.issuer)
+        );
+        assert_eq!(
+            payload
+                .get("authorization_endpoint")
+                .and_then(Value::as_str),
+            Some(self.authorization_endpoint)
+        );
+        assert_eq!(
+            payload.get("token_endpoint").and_then(Value::as_str),
+            Some(self.token_endpoint)
+        );
+        assert_optional_string(payload, "registration_endpoint", self.registration_endpoint);
+        assert_optional_string(payload, "jwks_uri", self.jwks_uri);
+        assert_optional_string(
+            payload,
+            "introspection_endpoint",
+            self.introspection_endpoint,
+        );
+        assert_optional_string(
+            payload,
+            "device_authorization_endpoint",
+            self.device_authorization_endpoint,
+        );
+        if self.grant_types_supported.is_empty() {
+            assert!(
+                payload.get("grant_types_supported").is_none(),
+                "did not expect grant_types_supported in metadata"
+            );
+        } else {
+            assert_eq!(
+                strings_from_value(payload.get("grant_types_supported")),
+                self.grant_types_supported
+                    .iter()
+                    .copied()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+/// Assert that a response has no bearer challenge header.
+///
+/// This is useful for host-guard tests that should fail before auth runs.
+///
+/// # Panics
+/// Panics when `WWW-Authenticate` is present.
+pub fn assert_no_bearer_challenge(headers: &HeaderMap) {
+    assert!(
+        !headers.contains_key(header::WWW_AUTHENTICATE),
+        "expected no WWW-Authenticate header"
+    );
+}
+
+/// Assert that a request was rejected by a pre-auth guard.
+///
+/// # Panics
+/// Panics when the response is not `403 Forbidden` or includes a bearer
+/// challenge.
+pub fn assert_forbidden_without_bearer_challenge(status: StatusCode, headers: &HeaderMap) {
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_no_bearer_challenge(headers);
 }
 
 fn bearer_challenge_params(challenge: &str) -> HashMap<String, String> {
@@ -325,9 +490,17 @@ fn strings_from_value(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn assert_optional_string(payload: &Value, key: &str, expected: Option<&str>) {
+    assert_eq!(payload.get(key).and_then(Value::as_str), expected, "{key}");
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bearer_challenge_params, AuthSurfaceContract};
+    use super::{
+        assert_forbidden_without_bearer_challenge, bearer_challenge_params, AuthSurfaceContract,
+        AuthorizationServerMetadataContract,
+    };
+    use http::{header, HeaderMap, HeaderValue, StatusCode};
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     #[test]
@@ -342,6 +515,66 @@ mod tests {
         contract.assert_missing_token_challenge(
             "Bearer realm=\"toolkit-test\", resource_metadata=\"https://example.test/.well-known/oauth-protected-resource/mcp\", scope=\"tool:read tool:write\"",
         );
+    }
+
+    #[test]
+    fn missing_token_response_asserts_status_and_header_contract() {
+        let contract = AuthSurfaceContract::new(
+            "https://example.test/mcp",
+            &["https://issuer.example"],
+            &["tool:read"],
+            "toolkit-test",
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static(
+                "Bearer realm=\"toolkit-test\", resource_metadata=\"https://example.test/.well-known/oauth-protected-resource/mcp\", scope=\"tool:read\"",
+            ),
+        );
+
+        contract.assert_missing_token_response(StatusCode::UNAUTHORIZED, &headers);
+    }
+
+    #[test]
+    fn forbidden_without_bearer_challenge_rejects_auth_headers() {
+        let mut headers = HeaderMap::new();
+        assert_forbidden_without_bearer_challenge(StatusCode::FORBIDDEN, &headers);
+
+        headers.insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer realm=\"toolkit-test\""),
+        );
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            assert_forbidden_without_bearer_challenge(StatusCode::FORBIDDEN, &headers);
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn authorization_server_metadata_contract_checks_device_grants() {
+        let payload = serde_json::json!({
+            "issuer": "https://issuer.example",
+            "authorization_endpoint": "https://issuer.example/oauth/authorize",
+            "token_endpoint": "https://issuer.example/oauth/token",
+            "device_authorization_endpoint": "https://issuer.example/oauth/device",
+            "grant_types_supported": [
+                "authorization_code",
+                "urn:ietf:params:oauth:grant-type:device_code"
+            ]
+        });
+
+        AuthorizationServerMetadataContract::new(
+            "https://issuer.example",
+            "https://issuer.example/oauth/authorize",
+            "https://issuer.example/oauth/token",
+        )
+        .with_device_authorization_endpoint("https://issuer.example/oauth/device")
+        .with_grant_types_supported(&[
+            "authorization_code",
+            "urn:ietf:params:oauth:grant-type:device_code",
+        ])
+        .assert_metadata(&payload);
     }
 
     #[test]

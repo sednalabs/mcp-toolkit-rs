@@ -18,8 +18,8 @@ It demonstrates:
 - typed tool input schemas;
 - explicit `ToolInventory` metadata for the exposed tools;
 - `assert_tool_schema_snapshot` drift protection;
-- a JSON-RPC stdio smoke test that initializes the server and runs
-  `tools/list`.
+- `stdio_contract::assert_stdio_tools_list` for a JSON-RPC stdio smoke test
+  that initializes the server and runs `tools/list`.
 
 Validate it with:
 
@@ -42,6 +42,10 @@ It demonstrates:
 - `AuthSurfaceBuilder` with public health and protected `/mcp` routes;
 - OAuth Protected Resource Metadata with device authorization metadata;
 - bearer-auth challenge contract tests;
+- authorization-server metadata contract tests for device grants and grant
+  type lists;
+- pre-auth bad-host `/mcp` checks using
+  `assert_forbidden_without_bearer_challenge`;
 - tool-schema snapshots for exported tools.
 
 Validate it with:

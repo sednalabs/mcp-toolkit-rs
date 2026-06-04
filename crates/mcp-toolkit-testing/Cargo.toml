@@ -12,6 +12,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+http = "1.3.1"
 mcp-toolkit-core = { version = "0.1.0", path = "../mcp-toolkit-core" }
 mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http" }
 serde = "1.0.228"
