@@ -1,39 +1,56 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mcp_toolkit_gemini::executor::GeminiPromptTransport;
 use mcp_toolkit_gemini::{
     execute_gemini, AllowedMcpServers, AskGeminiPolicy, GeminiExecutionConfig, GeminiRequest,
 };
 
+static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(unix)]
+fn unique_test_dir(prefix: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let ordinal = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "mcp-toolkit-gemini-tests-{}-{}-{}-{}",
+        std::process::id(),
+        prefix,
+        nonce,
+        ordinal
+    ))
+}
+
 #[cfg(unix)]
 fn write_executable_script(script_path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
 
-    let tmp_path = script_path.with_extension("tmp");
-    let mut file = fs::File::create(&tmp_path).expect("create fake gemini script");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(script_path)
+        .expect("create fake gemini script");
     file.write_all(script.as_bytes())
         .expect("write fake gemini script");
     file.sync_all().expect("sync fake gemini script");
     drop(file);
 
-    let mut perms = fs::metadata(&tmp_path)
+    let mut perms = fs::metadata(script_path)
         .expect("stat fake gemini script")
         .permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&tmp_path, perms).expect("chmod fake gemini script");
-    fs::rename(&tmp_path, script_path).expect("install fake gemini script");
+    fs::set_permissions(script_path, perms).expect("chmod fake gemini script");
 }
 
 #[cfg(unix)]
 fn make_fake_gemini_script(prefix: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
+    let dir = unique_test_dir(prefix);
     fs::create_dir_all(&dir).expect("create test temp directory");
 
     let script_path = dir.join("fake-gemini.sh");
@@ -55,11 +72,7 @@ fn cleanup_parent(path: &Path) {
 
 #[cfg(unix)]
 fn make_fake_gemini_script_with_stdin_fallback(prefix: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
+    let dir = unique_test_dir(prefix);
     fs::create_dir_all(&dir).expect("create test temp directory");
 
     let script_path = dir.join("fake-gemini.sh");
@@ -88,11 +101,7 @@ printf '{\"ok\": true}\n'
 
 #[cfg(unix)]
 fn make_fake_gemini_script_printing_sandbox_env(prefix: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
+    let dir = unique_test_dir(prefix);
     fs::create_dir_all(&dir).expect("create test temp directory");
 
     let script_path = dir.join("fake-gemini.sh");
@@ -109,11 +118,7 @@ printf '%s\n' "$@"
 
 #[cfg(unix)]
 fn make_fake_gemini_script_retrying_429(prefix: &str, failures_before_success: usize) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
+    let dir = unique_test_dir(prefix);
     fs::create_dir_all(&dir).expect("create test temp directory");
 
     let script_path = dir.join("fake-gemini.sh");
