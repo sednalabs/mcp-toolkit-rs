@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,6 +9,24 @@ use mcp_toolkit_gemini::{
 };
 
 static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
+
+enum FakeGeminiMode {
+    EchoArgs,
+    StdinFallback,
+    SandboxEnv,
+    Retry429 { failures_before_success: usize },
+}
+
+impl FakeGeminiMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::EchoArgs => "echo_args",
+            Self::StdinFallback => "stdin_fallback",
+            Self::SandboxEnv => "sandbox_env",
+            Self::Retry429 { .. } => "retry_429",
+        }
+    }
+}
 
 #[cfg(unix)]
 fn unique_test_dir(prefix: &str) -> PathBuf {
@@ -28,39 +45,33 @@ fn unique_test_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn write_executable_script(script_path: &Path, script: &str) {
-    use std::os::unix::fs::PermissionsExt;
+fn make_fake_gemini_script(prefix: &str, mode: FakeGeminiMode) -> PathBuf {
+    use std::os::unix::fs::symlink;
 
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(script_path)
-        .expect("create fake gemini script");
-    file.write_all(script.as_bytes())
-        .expect("write fake gemini script");
-    file.sync_all().expect("sync fake gemini script");
-    drop(file);
+    let dir = unique_test_dir(prefix);
+    fs::create_dir_all(&dir).expect("create test temp directory");
+    fs::write(dir.join("mode"), mode.as_str()).expect("write fake gemini mode");
+    if let FakeGeminiMode::Retry429 {
+        failures_before_success,
+    } = mode
+    {
+        fs::write(
+            dir.join("failures-before-success"),
+            failures_before_success.to_string(),
+        )
+        .expect("write fake gemini retry failure count");
+    }
 
-    let mut perms = fs::metadata(script_path)
-        .expect("stat fake gemini script")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(script_path, perms).expect("chmod fake gemini script");
+    let driver_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-gemini-driver.sh");
+    let script_path = dir.join("fake-gemini.sh");
+    symlink(&driver_path, &script_path).expect("link fake gemini driver");
+    script_path
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script(prefix: &str) -> PathBuf {
-    let dir = unique_test_dir(prefix);
-    fs::create_dir_all(&dir).expect("create test temp directory");
-
-    let script_path = dir.join("fake-gemini.sh");
-    let script = r#"#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$@"
-"#;
-    write_executable_script(&script_path, script);
-
-    script_path
+fn make_fake_gemini_echo_script(prefix: &str) -> PathBuf {
+    make_fake_gemini_script(prefix, FakeGeminiMode::EchoArgs)
 }
 
 fn cleanup_parent(path: &Path) {
@@ -72,88 +83,28 @@ fn cleanup_parent(path: &Path) {
 
 #[cfg(unix)]
 fn make_fake_gemini_script_with_stdin_fallback(prefix: &str) -> PathBuf {
-    let dir = unique_test_dir(prefix);
-    fs::create_dir_all(&dir).expect("create test temp directory");
-
-    let script_path = dir.join("fake-gemini.sh");
-    let script = r#"#!/usr/bin/env bash
-set -euo pipefail
-
-for arg in "$@"; do
-    if [[ "$arg" == "--" ]]; then
-        echo "No input provided via stdin. Input can be provided by piping data into gemini or using the --prompt option." >&2
-        exit 42
-    fi
-done
-
-payload=$(cat)
-if [[ -z "$payload" ]]; then
-    echo "No input provided via stdin. Input can be provided by piping data into gemini or using the --prompt option." >&2
-    exit 42
-fi
-
-printf '{\"ok\": true}\n'
-"#;
-    write_executable_script(&script_path, script);
-
-    script_path
+    make_fake_gemini_script(prefix, FakeGeminiMode::StdinFallback)
 }
 
 #[cfg(unix)]
 fn make_fake_gemini_script_printing_sandbox_env(prefix: &str) -> PathBuf {
-    let dir = unique_test_dir(prefix);
-    fs::create_dir_all(&dir).expect("create test temp directory");
-
-    let script_path = dir.join("fake-gemini.sh");
-    let script = r#"#!/usr/bin/env bash
-set -euo pipefail
-
-printf 'sandbox=%s\n' "${GEMINI_SANDBOX-<unset>}"
-printf '%s\n' "$@"
-"#;
-    write_executable_script(&script_path, script);
-
-    script_path
+    make_fake_gemini_script(prefix, FakeGeminiMode::SandboxEnv)
 }
 
 #[cfg(unix)]
 fn make_fake_gemini_script_retrying_429(prefix: &str, failures_before_success: usize) -> PathBuf {
-    let dir = unique_test_dir(prefix);
-    fs::create_dir_all(&dir).expect("create test temp directory");
-
-    let script_path = dir.join("fake-gemini.sh");
-    let counter_path = dir.join("retry-count.txt");
-    let script = format!(
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-
-counter_file="{counter_file}"
-count=0
-if [[ -f "$counter_file" ]]; then
-  count=$(cat "$counter_file")
-fi
-count=$((count + 1))
-printf '%s\n' "$count" > "$counter_file"
-
-if (( count <= {failures_before_success} )); then
-  echo "Attempt $count failed with status 429 (RESOURCE_EXHAUSTED / MODEL_CAPACITY_EXHAUSTED)" >&2
-  exit 1
-fi
-
-printf 'ok-after-429-retry\n'
-"#,
-        counter_file = counter_path.display(),
-        failures_before_success = failures_before_success
-    );
-    write_executable_script(&script_path, &script);
-
-    script_path
+    make_fake_gemini_script(
+        prefix,
+        FakeGeminiMode::Retry429 {
+            failures_before_success,
+        },
+    )
 }
 
 #[tokio::test]
 #[cfg(unix)]
 async fn default_policy_passes_explicit_none_allowlist() {
-    let script_path = make_fake_gemini_script("none");
+    let script_path = make_fake_gemini_echo_script("none");
     let config = GeminiExecutionConfig {
         api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
@@ -192,7 +143,7 @@ async fn default_policy_passes_explicit_none_allowlist() {
 #[tokio::test]
 #[cfg(unix)]
 async fn named_allowlist_is_forwarded_and_none_not_used() {
-    let script_path = make_fake_gemini_script("named");
+    let script_path = make_fake_gemini_echo_script("named");
     let config = GeminiExecutionConfig {
         api_key: "test-api-key".to_string(),
         gemini_bin: script_path.to_string_lossy().to_string(),
