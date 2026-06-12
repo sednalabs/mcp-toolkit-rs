@@ -248,13 +248,24 @@ fn required_metadata_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'
 fn validate_metadata_url(field: &str, value: &str) -> Result<(), AuthError> {
     let url = reqwest::Url::parse(value)
         .map_err(|_| AuthError::new(format!("Discovery metadata has invalid {}", field)))?;
-    if matches!(url.scheme(), "http" | "https") {
+    if url.scheme() == "https" || (url.scheme() == "http" && is_loopback_url(&url)) {
         return Ok(());
     }
     Err(AuthError::new(format!(
         "Discovery metadata has unsupported {} scheme",
         field
     )))
+}
+
+fn is_loopback_url(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|addr| addr.is_loopback())
+            .unwrap_or(false)
 }
 
 impl Default for AuthConfig {
@@ -359,5 +370,35 @@ mod profile_tests {
         assert!(err
             .to_string()
             .contains("Discovery metadata missing token_endpoint"));
+    }
+
+    #[test]
+    fn oidc_metadata_validation_rejects_non_loopback_http_endpoints() {
+        let mut metadata = OidcDiscovery {
+            issuer: Some("https://issuer.example".to_string()),
+            authorization_endpoint: Some("https://issuer.example/authorize".to_string()),
+            token_endpoint: Some("http://issuer.example/token".to_string()),
+            registration_endpoint: None,
+            jwks_uri: "https://issuer.example/jwks".to_string(),
+            introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
+        };
+
+        let err = validate_oidc_metadata("https://issuer.example", &metadata)
+            .expect_err("non-loopback http endpoint should fail");
+        assert!(err
+            .to_string()
+            .contains("Discovery metadata has unsupported token_endpoint scheme"));
+
+        metadata.issuer = Some("http://127.0.0.1:8080".to_string());
+        metadata.authorization_endpoint = Some("http://127.0.0.1:8080/authorize".to_string());
+        metadata.token_endpoint = Some("http://127.0.0.1:8080/token".to_string());
+        metadata.jwks_uri = "http://127.0.0.1:8080/jwks".to_string();
+        validate_oidc_metadata("http://127.0.0.1:8080", &metadata)
+            .expect("loopback http metadata should pass");
     }
 }

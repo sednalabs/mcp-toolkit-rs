@@ -138,8 +138,13 @@ impl JwksCache {
             reason: None,
         })?;
         match (&state.set, state.fetched_at) {
-            (Some(set), Some(fetched_at)) if now.duration_since(fetched_at) < cooldown => {
-                Ok(Some(set.clone()))
+            (Some(set), Some(fetched_at)) => {
+                let age = now.checked_duration_since(fetched_at).unwrap_or_default();
+                if age < cooldown {
+                    Ok(Some(set.clone()))
+                } else {
+                    Ok(None)
+                }
             }
             _ => Ok(None),
         }

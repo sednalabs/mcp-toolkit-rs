@@ -246,7 +246,7 @@ fn signal_process_group(
     signal: i32,
     name: &'static str,
 ) -> Result<(), ProcessGroupError> {
-    if pid <= 1 {
+    if pid <= 1 || pid > i32::MAX as u32 {
         return Err(ProcessGroupError::InvalidPid { pid });
     }
     let pgid = -(pid as i32);
@@ -303,6 +303,12 @@ mod tests {
         assert_eq!(
             kill_process_group(1).unwrap_err(),
             ProcessGroupError::InvalidPid { pid: 1 }
+        );
+        assert_eq!(
+            kill_process_group(i32::MAX as u32 + 1).unwrap_err(),
+            ProcessGroupError::InvalidPid {
+                pid: i32::MAX as u32 + 1
+            }
         );
     }
 
