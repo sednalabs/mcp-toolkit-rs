@@ -149,7 +149,7 @@ Some deployments insert an internal gateway between the MCP server and the privi
 Those architectures can require an extra audience for token exchange, such as
 `admin-gateway`, in addition to the MCP resource audience.
 
-That is a legitimate deployment requirement, but it is not a universal `mcp-rs-toolkit`
+That is a legitimate deployment requirement, but it is not a universal `mcp-toolkit-rs`
 requirement. Toolkit docs should call it out as an operator-facing caveat, not part of the base
 auth-surface contract.
 

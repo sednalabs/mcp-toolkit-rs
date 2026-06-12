@@ -1,7 +1,7 @@
 # New MCP Server Delivery Lane
 
 This lane is the repeatable delivery contract for creating Rust MCP servers
-with `mcp-rs-toolkit`. Use it when starting a new server or when an existing
+with `mcp-toolkit-rs`. Use it when starting a new server or when an existing
 service is being reshaped enough that its MCP surface, tests, or release proof
 need a fresh gate.
 

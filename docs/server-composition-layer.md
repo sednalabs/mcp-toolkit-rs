@@ -1,7 +1,7 @@
 # Rust Server Composition Layer
 
 This note scopes the public-generic server composition layer for
-`mcp-rs-toolkit`.
+`mcp-toolkit-rs`.
 
 The goal is not to turn the toolkit into an application framework. The goal is
 to reduce repeated MCP server bootstrap wiring while keeping domain logic,

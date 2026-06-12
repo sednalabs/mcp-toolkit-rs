@@ -3,7 +3,7 @@ name = "mcp-toolkit-gemini"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/sednalabs/mcp-rs-toolkit"
+repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 
 [lib]
 path = "src/lib.rs"

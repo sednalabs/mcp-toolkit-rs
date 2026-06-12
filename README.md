@@ -1,9 +1,9 @@
-# mcp-rs-toolkit
+# mcp-toolkit-rs
 
 Reusable Rust building blocks for Model Context Protocol (MCP) servers and
 clients.
 
-`mcp-rs-toolkit` is an early public workspace for the shared substrate that
+`mcp-toolkit-rs` is an early public workspace for the shared substrate that
 keeps Rust MCP services consistent: auth discovery, HTTP/session support,
 policy primitives, tool inventory helpers, observability, process utilities,
 and test harnesses. It is pre-1.0 and the crates are not published to
@@ -45,9 +45,9 @@ Add the specific crates you need from Git:
 
 ```toml
 [dependencies]
-mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-rs-toolkit" }
-mcp-toolkit-http = { git = "https://github.com/sednalabs/mcp-rs-toolkit", features = ["session"] }
-mcp-toolkit-testing = { git = "https://github.com/sednalabs/mcp-rs-toolkit" }
+mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs" }
+mcp-toolkit-http = { git = "https://github.com/sednalabs/mcp-toolkit-rs", features = ["session"] }
+mcp-toolkit-testing = { git = "https://github.com/sednalabs/mcp-toolkit-rs" }
 ```
 
 Or use the umbrella crate when you want one dependency with explicit feature
@@ -56,7 +56,7 @@ selection:
 ```toml
 [dependencies]
 mcp-toolkit = {
-  git = "https://github.com/sednalabs/mcp-rs-toolkit",
+  git = "https://github.com/sednalabs/mcp-toolkit-rs",
   features = ["auth", "http", "policy", "process", "server"]
 }
 ```

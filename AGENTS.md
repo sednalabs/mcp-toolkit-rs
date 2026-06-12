@@ -1,6 +1,6 @@
 # Rust MCP Toolkit Guidelines
 
-This document defines the engineering and documentation standards for `mcp-rs-toolkit`.
+This document defines the engineering and documentation standards for `mcp-toolkit-rs`.
 Our goal is reliable, low-noise engineering guidance. We leverage Rust's strong
 type system for safety and use documentation to explain *why*, not just *what*.
 
