@@ -20,7 +20,7 @@ updates:
     directory: "/templates/curated-stdio-intent-server"
     schedule:
       interval: "daily"
-      time: "22:15"
+      time: "22:00"
       timezone: "Etc/UTC"
     groups:
       rmcp:
@@ -36,7 +36,7 @@ updates:
     directory: "/templates/hosted-http-auth-server"
     schedule:
       interval: "daily"
-      time: "22:30"
+      time: "22:00"
       timezone: "Etc/UTC"
     groups:
       rmcp:
@@ -52,7 +52,7 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-      time: "22:45"
+      time: "22:00"
       timezone: "Etc/UTC"
     groups:
       github-actions:
