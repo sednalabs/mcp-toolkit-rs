@@ -86,14 +86,18 @@ stable public surface:
    expose.
 2. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
    `tools/list` contract.
-3. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
+3. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
+   catalogs should publish a reusable `defer_loading` plus `tool_search`
+   request fragment, a richer documentation/resource template, and a local
+   `allowed_tools` discovery envelope.
+4. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery and Protected Resource Metadata.
-4. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+5. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle.
-5. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+6. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-6. Add policy crates only when the service has an authorization, SQL
+7. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for

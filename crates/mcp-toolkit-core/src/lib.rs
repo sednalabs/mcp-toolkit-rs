@@ -4,11 +4,13 @@
 //!
 //! ## Ownership
 //! This crate owns the common trait definitions, protocol message structures,
-//! and standard utility primitives required for MCP-compliant communication.
+//! standard utility primitives, and lightweight provider-facing configuration
+//! helpers required around MCP-compliant communication.
 //!
 //! ## Non-ownership
-//! This crate does not manage transport logic, I/O streams, or security policies.
-//! It focuses purely on protocol-level type definitions and serialization.
+//! This crate does not manage transport logic, I/O streams, or security
+//! policies. It focuses on protocol-level type definitions, serialization, and
+//! small configuration payloads that do not require a transport dependency.
 //!
 //! ## Policy & Guarantees
 //! * **Type Safety**: Enforces the MCP protocol specification through strictly typed
@@ -26,6 +28,7 @@
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io)
 
 pub mod notifications;
+pub mod openai_tool_search;
 pub mod rmcp_models;
 pub mod tool_inventory;
 pub mod tool_schema;
