@@ -390,8 +390,7 @@ fn maybe_decrypt_payload(config: &EventStoreConfig, payload: &str) -> Result<Str
         return Ok(payload.to_string());
     };
     let Some(encoded) = payload.strip_prefix(ENC_PREFIX) else {
-        tracing::warn!("event store encryption key configured but payload is plaintext");
-        return Ok(payload.to_string());
+        return Err("event store encryption key configured but payload is plaintext".to_string());
     };
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(encoded)
@@ -414,4 +413,60 @@ fn current_epoch_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{maybe_decrypt_payload, maybe_encrypt_payload, ENC_PREFIX};
+    use crate::session::{EventStoreConfig, EventStoreEncryption};
+
+    fn config(encryption: Option<EventStoreEncryption>) -> EventStoreConfig {
+        EventStoreConfig {
+            max_streams: 8,
+            max_events: 8,
+            ttl: None,
+            encryption,
+        }
+    }
+
+    #[test]
+    fn decrypt_rejects_plaintext_when_encryption_is_configured() {
+        let encryption = EventStoreEncryption::from_bytes(&[7u8; 32]).expect("valid key");
+        let err = maybe_decrypt_payload(&config(Some(encryption)), "plaintext")
+            .expect_err("plaintext should fail closed");
+        assert_eq!(
+            err,
+            "event store encryption key configured but payload is plaintext"
+        );
+    }
+
+    #[test]
+    fn decrypt_allows_plaintext_without_encryption() {
+        let payload =
+            maybe_decrypt_payload(&config(None), "plaintext").expect("plaintext without key");
+        assert_eq!(payload, "plaintext");
+    }
+
+    #[test]
+    fn decrypt_rejects_encrypted_payload_without_key() {
+        let err = maybe_decrypt_payload(&config(None), "enc:v1:not-real")
+            .expect_err("encrypted payload without key should fail");
+        assert_eq!(
+            err,
+            "event store payload is encrypted but no key is configured"
+        );
+    }
+
+    #[test]
+    fn encrypted_payload_round_trips() {
+        let encryption = EventStoreEncryption::from_bytes(&[9u8; 32]).expect("valid key");
+        let config = config(Some(encryption));
+        let encrypted = maybe_encrypt_payload(&config, Some("secret payload"))
+            .expect("encrypt")
+            .expect("payload");
+        assert!(encrypted.starts_with(ENC_PREFIX));
+
+        let decrypted = maybe_decrypt_payload(&config, &encrypted).expect("decrypt");
+        assert_eq!(decrypted, "secret payload");
+    }
 }

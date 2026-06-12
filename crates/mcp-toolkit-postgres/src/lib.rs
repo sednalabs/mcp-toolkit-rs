@@ -62,25 +62,29 @@ impl PgTlsMode {
 /// Policy for insecure PostgreSQL TLS modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PgInsecureTlsPolicy {
-    /// Reject both `sslmode=require` and `sslmode=prefer`.
+    /// Reject plaintext plus `sslmode=require` and `sslmode=prefer`.
     #[default]
     DisallowAll,
-    /// Allow `sslmode=require`, reject `sslmode=prefer`.
+    /// Allow `sslmode=require`, reject plaintext and `sslmode=prefer`.
     AllowRequireOnly,
-    /// Allow both insecure compatibility modes.
+    /// Allow plaintext plus both insecure compatibility modes.
     AllowRequireAndPrefer,
 }
 
 impl PgInsecureTlsPolicy {
     const fn allows(self, mode: PgTlsMode) -> bool {
         match (self, mode) {
-            (_, PgTlsMode::Disable | PgTlsMode::Verified) => true,
-            (Self::DisallowAll, PgTlsMode::InsecureRequire | PgTlsMode::InsecurePrefer) => false,
+            (_, PgTlsMode::Verified) => true,
+            (
+                Self::DisallowAll,
+                PgTlsMode::Disable | PgTlsMode::InsecureRequire | PgTlsMode::InsecurePrefer,
+            ) => false,
+            (Self::AllowRequireOnly, PgTlsMode::Disable) => false,
             (Self::AllowRequireOnly, PgTlsMode::InsecureRequire) => true,
             (Self::AllowRequireOnly, PgTlsMode::InsecurePrefer) => false,
             (
                 Self::AllowRequireAndPrefer,
-                PgTlsMode::InsecureRequire | PgTlsMode::InsecurePrefer,
+                PgTlsMode::Disable | PgTlsMode::InsecureRequire | PgTlsMode::InsecurePrefer,
             ) => true,
         }
     }
@@ -1024,10 +1028,25 @@ mod tests {
 
     #[test]
     fn connect_policy_rejects_insecure_modes_by_default() {
+        let disable = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=disable")
+            .expect("parse disable");
+        let absent =
+            PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d").expect("parse absent");
         let require = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=require")
             .expect("parse require");
         let prefer = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=prefer")
             .expect("parse prefer");
+
+        let disable_err = disable
+            .validate_tls_policy(PgInsecureTlsPolicy::DisallowAll)
+            .expect_err("disable should be rejected by strict default");
+        assert_eq!(disable_err.code(), "PG_TLS_POLICY_VIOLATION");
+        assert_eq!(disable_err.reason(), "tls_policy_disallowed");
+
+        let absent_err = absent
+            .validate_tls_policy(PgInsecureTlsPolicy::DisallowAll)
+            .expect_err("implicit disable should be rejected by strict default");
+        assert_eq!(absent_err.code(), "PG_TLS_POLICY_VIOLATION");
 
         let require_err = require
             .validate_tls_policy(PgInsecureTlsPolicy::DisallowAll)
@@ -1045,16 +1064,41 @@ mod tests {
 
     #[test]
     fn connect_policy_allow_require_only_rejects_prefer() {
+        let disable = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=disable")
+            .expect("parse disable");
         let require = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=require")
             .expect("parse require");
         let prefer = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=prefer")
             .expect("parse prefer");
 
+        disable
+            .validate_tls_policy(PgInsecureTlsPolicy::AllowRequireOnly)
+            .expect_err("disable should remain blocked");
         require
             .validate_tls_policy(PgInsecureTlsPolicy::AllowRequireOnly)
             .expect("require should be allowed");
         prefer
             .validate_tls_policy(PgInsecureTlsPolicy::AllowRequireOnly)
             .expect_err("prefer should remain blocked");
+    }
+
+    #[test]
+    fn connect_policy_can_explicitly_allow_compatibility_modes() {
+        let disable = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=disable")
+            .expect("parse disable");
+        let require = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=require")
+            .expect("parse require");
+        let prefer = PgConnectionConfig::from_dsn("postgresql://u:p@h:5432/d?sslmode=prefer")
+            .expect("parse prefer");
+
+        disable
+            .validate_tls_policy(PgInsecureTlsPolicy::AllowRequireAndPrefer)
+            .expect("disable should be explicitly allowed by compatibility policy");
+        require
+            .validate_tls_policy(PgInsecureTlsPolicy::AllowRequireAndPrefer)
+            .expect("require should be explicitly allowed by compatibility policy");
+        prefer
+            .validate_tls_policy(PgInsecureTlsPolicy::AllowRequireAndPrefer)
+            .expect("prefer should be explicitly allowed by compatibility policy");
     }
 }

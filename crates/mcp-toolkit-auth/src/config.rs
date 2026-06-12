@@ -31,7 +31,10 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::providers::read_body_limited;
 use crate::AuthError;
+
+const OIDC_DISCOVERY_MAX_BYTES: usize = 1024 * 1024;
 
 /// Defines the authentication validation strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,7 +120,7 @@ impl AuthSecurityProfile {
                 config.introspection_force = false;
                 config.jti_ttl_s = 300.0;
                 config.jti_cache_size = 5000;
-                config.jti_enforce_bearer = false;
+                config.jti_enforce_bearer = true;
             }
             AuthSecurityProfile::L3Boundary => {
                 config.mode = AuthMode::Introspection;
@@ -126,7 +129,7 @@ impl AuthSecurityProfile {
                 config.introspection_force = false;
                 config.jti_ttl_s = 300.0;
                 config.jti_cache_size = 5000;
-                config.jti_enforce_bearer = false;
+                config.jti_enforce_bearer = true;
             }
         }
     }
@@ -195,13 +198,62 @@ pub async fn discover_oidc_metadata(
             response.status()
         )));
     }
-    let metadata: OidcDiscovery = response
-        .json()
-        .await
+    if response.content_length().unwrap_or(0) > OIDC_DISCOVERY_MAX_BYTES as u64 {
+        return Err(AuthError::new("Discovery response too large").with_status(502));
+    }
+    let body = read_body_limited(response, OIDC_DISCOVERY_MAX_BYTES, "OIDC discovery").await?;
+    let metadata: OidcDiscovery = serde_json::from_slice(&body)
         .map_err(|e| AuthError::new(format!("Discovery parse failed: {e}")))?;
 
-    // ... basic validation logic omitted for brevity ...
+    validate_oidc_metadata(issuer, &metadata)?;
     Ok(metadata)
+}
+
+fn validate_oidc_metadata(
+    requested_issuer: &str,
+    metadata: &OidcDiscovery,
+) -> Result<(), AuthError> {
+    let discovered_issuer = required_metadata_field(metadata.issuer.as_deref(), "issuer")?;
+    if discovered_issuer.trim_end_matches('/') != requested_issuer {
+        return Err(AuthError::new("Discovery issuer mismatch").with_reason("issuer_mismatch"));
+    }
+
+    validate_metadata_url("issuer", discovered_issuer)?;
+    validate_metadata_url(
+        "authorization_endpoint",
+        required_metadata_field(
+            metadata.authorization_endpoint.as_deref(),
+            "authorization_endpoint",
+        )?,
+    )?;
+    validate_metadata_url(
+        "token_endpoint",
+        required_metadata_field(metadata.token_endpoint.as_deref(), "token_endpoint")?,
+    )?;
+    validate_metadata_url(
+        "jwks_uri",
+        required_metadata_field(Some(&metadata.jwks_uri), "jwks_uri")?,
+    )?;
+
+    Ok(())
+}
+
+fn required_metadata_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str, AuthError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AuthError::new(format!("Discovery metadata missing {field}")))
+}
+
+fn validate_metadata_url(field: &str, value: &str) -> Result<(), AuthError> {
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| AuthError::new(format!("Discovery metadata has invalid {field}")))?;
+    if matches!(url.scheme(), "http" | "https") {
+        return Ok(());
+    }
+    Err(AuthError::new(format!(
+        "Discovery metadata has unsupported {field} scheme"
+    )))
 }
 
 impl Default for AuthConfig {
@@ -225,7 +277,7 @@ impl Default for AuthConfig {
             delegation_audience: "mcp-toolkit".to_string(),
             jti_ttl_s: 300.0,
             jti_cache_size: 5000,
-            jti_enforce_bearer: false,
+            jti_enforce_bearer: true,
             clock_skew_s: 30.0,
         }
     }
@@ -233,7 +285,7 @@ impl Default for AuthConfig {
 
 #[cfg(test)]
 mod profile_tests {
-    use super::{AuthConfig, AuthMode, AuthSecurityProfile};
+    use super::{validate_oidc_metadata, AuthConfig, AuthMode, AuthSecurityProfile, OidcDiscovery};
 
     #[test]
     fn l1_profile_defaults() {
@@ -253,7 +305,7 @@ mod profile_tests {
         assert!(cfg.strict_oauth);
         assert_eq!(cfg.jti_ttl_s, 300.0);
         assert_eq!(cfg.jti_cache_size, 5000);
-        assert!(!cfg.jti_enforce_bearer);
+        assert!(cfg.jti_enforce_bearer);
         assert_eq!(cfg.introspection_cache_ttl_s, 60.0);
     }
 
@@ -264,7 +316,47 @@ mod profile_tests {
         assert!(cfg.strict_oauth);
         assert_eq!(cfg.jti_ttl_s, 300.0);
         assert_eq!(cfg.jti_cache_size, 5000);
-        assert!(!cfg.jti_enforce_bearer);
+        assert!(cfg.jti_enforce_bearer);
         assert_eq!(cfg.introspection_cache_ttl_s, 30.0);
+    }
+
+    #[test]
+    fn default_config_enforces_bearer_jti_replay_guard() {
+        let cfg = AuthConfig::default();
+        assert_eq!(cfg.jti_ttl_s, 300.0);
+        assert_eq!(cfg.jti_cache_size, 5000);
+        assert!(cfg.jti_enforce_bearer);
+    }
+
+    #[test]
+    fn oidc_metadata_validation_requires_matching_issuer_and_endpoints() {
+        let metadata = OidcDiscovery {
+            issuer: Some("https://issuer.example".to_string()),
+            authorization_endpoint: Some("https://issuer.example/authorize".to_string()),
+            token_endpoint: Some("https://issuer.example/token".to_string()),
+            registration_endpoint: None,
+            jwks_uri: "https://issuer.example/jwks".to_string(),
+            introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
+        };
+
+        validate_oidc_metadata("https://issuer.example", &metadata)
+            .expect("valid metadata should pass");
+
+        let err = validate_oidc_metadata("https://other.example", &metadata)
+            .expect_err("issuer mismatch should fail");
+        assert!(err.to_string().contains("Discovery issuer mismatch"));
+
+        let mut missing = metadata;
+        missing.token_endpoint = Some("  ".to_string());
+        let err = validate_oidc_metadata("https://issuer.example", &missing)
+            .expect_err("missing token endpoint should fail");
+        assert!(err
+            .to_string()
+            .contains("Discovery metadata missing token_endpoint"));
     }
 }

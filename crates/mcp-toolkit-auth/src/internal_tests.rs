@@ -206,6 +206,27 @@ mod tests {
         .expect("token")
     }
 
+    fn token_with_jti(jti: &str) -> String {
+        let exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        let claims = json!({
+            "exp": exp,
+            "sub": "user-123",
+            "aud": "audience",
+            "iss": "issuer",
+            "jti": jti
+        });
+        encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .expect("token")
+    }
+
     #[derive(Clone)]
     struct IntrospectionState {
         payload: Value,
@@ -446,6 +467,37 @@ mod tests {
             result.is_err(),
             "expected missing jti to fail for bearer-only auth"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn default_bearer_context_rejects_replayed_jti() {
+        let auth = Authenticator::new(AuthConfig {
+            mode: AuthMode::Delegation,
+            delegation_secret: Some("test-secret".to_string()),
+            delegation_issuer: "issuer".to_string(),
+            delegation_audience: "audience".to_string(),
+            ..Default::default()
+        })
+        .expect("auth");
+        let token = token_with_jti("replay-default-1");
+
+        auth.authenticate_token_with_context(
+            &HeaderMap::new(),
+            &token,
+            AuthRequestContext::bearer_only(),
+        )
+        .await
+        .expect("first use should pass");
+        let replay = auth
+            .authenticate_token_with_context(
+                &HeaderMap::new(),
+                &token,
+                AuthRequestContext::bearer_only(),
+            )
+            .await
+            .expect_err("second use should be rejected");
+
+        assert!(matches!(replay, AuthError::ReplayDetected));
     }
 
     /// Executes strict_bearer_rejects_extra_space.

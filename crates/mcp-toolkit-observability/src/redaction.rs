@@ -156,7 +156,11 @@ pub fn truncate(text: &str, limit: usize) -> String {
     if limit <= 3 {
         return ".".repeat(limit);
     }
-    let mut out = text[..limit - 3].to_string();
+    let mut cutoff = limit - 3;
+    while cutoff > 0 && !text.is_char_boundary(cutoff) {
+        cutoff -= 1;
+    }
+    let mut out = text[..cutoff].to_string();
     out.push_str("...");
     out
 }
@@ -196,5 +200,11 @@ mod tests {
         let text = "access_token=abc&foo=bar";
         let scrubbed = redact_kv_pairs(text, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE);
         assert_eq!(scrubbed, "access_token=<redacted>&foo=bar");
+    }
+
+    #[test]
+    fn truncate_respects_utf8_boundaries() {
+        assert_eq!(truncate("åß∂ƒ", 7), "åß...");
+        assert_eq!(truncate("😀abcdef", 4), "...");
     }
 }

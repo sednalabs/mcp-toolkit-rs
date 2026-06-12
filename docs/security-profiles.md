@@ -46,8 +46,8 @@ security level explicit so new services do not drift or over/under-harden.
   change, config updates) and IP-sensitive content.
 - **Controls:**
   - JWKS validation + **optional introspection** (revocation-aware).
-  - JTI replay protection **only for sender-constrained tokens** (DPoP/mTLS);
-    bearer tokens remain reusable by design unless explicitly configured.
+  - JTI replay protection for bearer tokens by default, with sender-constrained
+    tokens preferred when available (DPoP/mTLS).
   - Client allowlists (`azp` / client_id) and strict token type where supported.
 - **Tooling fit:** `AuthMode::Jwks` + introspection cache + replay guard + allowlists.
 
@@ -58,7 +58,8 @@ security level explicit so new services do not drift or over/under-harden.
   - **Inbound token validation** (introspection/JWKS).
   - **Token exchange** (RFC 8693) to downscope for downstream calls.
   - Independent policy enforcement at the boundary service.
-  - Sender-constrained replay protections when available (DPoP/mTLS).
+  - Bearer-token JTI replay protection by default; sender-constrained replay
+    protections when available (DPoP/mTLS).
 - **Tooling fit:** MCP validates; gateway performs exchange + policy enforcement.
 
 ## Common Service Shapes
@@ -99,7 +100,7 @@ Minimum controls:
 Use `mcp-toolkit-auth` for consistent primitives:
 - `AuthMode::Jwks` or `AuthMode::Introspection` (production).
 - Required scopes enforced centrally.
-- JTI replay guard where configured.
+- JTI replay guard for bearer tokens in default/L2/L3 profiles.
 - Strict OAuth resource URL checks for protected resource metadata.
 
 ### Profile presets (Rust)

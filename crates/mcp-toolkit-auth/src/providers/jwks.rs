@@ -11,7 +11,7 @@
 //! * **Size Limiting**: Enforces strict payload size limits on JWKS fetches.
 //! * **Algorithm Restriction**: Restricts allowed signing algorithms to secure primitives.
 //! * **Jitter**: Introduces jitter to cache expiration to prevent synchronized re-fetches.
-//! * **Fail-Closed**: Re-fetches keys immediately if a token's `kid` is missing from the cache.
+//! * **Fail-Closed**: Re-fetches keys on unknown `kid` after a short miss cooldown.
 //!
 //! ## References
 //! * [RFC 7517] JSON Web Key (JWK).
@@ -30,6 +30,7 @@ use crate::providers::read_body_limited;
 use crate::{AuthError, Authenticator};
 
 const JWKS_MAX_BYTES: usize = 1024 * 1024;
+const JWKS_KID_MISS_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// Cache for JWKS provider keys, facilitating efficient validation.
 #[derive(Debug)]
@@ -110,10 +111,38 @@ impl JwksCache {
         self.fetch_and_store().await
     }
 
-    /// Forces a refresh of the JWKS from the remote endpoint.
-    pub(crate) async fn refresh(&self) -> Result<JwkSet, AuthError> {
+    async fn refresh_on_kid_miss(&self) -> Result<JwkSet, AuthError> {
+        if let Some(set) = self.cached_set_within_kid_miss_cooldown(Instant::now())? {
+            return Ok(set);
+        }
+
         let _guard = self.refresh_lock.lock().await;
+        if let Some(set) = self.cached_set_within_kid_miss_cooldown(Instant::now())? {
+            return Ok(set);
+        }
         self.fetch_and_store().await
+    }
+
+    fn cached_set_within_kid_miss_cooldown(
+        &self,
+        now: Instant,
+    ) -> Result<Option<JwkSet>, AuthError> {
+        let cooldown = self.ttl.min(JWKS_KID_MISS_REFRESH_COOLDOWN);
+        if cooldown.is_zero() {
+            return Ok(None);
+        }
+        let state = self.state.read().map_err(|_| AuthError::Generic {
+            message: "JWKS lock poisoned".to_string(),
+            status_code: 500,
+            code: None,
+            reason: None,
+        })?;
+        match (&state.set, state.fetched_at) {
+            (Some(set), Some(fetched_at)) if now.duration_since(fetched_at) < cooldown => {
+                Ok(Some(set.clone()))
+            }
+            _ => Ok(None),
+        }
     }
 
     async fn fetch_and_store(&self) -> Result<JwkSet, AuthError> {
@@ -166,7 +195,7 @@ impl JwksCache {
             .headers()
             .get(http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|v| v.contains("application/json"))
+            .map(is_json_content_type)
             .unwrap_or(false);
 
         if !is_json {
@@ -199,6 +228,22 @@ impl JwksCache {
     }
 }
 
+fn is_json_content_type(value: &str) -> bool {
+    let media_type = value
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if media_type == "application/json" {
+        return true;
+    }
+    let Some((_, subtype)) = media_type.rsplit_once('/') else {
+        return false;
+    };
+    subtype.ends_with("+json")
+}
+
 impl Authenticator {
     /// Validates a JWT bearer token against current JWKS.
     ///
@@ -208,8 +253,8 @@ impl Authenticator {
     ///
     /// # Security
     /// * **Algorithm Enforcement**: Restricts signing algorithms to secure variants.
-    /// * **Kid Re-fetch**: Automatically refreshes the JWKS if a token's `kid` is not found,
-    ///   providing resilience against key rotation.
+    /// * **Kid Re-fetch**: Refreshes JWKS for unknown `kid` values after a short cooldown,
+    ///   preserving key-rotation resilience without unbounded provider traffic.
     pub(crate) async fn decode_with_jwks(&self, token: &str) -> Result<Value, AuthError> {
         let jwks_cache = self
             .jwks_cache
@@ -228,7 +273,7 @@ impl Authenticator {
             .iter()
             .any(|key| key.common.key_id.as_deref() == Some(kid.as_str()))
         {
-            jwks = jwks_cache.refresh().await?;
+            jwks = jwks_cache.refresh_on_kid_miss().await?;
         }
 
         let jwk = jwks
@@ -268,5 +313,88 @@ impl Authenticator {
         decode::<Value>(token, &decoding_key, &validation)
             .map(|data| data.claims)
             .map_err(auth_error_from_jwt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_json_content_type, JwksCache, JwksState, JWKS_KID_MISS_REFRESH_COOLDOWN};
+    use jsonwebtoken::jwk::{
+        AlgorithmParameters, CommonParameters, Jwk, JwkSet, RSAKeyParameters, RSAKeyType,
+    };
+    use std::time::{Duration, Instant};
+
+    fn test_jwks(kid: &str) -> JwkSet {
+        JwkSet {
+            keys: vec![Jwk {
+                common: CommonParameters {
+                    key_id: Some(kid.to_string()),
+                    ..Default::default()
+                },
+                algorithm: AlgorithmParameters::RSA(RSAKeyParameters {
+                    key_type: RSAKeyType::RSA,
+                    n: "sXch0gYf".to_string(),
+                    e: "AQAB".to_string(),
+                }),
+            }],
+        }
+    }
+
+    #[test]
+    fn jwks_content_type_accepts_standard_json_suffixes() {
+        assert!(is_json_content_type("application/json"));
+        assert!(is_json_content_type("application/json; charset=utf-8"));
+        assert!(is_json_content_type("application/jwk-set+json"));
+        assert!(is_json_content_type(
+            "APPLICATION/JWK-SET+JSON; charset=utf-8"
+        ));
+        assert!(!is_json_content_type("text/plain"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unknown_kid_refresh_reuses_fresh_cached_set() {
+        let cache = JwksCache::new(
+            "http://127.0.0.1:1/jwks".to_string(),
+            Duration::from_secs(300),
+        );
+        let set = test_jwks("cached");
+        {
+            let mut state = cache.state.write().expect("jwks state lock");
+            *state = JwksState {
+                fetched_at: Some(Instant::now()),
+                set: Some(set.clone()),
+                next_refresh_at: Some(Instant::now() + Duration::from_secs(300)),
+            };
+        }
+
+        let refreshed = cache
+            .refresh_on_kid_miss()
+            .await
+            .expect("fresh unknown-kid miss should use cache");
+        assert_eq!(refreshed, set);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unknown_kid_refresh_attempts_network_after_cooldown() {
+        let cache = JwksCache::new(
+            "http://127.0.0.1:1/jwks".to_string(),
+            Duration::from_secs(300),
+        );
+        {
+            let mut state = cache.state.write().expect("jwks state lock");
+            *state = JwksState {
+                fetched_at: Some(
+                    Instant::now() - JWKS_KID_MISS_REFRESH_COOLDOWN - Duration::from_secs(1),
+                ),
+                set: Some(test_jwks("stale")),
+                next_refresh_at: Some(Instant::now() + Duration::from_secs(300)),
+            };
+        }
+
+        let err = cache
+            .refresh_on_kid_miss()
+            .await
+            .expect_err("stale unknown-kid miss should attempt refresh");
+        assert!(err.to_string().contains("Failed to fetch JWKS"));
     }
 }

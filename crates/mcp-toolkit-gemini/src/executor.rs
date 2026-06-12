@@ -226,10 +226,6 @@ fn build_gemini_command_spec(
 
     if request.sandbox {
         args.push("-s".to_string());
-    } else {
-        // Prevent host-level defaults (e.g. GEMINI_SANDBOX=true in service env)
-        // from forcing sandbox mode when the tool request did not ask for it.
-        env.push(("GEMINI_SANDBOX".to_string(), "false".to_string()));
     }
 
     let stdin_payload = match request.prompt_transport {
@@ -578,10 +574,7 @@ mod tests {
             .any(|(key, value)| key == "GEMINI_API_KEY" && value == "test-api-key"));
         assert!(spec.env.iter().any(|(key, _)| key == "PATH"));
         assert!(!spec.env.iter().any(|(key, _)| key == "HOME"));
-        assert!(spec
-            .env
-            .iter()
-            .any(|(key, value)| key == "GEMINI_SANDBOX" && value == "false"));
+        assert!(!spec.env.iter().any(|(key, _)| key == "GEMINI_SANDBOX"));
         assert!(spec.stdin_payload.is_none());
         let _ = std::fs::remove_dir_all(include_dir);
     }

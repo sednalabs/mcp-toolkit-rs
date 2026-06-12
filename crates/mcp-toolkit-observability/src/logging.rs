@@ -39,6 +39,7 @@ use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::redaction::redact_telemetry_text;
+use crate::sanitize::strip_control_chars;
 
 pub type ContextMap = BTreeMap<String, String>;
 
@@ -364,15 +365,22 @@ fn now_iso() -> String {
 /// Render a log payload in human-readable plain text.
 pub fn render_plain(payload: &BTreeMap<String, String>) -> String {
     let mut line = String::new();
-    let ts = payload.get("ts").cloned().unwrap_or_default();
-    let level = payload.get("level").cloned().unwrap_or_default();
-    let logger = payload.get("logger").cloned().unwrap_or_default();
-    let msg = payload.get("msg").cloned().unwrap_or_default();
+    let ts = clean_log_value(payload.get("ts").map(String::as_str).unwrap_or_default());
+    let level = clean_log_value(payload.get("level").map(String::as_str).unwrap_or_default());
+    let logger = clean_log_value(
+        payload
+            .get("logger")
+            .map(String::as_str)
+            .unwrap_or_default(),
+    );
+    let msg = clean_log_value(payload.get("msg").map(String::as_str).unwrap_or_default());
     let _ = write!(line, "{ts} {level} {logger}");
     if let Some(request_id) = payload.get("request_id") {
+        let request_id = clean_log_value(request_id);
         let _ = write!(line, " request_id={request_id}");
     }
     if let Some(actor) = payload.get("actor") {
+        let actor = clean_log_value(actor);
         let _ = write!(line, " actor={actor}");
     }
     if !msg.is_empty() {
@@ -388,6 +396,11 @@ pub fn render_logfmt(payload: &BTreeMap<String, String>) -> String {
         if value.is_empty() {
             continue;
         }
+        let key = clean_logfmt_key(key);
+        if key.is_empty() {
+            continue;
+        }
+        let value = clean_log_value(value);
         let needs_quotes = value
             .chars()
             .any(|ch| ch.is_whitespace() || ch == '"' || ch == '=' || ch == '\\');
@@ -399,6 +412,17 @@ pub fn render_logfmt(payload: &BTreeMap<String, String>) -> String {
         }
     }
     parts.join(" ")
+}
+
+fn clean_log_value(value: &str) -> String {
+    strip_control_chars(value)
+}
+
+fn clean_logfmt_key(key: &str) -> String {
+    strip_control_chars(key)
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '=' && *ch != '"')
+        .collect()
 }
 
 /// Scrub sensitive data from log text using heuristic patterns and environment secrets.
@@ -439,4 +463,43 @@ static API_KEY_REDACT: OnceCell<Regex> = OnceCell::new();
 /// Convenience provider for log contexts with no metadata.
 pub fn empty_context() -> ContextMap {
     BTreeMap::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_logfmt, render_plain};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn plain_renderer_strips_control_characters() {
+        let mut payload = BTreeMap::new();
+        payload.insert("ts".to_string(), "2026-06-12T00:00:00Z".to_string());
+        payload.insert("level".to_string(), "INFO".to_string());
+        payload.insert("logger".to_string(), "auth".to_string());
+        payload.insert("request_id".to_string(), "req-1\nlevel=ERROR".to_string());
+        payload.insert("actor".to_string(), "user\tname".to_string());
+        payload.insert("msg".to_string(), "ok\r\nforged=true".to_string());
+
+        let rendered = render_plain(&payload);
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\t'));
+        assert!(rendered.contains("request_id=req-1level=ERROR"));
+        assert!(rendered.contains(": okforged=true"));
+    }
+
+    #[test]
+    fn logfmt_renderer_strips_control_characters() {
+        let mut payload = BTreeMap::new();
+        payload.insert("msg".to_string(), "started\nlevel=ERROR".to_string());
+        payload.insert("request_id".to_string(), "req\t1".to_string());
+        payload.insert("bad\nkey".to_string(), "value".to_string());
+
+        let rendered = render_logfmt(&payload);
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\t'));
+        assert!(rendered.contains("msg=\"startedlevel=ERROR\""));
+        assert!(rendered.contains("request_id=req1"));
+        assert!(rendered.contains("badkey=value"));
+    }
 }
