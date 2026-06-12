@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Observability, metric, and telemetry helpers for Rust MCP services."
-repository = "https://github.com/sednalabs/mcp-rs-toolkit"
+repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 readme = "../../README.md"
 publish = false
 

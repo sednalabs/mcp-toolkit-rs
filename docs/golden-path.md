@@ -1,7 +1,7 @@
 # Golden Path For Rust MCP Servers
 
 This guide is the end-to-end route for creating, validating, reviewing, and
-releasing a Rust MCP server with `mcp-rs-toolkit`. For the operational checklist
+releasing a Rust MCP server with `mcp-toolkit-rs`. For the operational checklist
 that turns this route into a repeatable delivery lane, see
 `docs/new-server-delivery-lane.md`.
 

@@ -1,6 +1,6 @@
 # Rust MCP Ecosystem Map
 
-This document describes where `mcp-rs-toolkit` fits in a public Rust MCP
+This document describes where `mcp-toolkit-rs` fits in a public Rust MCP
 ecosystem.
 
 ## Toolkit Layer

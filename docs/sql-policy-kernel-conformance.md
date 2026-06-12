@@ -20,7 +20,7 @@ restricted-policy vectors in `mcp-policy-kernel`.
 
 ## Conformance command
 
-Run from the `mcp-rs-toolkit` repository root:
+Run from the `mcp-toolkit-rs` repository root:
 
 ```bash
 ./scripts/sql_policy_kernel_conformance.sh

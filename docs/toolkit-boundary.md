@@ -1,6 +1,6 @@
 # Toolkit Boundary
 
-`mcp-rs-toolkit` should stay useful to external teams building their own MCP
+`mcp-toolkit-rs` should stay useful to external teams building their own MCP
 systems. The toolkit can be opinionated about quality, security, and
 ergonomics, but it should not require adopters to inherit one service family's
 domain model, backend topology, or operational vocabulary.
@@ -53,7 +53,7 @@ Use the toolkit when the lesson is:
 
 ## Extraction checklist
 
-Before moving code into `mcp-rs-toolkit`, confirm that all of these are true:
+Before moving code into `mcp-toolkit-rs`, confirm that all of these are true:
 
 1. The abstraction is useful to third-party adopters outside our repos.
 2. The API can be described without internal product names or domain terms.
