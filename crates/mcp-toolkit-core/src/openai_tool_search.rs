@@ -361,10 +361,10 @@ mod tests {
             "Example operational MCP tools.",
             "https://example.com/mcp",
         ))
-        .with_optional_trusted_read_only_approval_override(OpenAiReadOnlyApprovalOverride::new(
-            ["read_b", "read_a", "read_a", " "],
+        .with_optional_trusted_read_only_approval_override(
+            OpenAiReadOnlyApprovalOverride::new(["read_b", "read_a", "read_a", " "])
+                .expect("reviewed read-only tool list"),
         )
-        .expect("reviewed read-only tool list"))
         .with_notes(["Keep mutating tools approval-gated."]);
 
         let value = config.to_documentation_value();
@@ -379,7 +379,10 @@ mod tests {
                 ["tool_names"],
             json!(["read_a", "read_b"])
         );
-        assert_eq!(value["notes"], json!(["Keep mutating tools approval-gated."]));
+        assert_eq!(
+            value["notes"],
+            json!(["Keep mutating tools approval-gated."])
+        );
     }
 
     #[test]
