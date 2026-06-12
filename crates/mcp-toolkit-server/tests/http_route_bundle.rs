@@ -110,6 +110,31 @@ async fn route_bundle_serves_health_and_initialize() {
 }
 
 #[tokio::test]
+async fn route_bundle_rejects_oversized_sessionless_post() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["127.0.0.1"])
+        .build(|| Ok(TestMcp::new()));
+    let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
+    let body = vec![b' '; 65 * 1024];
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .header("accept", ACCEPT_STREAMABLE)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .expect("oversized sessionless request"),
+        )
+        .await
+        .expect("oversized sessionless response");
+
+    assert_eq!(response.status(), 413);
+}
+
+#[tokio::test]
 async fn route_bundle_rejects_unknown_host() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1"])

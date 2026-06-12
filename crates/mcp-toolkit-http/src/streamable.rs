@@ -24,10 +24,11 @@
 //! ## References
 //! * [MCP HTTP Transport](https://modelcontextprotocol.io/docs/concepts/transports#http-sse)
 
-use std::sync::Arc;
+use std::{error::Error, sync::Arc};
 
 use axum::body::{to_bytes, Body};
 use http::{HeaderMap, Method, Request, Response, StatusCode};
+use http_body_util::LengthLimitError;
 use rmcp::{
     transport::streamable_http_server::{
         session::{
@@ -44,6 +45,7 @@ use tokio::time::{Duration, MissedTickBehavior};
 use crate::session::{BoundedSessionManager, RecordingSessionManager, SessionLifecycleConfig};
 
 const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
+const SESSIONLESS_INITIALIZE_BODY_LIMIT: usize = 64 * 1024;
 
 /// Bounded local Streamable HTTP service configuration.
 #[derive(Debug, Clone)]
@@ -136,6 +138,7 @@ where
 ///
 /// # Security
 /// * Assumes caller-provided host/auth guards are already applied.
+/// * Bounds sessionless POST body probing before buffering.
 pub async fn handle_stateful_mcp_request<S, M>(
     service: StreamableHttpService<S, M>,
     session_manager: Arc<BoundedSessionManager>,
@@ -162,8 +165,15 @@ where
             }
 
             let (parts, body) = req.into_parts();
-            let bytes = match to_bytes(body, usize::MAX).await {
+            let bytes = match to_bytes(body, SESSIONLESS_INITIALIZE_BODY_LIMIT).await {
                 Ok(bytes) => bytes,
+                Err(err) if is_body_limit_error(&err) => {
+                    return session_error(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "Request body too large.",
+                        "Send a smaller initialize request.",
+                    );
+                }
                 Err(_) => {
                     return session_error(
                         StatusCode::BAD_REQUEST,
@@ -216,6 +226,11 @@ where
     M: SessionManager + Send + Sync + 'static,
 {
     service.handle(req).await.map(Body::new)
+}
+
+fn is_body_limit_error(err: &axum::Error) -> bool {
+    err.source()
+        .is_some_and(|source| source.is::<LengthLimitError>())
 }
 
 fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -284,7 +299,7 @@ mod tests {
 
     use super::{
         build_local_streamable_http_service, handle_stateful_mcp_request,
-        LocalStreamableHttpServiceConfig, SessionConfig,
+        LocalStreamableHttpServiceConfig, SessionConfig, SESSIONLESS_INITIALIZE_BODY_LIMIT,
     };
 
     #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -490,6 +505,33 @@ mod tests {
             .to_bytes();
         let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body_text.contains("Missing session ID."));
+    }
+
+    #[tokio::test]
+    async fn handle_stateful_mcp_request_rejects_oversized_sessionless_post() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let oversized_body = "{".repeat(SESSIONLESS_INITIALIZE_BODY_LIMIT + 1);
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(oversized_body))
+            .expect("request");
+
+        let response =
+            handle_stateful_mcp_request(runtime.service.clone(), runtime.session_manager, request)
+                .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body_text.contains("Request body too large."));
     }
 
     #[tokio::test]

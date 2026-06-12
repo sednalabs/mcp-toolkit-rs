@@ -15,6 +15,7 @@ path = "src/lib.rs"
 session = [
   "dep:axum",
   "dep:futures",
+  "dep:http-body-util",
   "dep:rmcp",
   "dep:tokio",
   "dep:tracing",
@@ -30,6 +31,7 @@ session-sqlite = [
 [dependencies]
 axum = { version = "0.8.8", optional = true }
 http = "1.3.1"
+http-body-util = { version = "0.1.3", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 url = "2.5.4"

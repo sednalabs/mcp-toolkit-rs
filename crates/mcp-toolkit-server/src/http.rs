@@ -18,7 +18,7 @@
 //! * **DESIGN**: `docs/server-composition-layer.md`
 //! * **HTTP**: `crates/mcp-toolkit-http/src/streamable.rs`
 
-use std::{fmt, net::SocketAddr, sync::Arc};
+use std::{error::Error, fmt, net::SocketAddr, sync::Arc};
 
 use axum::{
     body::{to_bytes, Body},
@@ -28,7 +28,11 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
-use http::{header::CONTENT_TYPE, Method, StatusCode};
+use http::{
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    Method, StatusCode,
+};
+use http_body_util::LengthLimitError;
 use mcp_toolkit_http::{
     host::validate_request_authority,
     oauth::protected_resource_well_known_paths,
@@ -48,6 +52,7 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::AuthSurfaceLayer;
 
 const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
+const SESSIONLESS_POST_PROBE_LIMIT: usize = 64 * 1024;
 
 /// Bind safety policy for hosted HTTP MCP servers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -645,9 +650,16 @@ where
         );
     }
 
+    if content_length_exceeds(req.headers(), SESSIONLESS_POST_PROBE_LIMIT) {
+        return sessionless_body_too_large_response();
+    }
+
     let (parts, body) = req.into_parts();
-    let bytes = match to_bytes(body, usize::MAX).await {
+    let bytes = match to_bytes(body, SESSIONLESS_POST_PROBE_LIMIT).await {
         Ok(bytes) => bytes,
+        Err(err) if is_body_limit_error(&err) => {
+            return sessionless_body_too_large_response();
+        }
         Err(_) => {
             return session_error(
                 StatusCode::BAD_REQUEST,
@@ -770,6 +782,20 @@ fn session_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn content_length_exceeds(headers: &http::HeaderMap, limit: usize) -> bool {
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|length| length > limit)
+        .unwrap_or(false)
+}
+
+fn is_body_limit_error(err: &axum::Error) -> bool {
+    err.source()
+        .is_some_and(|source| source.is::<LengthLimitError>())
+}
+
 fn is_initialize_payload(body: &[u8]) -> bool {
     if body.is_empty() {
         return false;
@@ -799,6 +825,14 @@ fn session_error(status: StatusCode, message: &str, hint: &str) -> Response {
             "error": message,
             "hint": hint,
         }),
+    )
+}
+
+fn sessionless_body_too_large_response() -> Response {
+    session_error(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "Request body too large.",
+        "Send a smaller initialization request or include a valid session id.",
     )
 }
 
