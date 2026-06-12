@@ -242,17 +242,18 @@ fn required_metadata_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AuthError::new(format!("Discovery metadata missing {field}")))
+        .ok_or_else(|| AuthError::new(format!("Discovery metadata missing {}", field)))
 }
 
 fn validate_metadata_url(field: &str, value: &str) -> Result<(), AuthError> {
     let url = reqwest::Url::parse(value)
-        .map_err(|_| AuthError::new(format!("Discovery metadata has invalid {field}")))?;
+        .map_err(|_| AuthError::new(format!("Discovery metadata has invalid {}", field)))?;
     if matches!(url.scheme(), "http" | "https") {
         return Ok(());
     }
     Err(AuthError::new(format!(
-        "Discovery metadata has unsupported {field} scheme"
+        "Discovery metadata has unsupported {} scheme",
+        field
     )))
 }
 
