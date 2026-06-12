@@ -94,6 +94,9 @@ pub struct IssuerEntry {
     pub introspection_endpoint: Option<String>,
     pub device_authorization_endpoint: Option<String>,
     pub grant_types_supported: Option<Vec<String>>,
+    pub client_id_metadata_document_supported: Option<bool>,
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+    pub code_challenge_methods_supported: Option<Vec<String>>,
     pub realm: String,
     pub scopes_supported: Vec<String>,
     pub allowed_client_ids: HashSet<String>,
@@ -123,6 +126,9 @@ impl IssuerEntry {
             introspection_endpoint: metadata.introspection_endpoint,
             device_authorization_endpoint: metadata.device_authorization_endpoint,
             grant_types_supported: metadata.grant_types_supported,
+            client_id_metadata_document_supported: metadata.client_id_metadata_document_supported,
+            token_endpoint_auth_methods_supported: metadata.token_endpoint_auth_methods_supported,
+            code_challenge_methods_supported: metadata.code_challenge_methods_supported,
             realm: realm.into(),
             scopes_supported,
             allowed_client_ids,
@@ -260,6 +266,9 @@ pub fn authorization_server_metadata_from_oidc(
         introspection_endpoint: oidc.introspection_endpoint.clone(),
         device_authorization_endpoint: oidc.device_authorization_endpoint.clone(),
         grant_types_supported: oidc.grant_types_supported.clone(),
+        client_id_metadata_document_supported: oidc.client_id_metadata_document_supported,
+        token_endpoint_auth_methods_supported: oidc.token_endpoint_auth_methods_supported.clone(),
+        code_challenge_methods_supported: oidc.code_challenge_methods_supported.clone(),
     };
     validate_authorization_server_metadata(&metadata)?;
     Ok(metadata)
@@ -327,6 +336,24 @@ fn validate_authorization_server_metadata(
         .is_some_and(|values| values.iter().any(|value| value.trim().is_empty()))
     {
         return Err(AuthSurfaceError::EmptyField("grant_types_supported"));
+    }
+    if metadata
+        .token_endpoint_auth_methods_supported
+        .as_ref()
+        .is_some_and(|values| values.iter().any(|value| value.trim().is_empty()))
+    {
+        return Err(AuthSurfaceError::EmptyField(
+            "token_endpoint_auth_methods_supported",
+        ));
+    }
+    if metadata
+        .code_challenge_methods_supported
+        .as_ref()
+        .is_some_and(|values| values.iter().any(|value| value.trim().is_empty()))
+    {
+        return Err(AuthSurfaceError::EmptyField(
+            "code_challenge_methods_supported",
+        ));
     }
     Ok(())
 }
@@ -546,7 +573,13 @@ impl IssuerRegistry {
                 introspection_endpoint: entry.introspection_endpoint.clone(),
                 device_authorization_endpoint: entry.device_authorization_endpoint.clone(),
                 grant_types_supported: entry.grant_types_supported.clone(),
+                client_id_metadata_document_supported: entry.client_id_metadata_document_supported,
+                token_endpoint_auth_methods_supported: entry
+                    .token_endpoint_auth_methods_supported
+                    .clone(),
+                code_challenge_methods_supported: entry.code_challenge_methods_supported.clone(),
             };
+            validate_authorization_server_metadata(&auth_metadata)?;
 
             let runtime = Arc::new(IssuerRuntime {
                 resource_path: resource_path.clone(),
@@ -1136,6 +1169,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1173,6 +1209,34 @@ mod tests {
         };
 
         assert!(!config.contains_insecure_http_urls());
+    }
+
+    #[test]
+    fn registry_rejects_manual_entries_with_invalid_authorization_metadata() {
+        let err = match IssuerRegistry::new(AuthSurfaceConfig {
+            public_base_url: "https://example.com".to_string(),
+            entries: vec![IssuerEntry {
+                token_endpoint_auth_methods_supported: Some(vec![
+                    "none".to_string(),
+                    String::new(),
+                ]),
+                ..test_entry("/mcp", Some("https://example.com/mcp"))
+            }],
+            root_alias_policy: RootAliasPolicy::Automatic,
+            public_paths: HashSet::new(),
+            public_prefixes: Vec::new(),
+            allow_insecure_http: false,
+        }) {
+            Ok(_) => panic!("registry should reject invalid metadata values"),
+            Err(err) => err,
+        };
+
+        match err {
+            AuthSurfaceError::EmptyField(field) => {
+                assert_eq!(field, "token_endpoint_auth_methods_supported");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 
     #[test]
@@ -1276,6 +1340,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1322,6 +1389,12 @@ mod tests {
             introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: Some(true),
+            token_endpoint_auth_methods_supported: Some(vec![
+                "none".to_string(),
+                "private_key_jwt".to_string(),
+            ]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
         };
         let resolved = resolve_authorization_server_metadata(
             &AuthorizationServerMetadataSource::Explicit(metadata.clone()),
@@ -1342,6 +1415,9 @@ mod tests {
                 introspection_endpoint: None,
                 device_authorization_endpoint: None,
                 grant_types_supported: None,
+                client_id_metadata_document_supported: None,
+                token_endpoint_auth_methods_supported: None,
+                code_challenge_methods_supported: None,
             }),
         )
         .expect_err("blank issuer should be rejected");
@@ -1362,6 +1438,12 @@ mod tests {
                 "authorization_code".to_string(),
                 "urn:ietf:params:oauth:grant-type:device_code".to_string(),
             ]),
+            client_id_metadata_document_supported: Some(true),
+            token_endpoint_auth_methods_supported: Some(vec![
+                "none".to_string(),
+                "private_key_jwt".to_string(),
+            ]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
         };
         let resolved = resolve_authorization_server_metadata(
             &AuthorizationServerMetadataSource::OidcDiscovery(oidc),
@@ -1393,6 +1475,15 @@ mod tests {
                 "urn:ietf:params:oauth:grant-type:device_code".to_string()
             ])
         );
+        assert_eq!(resolved.client_id_metadata_document_supported, Some(true));
+        assert_eq!(
+            resolved.token_endpoint_auth_methods_supported,
+            Some(vec!["none".to_string(), "private_key_jwt".to_string()])
+        );
+        assert_eq!(
+            resolved.code_challenge_methods_supported,
+            Some(vec!["S256".to_string()])
+        );
     }
 
     #[test]
@@ -1411,6 +1502,12 @@ mod tests {
                     "authorization_code".to_string(),
                     "urn:ietf:params:oauth:grant-type:device_code".to_string(),
                 ]),
+                client_id_metadata_document_supported: Some(true),
+                token_endpoint_auth_methods_supported: Some(vec![
+                    "none".to_string(),
+                    "private_key_jwt".to_string(),
+                ]),
+                code_challenge_methods_supported: Some(vec!["S256".to_string()]),
             }),
             "test",
             vec!["ops:read".to_string()],
@@ -1439,6 +1536,15 @@ mod tests {
                 "urn:ietf:params:oauth:grant-type:device_code".to_string()
             ])
         );
+        assert_eq!(entry.client_id_metadata_document_supported, Some(true));
+        assert_eq!(
+            entry.token_endpoint_auth_methods_supported,
+            Some(vec!["none".to_string(), "private_key_jwt".to_string()])
+        );
+        assert_eq!(
+            entry.code_challenge_methods_supported,
+            Some(vec!["S256".to_string()])
+        );
     }
 
     #[test]
@@ -1454,6 +1560,9 @@ mod tests {
                 introspection_endpoint: None,
                 device_authorization_endpoint: None,
                 grant_types_supported: None,
+                client_id_metadata_document_supported: None,
+                token_endpoint_auth_methods_supported: None,
+                code_challenge_methods_supported: None,
             }),
             "test",
             vec!["ops:read".to_string()],
@@ -1510,6 +1619,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1580,6 +1692,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1633,6 +1748,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1685,6 +1803,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),
@@ -1756,6 +1877,9 @@ mod tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
             realm: "test".to_string(),
             scopes_supported: Vec::new(),
             allowed_client_ids: HashSet::new(),

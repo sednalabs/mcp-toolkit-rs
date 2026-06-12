@@ -10,7 +10,9 @@ use mcp_toolkit_auth::surface::{
 };
 use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerMetadata};
 use mcp_toolkit_http::oauth::{GRANT_TYPE_AUTHORIZATION_CODE, GRANT_TYPE_DEVICE_CODE};
-use mcp_toolkit_testing::auth_surface_contract::AuthSurfaceContract;
+use mcp_toolkit_testing::auth_surface_contract::{
+    AuthSurfaceContract, AuthorizationServerMetadataContract,
+};
 use serde_json::{json, Value};
 use tower::{service_fn, Layer, Service};
 
@@ -48,6 +50,12 @@ async fn auth_surface_contract_serves_discovery_and_challenges_missing_token() {
                 GRANT_TYPE_AUTHORIZATION_CODE.to_string(),
                 GRANT_TYPE_DEVICE_CODE.to_string(),
             ]),
+            client_id_metadata_document_supported: Some(true),
+            token_endpoint_auth_methods_supported: Some(vec![
+                "none".to_string(),
+                "private_key_jwt".to_string(),
+            ]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
         }),
         "toolkit-test",
         vec!["tool:read".to_string(), "tool:write".to_string()],
@@ -130,8 +138,27 @@ async fn auth_surface_contract_serves_discovery_and_challenges_missing_token() {
                 GRANT_TYPE_AUTHORIZATION_CODE,
                 GRANT_TYPE_DEVICE_CODE,
             ],
+            "client_id_metadata_document_supported": true,
+            "token_endpoint_auth_methods_supported": [
+                "none",
+                "private_key_jwt",
+            ],
+            "code_challenge_methods_supported": [
+                "S256",
+            ],
         })
     );
+    AuthorizationServerMetadataContract::new(
+        "https://issuer.example",
+        "https://issuer.example/oauth/authorize",
+        "https://issuer.example/oauth/token",
+    )
+    .with_device_authorization_endpoint("https://issuer.example/oauth/device")
+    .with_grant_types_supported(&[GRANT_TYPE_AUTHORIZATION_CODE, GRANT_TYPE_DEVICE_CODE])
+    .with_client_id_metadata_document_supported(true)
+    .with_token_endpoint_auth_methods_supported(&["none", "private_key_jwt"])
+    .with_code_challenge_methods_supported(&["S256"])
+    .assert_metadata(&payload);
 
     let challenge_response = service
         .call(
