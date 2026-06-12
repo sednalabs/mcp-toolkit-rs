@@ -8,8 +8,12 @@ Avoid opening public issues or pull requests that include sensitive
 reproduction details before maintainers have had a chance to assess and
 remediate the issue.
 
-If private GitHub reporting is unavailable, contact the maintainers through a
-trusted private channel and include:
+If private GitHub reporting is unavailable, open a public GitHub issue titled
+`Security contact request` and do not include vulnerability details in that
+issue. Maintainers will use that issue to establish a private coordination
+channel.
+
+When reporting through a private channel, include:
 
 - affected crate, feature, or workflow;
 - impact and required preconditions;
