@@ -184,6 +184,9 @@ pub struct AuthorizationServerMetadataContract<'a> {
     introspection_endpoint: Option<&'a str>,
     device_authorization_endpoint: Option<&'a str>,
     grant_types_supported: &'a [&'a str],
+    client_id_metadata_document_supported: Option<bool>,
+    token_endpoint_auth_methods_supported: &'a [&'a str],
+    code_challenge_methods_supported: &'a [&'a str],
 }
 
 impl<'a> AuthorizationServerMetadataContract<'a> {
@@ -202,6 +205,9 @@ impl<'a> AuthorizationServerMetadataContract<'a> {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: &[],
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: &[],
+            code_challenge_methods_supported: &[],
         }
     }
 
@@ -237,6 +243,27 @@ impl<'a> AuthorizationServerMetadataContract<'a> {
     #[must_use]
     pub fn with_grant_types_supported(mut self, grant_types: &'a [&'a str]) -> Self {
         self.grant_types_supported = grant_types;
+        self
+    }
+
+    /// Expect the Client ID Metadata Document support flag.
+    #[must_use]
+    pub fn with_client_id_metadata_document_supported(mut self, supported: bool) -> Self {
+        self.client_id_metadata_document_supported = Some(supported);
+        self
+    }
+
+    /// Expect the exact ordered token endpoint authentication method list emitted by the server.
+    #[must_use]
+    pub fn with_token_endpoint_auth_methods_supported(mut self, methods: &'a [&'a str]) -> Self {
+        self.token_endpoint_auth_methods_supported = methods;
+        self
+    }
+
+    /// Expect the exact ordered PKCE code challenge method list emitted by the server.
+    #[must_use]
+    pub fn with_code_challenge_methods_supported(mut self, methods: &'a [&'a str]) -> Self {
+        self.code_challenge_methods_supported = methods;
         self
     }
 
@@ -280,6 +307,53 @@ impl<'a> AuthorizationServerMetadataContract<'a> {
             assert_eq!(
                 strings_from_value(payload.get("grant_types_supported")),
                 self.grant_types_supported
+                    .iter()
+                    .copied()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
+        if let Some(supported) = self.client_id_metadata_document_supported {
+            assert_eq!(
+                payload
+                    .get("client_id_metadata_document_supported")
+                    .and_then(Value::as_bool),
+                Some(supported)
+            );
+        } else {
+            assert!(
+                payload
+                    .get("client_id_metadata_document_supported")
+                    .is_none(),
+                "did not expect client_id_metadata_document_supported in metadata"
+            );
+        }
+        if self.token_endpoint_auth_methods_supported.is_empty() {
+            assert!(
+                payload
+                    .get("token_endpoint_auth_methods_supported")
+                    .is_none(),
+                "did not expect token_endpoint_auth_methods_supported in metadata"
+            );
+        } else {
+            assert_eq!(
+                strings_from_value(payload.get("token_endpoint_auth_methods_supported")),
+                self.token_endpoint_auth_methods_supported
+                    .iter()
+                    .copied()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
+        if self.code_challenge_methods_supported.is_empty() {
+            assert!(
+                payload.get("code_challenge_methods_supported").is_none(),
+                "did not expect code_challenge_methods_supported in metadata"
+            );
+        } else {
+            assert_eq!(
+                strings_from_value(payload.get("code_challenge_methods_supported")),
+                self.code_challenge_methods_supported
                     .iter()
                     .copied()
                     .map(ToString::to_string)
@@ -568,6 +642,14 @@ mod tests {
             "grant_types_supported": [
                 "authorization_code",
                 "urn:ietf:params:oauth:grant-type:device_code"
+            ],
+            "client_id_metadata_document_supported": true,
+            "token_endpoint_auth_methods_supported": [
+                "none",
+                "private_key_jwt"
+            ],
+            "code_challenge_methods_supported": [
+                "S256"
             ]
         });
 
@@ -581,6 +663,9 @@ mod tests {
             "authorization_code",
             "urn:ietf:params:oauth:grant-type:device_code",
         ])
+        .with_client_id_metadata_document_supported(true)
+        .with_token_endpoint_auth_methods_supported(&["none", "private_key_jwt"])
+        .with_code_challenge_methods_supported(&["S256"])
         .assert_metadata(&payload);
     }
 

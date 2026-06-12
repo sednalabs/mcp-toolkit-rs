@@ -192,6 +192,9 @@ fn issuer_entry(
             "authorization_code".to_string(),
             "urn:ietf:params:oauth:grant-type:device_code".to_string(),
         ]),
+        client_id_metadata_document_supported: None,
+        token_endpoint_auth_methods_supported: None,
+        code_challenge_methods_supported: None,
     };
 
     Ok(IssuerEntry::from_metadata_source(

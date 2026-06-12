@@ -163,6 +163,12 @@ pub struct OidcDiscovery {
     pub device_authorization_endpoint: Option<String>,
     #[serde(rename = "grant_types_supported")]
     pub grant_types_supported: Option<Vec<String>>,
+    #[serde(rename = "client_id_metadata_document_supported")]
+    pub client_id_metadata_document_supported: Option<bool>,
+    #[serde(rename = "token_endpoint_auth_methods_supported")]
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+    #[serde(rename = "code_challenge_methods_supported")]
+    pub code_challenge_methods_supported: Option<Vec<String>>,
 }
 
 /// Performs OIDC discovery to retrieve authorization server metadata.

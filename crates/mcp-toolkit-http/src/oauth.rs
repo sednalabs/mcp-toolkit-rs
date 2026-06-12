@@ -59,6 +59,15 @@ pub struct AuthorizationServerMetadata {
     /// Optional supported OAuth grant types.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_types_supported: Option<Vec<String>>,
+    /// Optional Client ID Metadata Document support flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id_metadata_document_supported: Option<bool>,
+    /// Optional supported token endpoint authentication methods.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+    /// Optional supported PKCE code challenge methods.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_challenge_methods_supported: Option<Vec<String>>,
 }
 
 /// URL validation failures for OAuth metadata configuration.
