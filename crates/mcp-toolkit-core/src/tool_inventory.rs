@@ -352,8 +352,6 @@ impl OpenAiToolSearchResponse {
                 let trimmed = tool_name.as_ref().trim();
                 (!trimmed.is_empty()).then_some(trimmed.to_string())
             }));
-        self.companion_allowed_tools.sort();
-        self.companion_allowed_tools.dedup();
         self
     }
 

@@ -27,6 +27,8 @@
 //! * Keeping generated configuration aligned with the OpenAI API version used
 //!   by the client application.
 
+use std::borrow::Cow;
+
 use serde_json::{json, Map, Value};
 
 /// Minimum OpenAI model family member that supports tool search.
@@ -40,6 +42,10 @@ pub const OPENAI_TOOL_SEARCH_TYPE: &str = "tool_search";
 
 /// Responses API tool type for an MCP server.
 pub const OPENAI_MCP_TOOL_TYPE: &str = "mcp";
+
+const HOSTED_TOOL_SEARCH_METADATA: &str = "Use OpenAI hosted tool_search by adding {\"type\":\"tool_search\"} to the Responses tools array and setting defer_loading=true on this MCP server definition.";
+const CLIENT_EXECUTED_TOOL_SEARCH_METADATA: &str = "Use client-executed tool search when tool discovery depends on application, project, tenant, or other runtime state that is not practical to declare up front.";
+const LOCAL_SEARCH_SCOPE_METADATA: &str = "Local search results are helpers for non-hosted clients and manual allowed_tools narrowing; hosted OpenAI tool_search does not automatically call local search tools.";
 
 /// OpenAI Responses API MCP server tool definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,21 +295,21 @@ impl OpenAiMcpToolSearchConfig {
 /// Standard explanatory metadata for OpenAI deferred-loading responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiDeferredLoadingMetadata {
-    pub hosted_tool_search: String,
-    pub client_executed_tool_search: String,
-    pub minimum_model: String,
-    pub recommended_model: String,
-    pub local_search_scope: String,
+    pub hosted_tool_search: Cow<'static, str>,
+    pub client_executed_tool_search: Cow<'static, str>,
+    pub minimum_model: Cow<'static, str>,
+    pub recommended_model: Cow<'static, str>,
+    pub local_search_scope: Cow<'static, str>,
 }
 
 impl Default for OpenAiDeferredLoadingMetadata {
     fn default() -> Self {
         Self {
-            hosted_tool_search: "Use OpenAI hosted tool_search by adding {\"type\":\"tool_search\"} to the Responses tools array and setting defer_loading=true on this MCP server definition.".to_string(),
-            client_executed_tool_search: "Use client-executed tool search when tool discovery depends on application, project, tenant, or other runtime state that is not practical to declare up front.".to_string(),
-            minimum_model: OPENAI_TOOL_SEARCH_MINIMUM_MODEL.to_string(),
-            recommended_model: OPENAI_TOOL_SEARCH_RECOMMENDED_MODEL.to_string(),
-            local_search_scope: "Local search results are helpers for non-hosted clients and manual allowed_tools narrowing; hosted OpenAI tool_search does not automatically call local search tools.".to_string(),
+            hosted_tool_search: Cow::Borrowed(HOSTED_TOOL_SEARCH_METADATA),
+            client_executed_tool_search: Cow::Borrowed(CLIENT_EXECUTED_TOOL_SEARCH_METADATA),
+            minimum_model: Cow::Borrowed(OPENAI_TOOL_SEARCH_MINIMUM_MODEL),
+            recommended_model: Cow::Borrowed(OPENAI_TOOL_SEARCH_RECOMMENDED_MODEL),
+            local_search_scope: Cow::Borrowed(LOCAL_SEARCH_SCOPE_METADATA),
         }
     }
 }
@@ -312,12 +318,12 @@ impl OpenAiDeferredLoadingMetadata {
     /// Serialize explanatory metadata for a local tool-search response.
     pub fn to_value(&self, metadata_label: Option<&str>) -> Value {
         json!({
-            "hosted_tool_search": self.hosted_tool_search,
-            "client_executed_tool_search": self.client_executed_tool_search,
-            "minimum_model": self.minimum_model,
-            "recommended_model": self.recommended_model,
-            "local_search_scope": self.local_search_scope,
-            "find_tools_scope": self.local_search_scope,
+            "hosted_tool_search": self.hosted_tool_search.as_ref(),
+            "client_executed_tool_search": self.client_executed_tool_search.as_ref(),
+            "minimum_model": self.minimum_model.as_ref(),
+            "recommended_model": self.recommended_model.as_ref(),
+            "local_search_scope": self.local_search_scope.as_ref(),
+            "find_tools_scope": self.local_search_scope.as_ref(),
             "mcp_tool": { "defer_loading": true },
             "tool_search": { "type": OPENAI_TOOL_SEARCH_TYPE },
             "metadata_label": metadata_label,
