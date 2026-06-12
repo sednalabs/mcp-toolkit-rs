@@ -45,9 +45,11 @@ Add the specific crates you need from Git:
 
 ```toml
 [dependencies]
-mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs" }
-mcp-toolkit-http = { git = "https://github.com/sednalabs/mcp-toolkit-rs", features = ["session"] }
-mcp-toolkit-testing = { git = "https://github.com/sednalabs/mcp-toolkit-rs" }
+mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs", branch = "main" }
+mcp-toolkit-http = { git = "https://github.com/sednalabs/mcp-toolkit-rs", branch = "main", features = ["session"] }
+
+[dev-dependencies]
+mcp-toolkit-testing = { git = "https://github.com/sednalabs/mcp-toolkit-rs", branch = "main" }
 ```
 
 Or use the umbrella crate when you want one dependency with explicit feature
@@ -57,9 +59,15 @@ selection:
 [dependencies]
 mcp-toolkit = {
   git = "https://github.com/sednalabs/mcp-toolkit-rs",
+  branch = "main",
   features = ["auth", "http", "policy", "process", "server"]
 }
 ```
+
+Commit the consumer `Cargo.lock` after resolution. The lockfile records the
+exact toolkit SHA; manifest `rev` pins are only needed for special cases where a
+consumer intentionally wants a long-lived frozen toolkit ref. See
+`docs/cargo-package-release.md` for the package release and migration path.
 
 Run the baseline checks from the repository root:
 
@@ -149,6 +157,8 @@ Security reporting guidance is documented in `SECURITY.md`.
   bearer-enforcement contract.
 - `docs/contract-testing.md` covers reusable hard-path test helpers for stdio,
   auth metadata, bearer challenges, host guards, and snapshots.
+- `docs/cargo-package-release.md` covers the public Git dependency contract,
+  package release approval gate, and eventual crates.io migration path.
 - `docs/deferred-loading-and-tool-search.md` covers lightweight tool discovery
   and deferred loading.
 - `docs/dependency-governance.md` defines dependency selection and update
@@ -179,7 +189,8 @@ Security reporting guidance is documented in `SECURITY.md`.
 
 The workspace is useful today, but it is still pre-1.0. Expect APIs to tighten
 as the public surface settles. Crates are marked `publish = false` until the
-crate-level release process is ready.
+crate-level release process is ready; consumers should use public Git
+dependencies plus committed lockfiles until crates are published.
 
 ## License
 

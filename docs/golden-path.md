@@ -171,7 +171,9 @@ For an existing server, migrate one runtime seam at a time:
 
 1. Choose a helper that replaces repeated boilerplate without changing the
    service's tool, auth, session, or startup contract.
-2. Pin the toolkit revision in the service manifest.
+2. Consume the public toolkit Git repository and commit the service lockfile so
+   Cargo records the exact resolved toolkit SHA. Use a manifest `rev` pin only
+   when the service intentionally needs a long-lived frozen toolkit ref.
 3. Keep domain policy and backend clients in the service repository.
 4. Add or preserve a runtime smoke test at the actual MCP boundary.
 5. Document the before/after in the service README or PR.
