@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - ".github/codeql/actions-workflow-security/**"
+      - ".github/workflows/codeql.yml"
       - ".github/workflows/codeql-query-tests.yml"
   push:
     branches:
       - main
     paths:
       - ".github/codeql/actions-workflow-security/**"
+      - ".github/workflows/codeql.yml"
       - ".github/workflows/codeql-query-tests.yml"
   workflow_dispatch:
 
@@ -42,6 +44,14 @@ jobs:
         run: |
           set -euo pipefail
           "${{ steps.setup-codeql.outputs.codeql-path }}" pack install .github/codeql/actions-workflow-security
+
+      - name: Resolve Actions workflow security suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" resolve queries \
+            --search-path .github/codeql \
+            .github/codeql/actions-workflow-security/suites/actions-workflow-security.qls
 
       - name: Compile Actions workflow security queries
         shell: bash

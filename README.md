@@ -149,6 +149,7 @@ This repository is public-facing and uses a conservative GitHub Actions posture:
 - workflows avoid `pull_request_target`;
 - third-party Actions are pinned to immutable commits;
 - CodeQL analyzes GitHub Actions workflow policy;
+- Cobertura coverage reports upload to GitHub Code Quality for pull requests;
 - changes to `main` should land through pull requests with required hosted
   checks, except for documented urgent security remediation.
 
