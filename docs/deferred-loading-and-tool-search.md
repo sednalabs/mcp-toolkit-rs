@@ -42,10 +42,69 @@ In practice, that usually means:
 - a curated inventory of the tools that are currently available
 - lazy construction of the expensive tool internals
 
+## OpenAI Responses API
+
+For OpenAI Responses API clients, tool search is configured by the client
+request, not by hiding tools inside the MCP server. The server should continue
+to expose its authoritative `tools/list` surface under its normal inventory and
+authorization policy. The client can then choose to defer loading those tool
+definitions.
+
+For an MCP server, the client-side `tools` array should include:
+
+```json
+[
+  {
+    "type": "mcp",
+    "server_label": "example",
+    "server_description": "Example operational MCP tools.",
+    "server_url": "https://example.com/mcp",
+    "defer_loading": true
+  },
+  {
+    "type": "tool_search"
+  }
+]
+```
+
+OpenAI hosted tool search searches the deferred tools declared in the request.
+Local MCP discovery helpers such as `find_tools` are normal MCP tools; hosted
+OpenAI tool search does not call them automatically. Use a local discovery tool
+when non-hosted clients need a narrow `allowed_tools` list, optional schemas, or
+extra application-owned search results before making a follow-up request.
+
+`mcp-toolkit-core::openai_tool_search` provides generic builders for two
+closely related shapes:
+
+- `OpenAiMcpToolSearchConfig::to_request_value()`
+  - use when you need an API-postable Responses request fragment with `model`
+    and the deferred MCP plus `tool_search` tools array
+- `OpenAiMcpToolSearchConfig::to_documentation_value()`
+  - use when you need a richer resource or docs payload that also carries model
+    support guidance, optional reviewed approval examples, or notes for
+    operators
+
+`ToolSearchResponse` provides the matching local discovery envelope with
+`openai_allowed_tools` and optional schemas. When a local discovery result
+needs companion allowed tools or extra result records, wrap it with
+`ToolSearchResponse::into_openai_response()` and add those OpenAI-specific
+extensions there.
+
+The default OpenAI MCP config leaves `require_approval` unset. If a trusted
+workflow wants to reduce approval friction for read-only tools, supply an
+explicit reviewed read-only override with service-owned tool names. The toolkit
+request helper writes that override into the MCP tool's
+`require_approval.never` filter with the reviewed `tool_names` list. The
+documentation helper keeps that override separate so docs or resources can show
+the safer default config first. Keep mutating tools behind approval unless
+another workflow-level review gate applies.
+
 ## When to choose each helper
 
 - `ToolInventory`
   - use for explicit capability registration and method-aware exposure
+- `openai_tool_search`
+  - use for OpenAI MCP `defer_loading` and `tool_search` config payloads
 - `ToolListTracker`
   - use for session-aware change detection
 - `rmcp_models`

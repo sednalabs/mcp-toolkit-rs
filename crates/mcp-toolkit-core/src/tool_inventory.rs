@@ -32,6 +32,8 @@ use std::fmt::{Display, Formatter};
 
 use serde_json::{json, Value};
 
+use crate::openai_tool_search::OpenAiDeferredLoadingMetadata;
+
 /// MCP tool operation used for method-aware exposure checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolOperation {
@@ -281,11 +283,121 @@ impl ToolSearchResponse {
             "results": result_values,
             "openai_allowed_tools": self.openai_allowed_tools(),
             "schemas": self.schemas.clone(),
-            "openai_deferred_loading": {
-                "mcp_tool": { "defer_loading": true },
-                "tool_search": { "type": "tool_search" },
-                "metadata_label": self.metadata_label,
-            },
+            "openai_deferred_loading": OpenAiDeferredLoadingMetadata::default()
+                .to_value(self.metadata_label.as_deref()),
+        })
+    }
+
+    /// Wrap this response in an OpenAI-oriented builder with extra result support.
+    pub fn into_openai_response(self) -> OpenAiToolSearchResponse {
+        OpenAiToolSearchResponse::from_response(self)
+    }
+}
+
+/// Additive OpenAI response builder for local tool-search helpers.
+///
+/// # Examples
+/// ```
+/// use mcp_toolkit_core::tool_inventory::{ToolSearchResponse, ToolSearchResult};
+/// use serde_json::json;
+///
+/// let response = ToolSearchResponse::find_tools(
+///     Some("metrics".to_string()),
+///     None,
+///     None,
+///     vec![ToolSearchResult {
+///         name: "metrics.read".to_string(),
+///         group: Some("metrics".to_string()),
+///         read_only: true,
+///         description: Some("Read metrics".to_string()),
+///         keywords: vec!["metrics".to_string()],
+///     }],
+/// )
+/// .into_openai_response()
+/// .with_companion_allowed_tools(["api_prepare_call"]);
+///
+/// let value = response.to_value();
+/// assert_eq!(
+///     value["openai_allowed_tools"],
+///     json!(["api_prepare_call", "metrics.read"])
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiToolSearchResponse {
+    pub response: ToolSearchResponse,
+    pub companion_allowed_tools: Vec<String>,
+    pub extra_results: Vec<Value>,
+    pub openai_metadata: OpenAiDeferredLoadingMetadata,
+}
+
+impl OpenAiToolSearchResponse {
+    /// Create an OpenAI-oriented response builder from a base search response.
+    pub fn from_response(response: ToolSearchResponse) -> Self {
+        Self {
+            response,
+            companion_allowed_tools: Vec::new(),
+            extra_results: Vec::new(),
+            openai_metadata: OpenAiDeferredLoadingMetadata::default(),
+        }
+    }
+
+    /// Add extra tool names that should be allowed with the search results.
+    pub fn with_companion_allowed_tools<I, S>(mut self, tool_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.companion_allowed_tools
+            .extend(tool_names.into_iter().filter_map(|tool_name| {
+                let trimmed = tool_name.as_ref().trim();
+                (!trimmed.is_empty()).then_some(trimmed.to_string())
+            }));
+        self
+    }
+
+    /// Attach non-inventory search results without changing allowed tool names.
+    pub fn with_extra_results<I>(mut self, results: I) -> Self
+    where
+        I: IntoIterator<Item = Value>,
+    {
+        self.extra_results.extend(results);
+        self
+    }
+
+    /// Attach provider metadata for OpenAI deferred-loading clients.
+    pub fn with_openai_metadata(mut self, metadata: OpenAiDeferredLoadingMetadata) -> Self {
+        self.openai_metadata = metadata;
+        self
+    }
+
+    /// Tool names suitable for OpenAI `allowed_tools` style narrowing.
+    pub fn openai_allowed_tools(&self) -> Vec<String> {
+        let mut tools = self.response.openai_allowed_tools();
+        tools.extend(self.companion_allowed_tools.iter().cloned());
+        tools.sort();
+        tools.dedup();
+        tools
+    }
+
+    /// Serialize to the common JSON shape used by OpenAI tool-search clients.
+    pub fn to_value(&self) -> Value {
+        let mut result_values = self
+            .response
+            .results
+            .iter()
+            .map(tool_search_result_value)
+            .collect::<Vec<_>>();
+        result_values.extend(self.extra_results.iter().cloned());
+        json!({
+            "operation": self.response.operation,
+            "query": self.response.query,
+            "group": self.response.group,
+            "read_only": self.response.read_only,
+            "results": result_values,
+            "openai_allowed_tools": self.openai_allowed_tools(),
+            "schemas": self.response.schemas.clone(),
+            "openai_deferred_loading": self.openai_metadata
+                .to_value(self.response.metadata_label.as_deref()),
         })
     }
 }
@@ -770,6 +882,55 @@ mod tests {
             value["openai_deferred_loading"]["tool_search"]["type"],
             json!("tool_search")
         );
+        assert_eq!(
+            value["openai_deferred_loading"]["recommended_model"],
+            json!("gpt-5.5")
+        );
         assert_eq!(value["schemas"]["cache.list"]["name"], json!("cache.list"));
+    }
+
+    #[test]
+    fn search_response_includes_companion_tools_and_extra_results() {
+        let response = ToolSearchResponse::find_tools(
+            Some("queue metrics".to_string()),
+            None,
+            None,
+            vec![super::ToolSearchResult {
+                name: "queues.get".to_string(),
+                group: Some("queues".to_string()),
+                read_only: true,
+                description: Some("Get queue details".to_string()),
+                keywords: vec!["queue".to_string()],
+            }],
+        )
+        .into_openai_response()
+        .with_companion_allowed_tools([
+            "api_read",
+            "api_prepare_call",
+            "api_find_operations",
+            "api_prepare_call",
+        ])
+        .with_extra_results([json!({
+            "type": "api_operation",
+            "name": "api_read",
+            "read_only": true,
+        })]);
+
+        let value = response.to_value();
+
+        assert_eq!(
+            value["openai_allowed_tools"],
+            json!([
+                "api_find_operations",
+                "api_prepare_call",
+                "api_read",
+                "queues.get"
+            ])
+        );
+        assert_eq!(value["results"][1]["type"], json!("api_operation"));
+        assert_eq!(
+            value["openai_deferred_loading"]["find_tools_scope"],
+            value["openai_deferred_loading"]["local_search_scope"]
+        );
     }
 }
