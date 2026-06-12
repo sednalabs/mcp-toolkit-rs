@@ -136,9 +136,12 @@ This repository is public-facing and uses a conservative GitHub Actions posture:
 - external fork pull requests require maintainer approval before workflows run;
 - workflows avoid `pull_request_target`;
 - third-party Actions are pinned to immutable commits;
-- CodeQL analyzes GitHub Actions workflow policy.
+- CodeQL analyzes GitHub Actions workflow policy;
+- changes to `main` should land through pull requests with required hosted
+  checks, except for documented urgent security remediation.
 
 Dependency policy is documented in `docs/dependency-governance.md`.
+Security reporting guidance is documented in `SECURITY.md`.
 
 ## Documentation
 
@@ -159,6 +162,8 @@ Dependency policy is documented in `docs/dependency-governance.md`.
   promotion.
 - `docs/observability-evolution.md` and `docs/observability-rollout.md` cover
   observability adapters and adoption.
+- `docs/public-landing-policy.md` defines the public repository landing,
+  hosted-check, and break-glass remediation policy.
 - `docs/security-profiles.md` describes auth profile selection.
 - `docs/server-composition-layer.md` describes the optional stdio and HTTP
   server composition layer.
