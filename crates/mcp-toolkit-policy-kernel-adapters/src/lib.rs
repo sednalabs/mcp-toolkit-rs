@@ -441,6 +441,7 @@ fn kernel_gateway_path_denied(path: &str, segments: &[&str]) -> bool {
     path.contains(';')
         || path.contains('?')
         || path.contains('#')
+        || path.contains('\\')
         || contains_encoded_delimiter(path)
         || segments
             .iter()
@@ -454,6 +455,7 @@ fn contains_encoded_delimiter(path: &str) -> bool {
         || lower.contains("%3f")
         || lower.contains("%23")
         || lower.contains("%2e")
+        || lower.contains("%5c")
 }
 
 fn path_segments(path: &str) -> Vec<&str> {
@@ -681,9 +683,17 @@ mod tests {
     }
 
     #[test]
-    fn gateway_allows_percent_5c() {
+    fn gateway_denies_percent_5c() {
         let decision = gateway_decision(&gateway_input_for("/admin/realms/demo%5cusers"));
-        assert!(decision.allow);
+        assert!(!decision.allow);
+        assert_eq!(decision.code.as_deref(), Some("INVALID_PATH"));
+    }
+
+    #[test]
+    fn gateway_denies_raw_backslash() {
+        let decision = gateway_decision(&gateway_input_for(r"/admin/realms/demo\users"));
+        assert!(!decision.allow);
+        assert_eq!(decision.code.as_deref(), Some("INVALID_PATH"));
     }
 
     #[test]

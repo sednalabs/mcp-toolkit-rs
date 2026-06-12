@@ -35,7 +35,7 @@ pub(crate) use jwks::JwksCache;
 /// # Security
 /// * **DoS Protection**: Enforces a strict upper bound (`max_bytes`) on response sizes
 ///   to prevent memory exhaustion when processing untrusted provider responses.
-async fn read_body_limited(
+pub(crate) async fn read_body_limited(
     response: reqwest::Response,
     max_bytes: usize,
     label: &str,

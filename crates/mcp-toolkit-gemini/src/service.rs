@@ -221,6 +221,12 @@ fn validate_required_text_field(
     }
 }
 
+fn contains_gemini_file_include(prompt: &str) -> bool {
+    prompt
+        .split_whitespace()
+        .any(|token| token.strip_prefix('@').is_some_and(|path| !path.is_empty()))
+}
+
 fn validate_target_within_include_directories(
     target: &str,
     include_directories: &[String],
@@ -703,6 +709,15 @@ impl GeminiMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let mut validation_errors = Vec::new();
         let prompt = validate_required_text_field("prompt", &args.prompt, &mut validation_errors);
+        if prompt.as_deref().is_some_and(contains_gemini_file_include) {
+            validation_errors.push(ValidationIssue {
+                field: "prompt".to_string(),
+                code: "unsupported_syntax".to_string(),
+                expected_type: "prompt without Gemini file include syntax".to_string(),
+                received_type: "string".to_string(),
+                corrective_hint: "Remove @file references from the prompt and use a configured target root when file context is required.".to_string(),
+            });
+        }
         let mut request_include_directories = Vec::new();
         if matches!(self.config.ask_gemini_policy, AskGeminiPolicy::ScopedOnly) {
             if self.config.ask_gemini_allowed_roots.is_empty() {
@@ -1205,10 +1220,10 @@ mod tests {
     use super::{
         allowed_models_hint, classify_stderr_error, codebase_investigator_fallback_prompt,
         codebase_investigator_prompt, codebase_scout_fallback_prompt, codebase_scout_prompt,
-        model_not_allowed_issue, normalize_model_list, normalize_optional_model_field,
-        parse_json_response, resolve_model, sanitize_codebase_tool_output,
-        validate_required_text_field, validate_target_within_include_directories, ErrorCategory,
-        GeminiExecutionConfig,
+        contains_gemini_file_include, model_not_allowed_issue, normalize_model_list,
+        normalize_optional_model_field, parse_json_response, resolve_model,
+        sanitize_codebase_tool_output, validate_required_text_field,
+        validate_target_within_include_directories, ErrorCategory, GeminiExecutionConfig,
     };
     use serde_json::json;
 
@@ -1432,6 +1447,17 @@ mod tests {
             normalize_model_list(&["a".to_string(), "  ".to_string(), "b".to_string()]),
             vec!["a".to_string(), "b".to_string()]
         );
+    }
+
+    #[test]
+    fn ask_gemini_prompt_rejects_file_include_syntax() {
+        assert!(contains_gemini_file_include("@/etc/passwd summarize"));
+        assert!(contains_gemini_file_include("please read @src/main.rs"));
+        assert!(contains_gemini_file_include("@README.md"));
+        assert!(!contains_gemini_file_include(
+            "email test@example.com about files"
+        ));
+        assert!(!contains_gemini_file_include("explain the @ symbol"));
     }
 
     #[test]

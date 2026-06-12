@@ -30,6 +30,7 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProcessGroupError {
     UnsupportedPlatform,
+    InvalidPid { pid: u32 },
     SyscallFailed { name: &'static str, code: i32 },
 }
 
@@ -38,6 +39,9 @@ impl fmt::Display for ProcessGroupError {
         match self {
             ProcessGroupError::UnsupportedPlatform => {
                 write!(f, "process groups are not supported on this platform")
+            }
+            ProcessGroupError::InvalidPid { pid } => {
+                write!(f, "refusing to signal special process id {pid}")
             }
             ProcessGroupError::SyscallFailed { name, code } => {
                 write!(f, "{name} failed with errno {code}")
@@ -242,6 +246,9 @@ fn signal_process_group(
     signal: i32,
     name: &'static str,
 ) -> Result<(), ProcessGroupError> {
+    if pid <= 1 || pid > i32::MAX as u32 {
+        return Err(ProcessGroupError::InvalidPid { pid });
+    }
     let pgid = -(pid as i32);
     let rc = unsafe { libc::kill(pgid, signal) };
     if rc != 0 {
@@ -282,6 +289,25 @@ mod tests {
             ProcessSchedulingError::InvalidValue {
                 name: "niceness",
                 value: 25
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn process_group_signaling_rejects_special_pids() {
+        assert_eq!(
+            terminate_process_group(0).unwrap_err(),
+            ProcessGroupError::InvalidPid { pid: 0 }
+        );
+        assert_eq!(
+            kill_process_group(1).unwrap_err(),
+            ProcessGroupError::InvalidPid { pid: 1 }
+        );
+        assert_eq!(
+            kill_process_group(i32::MAX as u32 + 1).unwrap_err(),
+            ProcessGroupError::InvalidPid {
+                pid: i32::MAX as u32 + 1
             }
         );
     }

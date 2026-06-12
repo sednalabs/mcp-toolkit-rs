@@ -223,7 +223,7 @@ async fn codebase_tool_falls_back_to_stdin_when_arg_prompt_is_rejected_by_gemini
 
 #[tokio::test]
 #[cfg(unix)]
-async fn sandbox_false_forces_child_gemini_sandbox_off() {
+async fn sandbox_false_does_not_force_child_gemini_sandbox_off() {
     let script_path = make_fake_gemini_script_printing_sandbox_env("sandbox-off");
     let config = GeminiExecutionConfig {
         api_key: "test-api-key".to_string(),
@@ -249,11 +249,11 @@ async fn sandbox_false_forces_child_gemini_sandbox_off() {
 
     let output = execute_gemini(&config, &request)
         .await
-        .expect("execute fake gemini with sandbox disabled");
+        .expect("execute fake gemini without sandbox override");
     cleanup_parent(&script_path);
 
     let lines = output.stdout.lines().collect::<Vec<_>>();
-    assert_eq!(lines.first().copied(), Some("sandbox=false"));
+    assert_eq!(lines.first().copied(), Some("sandbox=<unset>"));
     assert!(!lines.contains(&"-s"));
 }
 
