@@ -1,0 +1,112 @@
+name: code-coverage
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-coverage::${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-coverage:
+    name: Rust Cobertura coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      code-quality: write
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        # actions/checkout v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Cache cargo artifacts
+        # swatinem/rust-cache v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+
+      - name: Install coverage tool
+        # taiki-e/install-action v2
+        uses: taiki-e/install-action@15413b256f995d819248ea62704771a959284285
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate workspace coverage
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --all-targets --all-features \
+            --cobertura --output-path coverage/workspace.xml
+
+      - name: Generate template coverage
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --manifest-path templates/curated-stdio-intent-server/Cargo.toml \
+            --all-targets --all-features \
+            --cobertura --output-path coverage/curated-stdio-intent-server.xml
+          cargo llvm-cov --manifest-path templates/hosted-http-auth-server/Cargo.toml \
+            --all-targets --all-features \
+            --cobertura --output-path coverage/hosted-http-auth-server.xml
+
+      - name: Upload workspace coverage to GitHub Code Quality
+        # actions/upload-code-coverage v1
+        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        with:
+          file: coverage/workspace.xml
+          language: Rust
+          label: code-coverage/cargo-workspace
+
+      - name: Upload curated stdio template coverage to GitHub Code Quality
+        # actions/upload-code-coverage v1
+        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        with:
+          file: coverage/curated-stdio-intent-server.xml
+          language: Rust
+          label: code-coverage/template-curated-stdio-intent-server
+
+      - name: Upload hosted HTTP template coverage to GitHub Code Quality
+        # actions/upload-code-coverage v1
+        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        with:
+          file: coverage/hosted-http-auth-server.xml
+          language: Rust
+          label: code-coverage/template-hosted-http-auth-server
+
+      - name: Upload Cobertura reports
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-cobertura-coverage
+          path: coverage/*.xml
+          if-no-files-found: error
+
+      - name: Summarize coverage reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "### Rust coverage reports" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          for report in sorted(Path("coverage").glob("*.xml")):
+              root = ElementTree.parse(report).getroot()
+              line_rate = float(root.attrib.get("line-rate", "0"))
+              print(f"- `{report}`: {line_rate * 100:.2f}% line coverage")
+          PY

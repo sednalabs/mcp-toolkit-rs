@@ -6,3 +6,5 @@ queries:
 paths:
   - crates
   - templates
+
+threat-models: [local]
