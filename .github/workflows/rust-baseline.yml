@@ -2,24 +2,10 @@ name: rust-baseline
 
 on:
   pull_request:
-    paths:
-      - "Cargo.toml"
-      - "crates/**"
-      - "docs/**"
-      - "README.md"
-      - "templates/**"
-      - ".github/workflows/rust-baseline.yml"
   push:
     branches:
       - main
       - master
-    paths:
-      - "Cargo.toml"
-      - "crates/**"
-      - "docs/**"
-      - "README.md"
-      - "templates/**"
-      - ".github/workflows/rust-baseline.yml"
   workflow_dispatch:
 
 concurrency:

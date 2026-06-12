@@ -82,3 +82,15 @@ Prefer solutions that are:
 3. Easy to understand for new contributors.
 4. Backed by clear tooling and tests.
 5. Consistent with existing architecture and repository conventions.
+
+## Public Landing Policy
+
+This repository is a public publication surface. Normal changes must land
+through a pull request targeting `main` with required hosted checks passing.
+A pushed branch without a pull request is not a normal handoff.
+
+Use direct `main` pushes only for documented break-glass remediation of urgent,
+validated high-impact security issues. A break-glass landing must be narrow,
+use bland public wording, verify the canonical remote `main` SHA after push,
+watch required hosted checks to terminal success, and leave a private or
+sanitized remediation receipt.
