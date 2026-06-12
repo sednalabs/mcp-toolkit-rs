@@ -368,15 +368,37 @@ fn normalize_prefix(prefix: &str) -> String {
     if core.is_empty() {
         return "/".to_string();
     }
-    format!("/{core}")
+    let mut normalized = String::with_capacity(core.len() + 1);
+    normalized.push('/');
+    push_normalized_path_chars(core, &mut normalized);
+    normalized
 }
 
 fn normalize_path(path: &str) -> String {
     let trimmed = path.trim();
-    if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{trimmed}")
+    let mut normalized = String::with_capacity(trimmed.len().max(1));
+    if !trimmed.starts_with('/') {
+        normalized.push('/');
+    }
+    push_normalized_path_chars(trimmed, &mut normalized);
+    if normalized.is_empty() {
+        normalized.push('/');
+    }
+    normalized
+}
+
+fn push_normalized_path_chars(path: &str, normalized: &mut String) {
+    let mut previous_was_slash = false;
+    for ch in path.chars() {
+        if ch == '/' {
+            if !previous_was_slash {
+                normalized.push(ch);
+            }
+            previous_was_slash = true;
+        } else {
+            normalized.push(ch);
+            previous_was_slash = false;
+        }
     }
 }
 
@@ -441,6 +463,31 @@ mod tests {
         assert_eq!(
             policy.required_scopes("POST", "/mcp/admin/tools"),
             vec!["mcp:admin:write".to_string()]
+        );
+    }
+
+    #[test]
+    fn route_policy_normalizes_repeated_slashes_before_matching() {
+        let policy = RoutePolicy::default()
+            .with_route("/mcp", "mcp:read", "mcp:write")
+            .with_route("/mcp/admin", "mcp:admin:read", "mcp:admin:write");
+        assert_eq!(
+            policy.required_scopes("GET", "//mcp/admin/tools"),
+            vec!["mcp:admin:read".to_string()]
+        );
+        assert_eq!(
+            policy.required_scopes("POST", "/mcp//admin/tools"),
+            vec!["mcp:admin:write".to_string()]
+        );
+    }
+
+    #[test]
+    fn route_policy_normalizes_repeated_slashes_in_prefixes() {
+        let policy =
+            RoutePolicy::default().with_route("//mcp//admin/", "mcp:admin:read", "mcp:admin:write");
+        assert_eq!(
+            policy.required_scopes("GET", "/mcp/admin/tools"),
+            vec!["mcp:admin:read".to_string()]
         );
     }
 
@@ -563,6 +610,21 @@ mod tests {
         let decision = kernel.authorize(&request);
         assert!(decision.allow);
         assert_eq!(decision.required_scopes, Some(vec!["mcp:read".to_string()]));
+    }
+
+    #[test]
+    fn embedded_kernel_enforces_route_scope_on_repeated_slash_path() {
+        let kernel = EmbeddedPolicyKernel::builder()
+            .route("/mcp/admin", "mcp:admin:read", "mcp:admin:write")
+            .build();
+        let request = GenericPolicyRequest::new("GET", "//mcp/admin/tools")
+            .with_token_scopes(vec!["mcp:read".to_string()]);
+        let decision = kernel.authorize(&request);
+        assert!(!decision.allow);
+        assert_eq!(
+            decision.code.as_deref(),
+            Some(DecisionCode::MissingScopes.as_str())
+        );
     }
 
     #[test]
