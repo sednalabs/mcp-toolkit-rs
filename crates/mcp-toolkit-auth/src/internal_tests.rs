@@ -2,8 +2,8 @@ pub(crate) use crate::auth_context_from_parts;
 pub(crate) use crate::auth_context_ref_from_parts;
 pub(crate) use crate::claims::extract_scopes;
 pub(crate) use crate::{
-    AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext, Authenticator,
-    AuthSecurityProfile, ClientAuthMethod,
+    AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext, AuthSecurityProfile,
+    Authenticator, ClientAuthMethod,
 };
 
 mod tests {
