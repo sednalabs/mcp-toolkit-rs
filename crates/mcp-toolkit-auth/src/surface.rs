@@ -1301,17 +1301,14 @@ mod tests {
     impl AuthFailureObserver for RecordingAuthFailureObserver {
         fn observe_auth_failure(&self, event: AuthFailureEvent<'_>) {
             let has_authorization = event.headers.contains_key(http::header::AUTHORIZATION);
-            self.events
-                .lock()
-                .expect("lock")
-                .push(RecordedAuthFailure {
-                    method: event.method.to_string(),
-                    path: event.path.to_string(),
-                    resource_path: event.resource_path.to_string(),
-                    resource_url: event.resource_url.to_string(),
-                    reason: error_code_for_error(event.error),
-                    has_authorization,
-                });
+            self.events.lock().expect("lock").push(RecordedAuthFailure {
+                method: event.method.to_string(),
+                path: event.path.to_string(),
+                resource_path: event.resource_path.to_string(),
+                resource_url: event.resource_url.to_string(),
+                reason: error_code_for_error(event.error),
+                has_authorization,
+            });
         }
     }
 
