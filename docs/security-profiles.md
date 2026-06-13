@@ -16,7 +16,7 @@ security level explicit so new services do not drift or over/under-harden.
 | --- | --- | --- | --- |
 | **L0: Dev/Local** | local dev/test only | Delegation tokens, short TTLs | HS256 delegation; minimal checks |
 | **L1: Read-only** | low-risk read-only services | JWKS/OIDC validation, required scopes | JWKS validation + strict resource URL |
-| **L2: Strong** | sensitive read/limited write | JWKS + optional introspection, JTI replay, azp allowlist | JWKS + introspection cache + replay guard |
+| **L2: Strong** | sensitive read/limited write | JWKS + optional introspection, azp allowlist, opt-in JTI replay | JWKS + introspection cache + optional replay guard |
 | **L3: Boundary/Gateway** | admin/data boundary | Dual validation + token exchange | Introspection + RFC 8693 exchange + policy boundary |
 
 > **Rule of thumb:** prefer the highest level that matches the data sensitivity
@@ -46,10 +46,12 @@ security level explicit so new services do not drift or over/under-harden.
   change, config updates) and IP-sensitive content.
 - **Controls:**
   - JWKS validation + **optional introspection** (revocation-aware).
-  - JTI replay protection for bearer tokens by default, with sender-constrained
-    tokens preferred when available (DPoP/mTLS).
+  - Bearer-token JTI replay enforcement is opt-in; bearer tokens remain
+    reusable by design unless explicitly configured for one-time use.
+  - Streamable HTTP clients normally reuse one bearer token across initialize,
+    initialized notification, and follow-up requests.
   - Client allowlists (`azp` / client_id) and strict token type where supported.
-- **Tooling fit:** `AuthMode::Jwks` + introspection cache + replay guard + allowlists.
+- **Tooling fit:** `AuthMode::Jwks` + introspection cache + optional replay guard + allowlists.
 
 ### L3: Boundary/Gateway
 - **Use when:** crossing a **data boundary** (DB, admin APIs) or when the
@@ -58,8 +60,10 @@ security level explicit so new services do not drift or over/under-harden.
   - **Inbound token validation** (introspection/JWKS).
   - **Token exchange** (RFC 8693) to downscope for downstream calls.
   - Independent policy enforcement at the boundary service.
-  - Bearer-token JTI replay protection by default; sender-constrained replay
-    protections when available (DPoP/mTLS).
+  - Bearer-token JTI replay enforcement only when the service explicitly opts
+    into one-time bearer-token semantics.
+  - Sender-constrained replay protection requires dedicated DPoP/mTLS handling;
+    the profile presets do not imply it.
 - **Tooling fit:** MCP validates; gateway performs exchange + policy enforcement.
 
 ## Common Service Shapes
@@ -74,7 +78,8 @@ Rationale:
 - JWKS + optional introspection gives revocation awareness without the full
   gateway complexity.
 - Add client allowlists (`azp`/client_id), strict OAuth resource checks, and
-  replay protections where feasible (prefer sender-constrained tokens).
+  explicit replay protections only when the transport/token contract supports
+  them.
 
 Minimum L2 controls:
 - JWKS validation with strict issuer/audience.
@@ -100,16 +105,17 @@ Minimum controls:
 Use `mcp-toolkit-auth` for consistent primitives:
 - `AuthMode::Jwks` or `AuthMode::Introspection` (production).
 - Required scopes enforced centrally.
-- JTI replay guard for bearer tokens in default/L2/L3 profiles.
+- Optional JTI replay guard for services that explicitly require one-time
+  bearer-token semantics.
 - Strict OAuth resource URL checks for protected resource metadata.
 
 ### Profile presets (Rust)
 
 `mcp-toolkit-auth` exposes `AuthSecurityProfile` with `L1ReadOnly`, `L2Strong`, and
-`L3Boundary` presets. These helpers set conservative defaults for replay protection,
-introspection caching, and strict OAuth settings, but **do not** populate issuer,
-audience, JWKS URL, or required scopes. Services must still set those fields per
-environment.
+`L3Boundary` presets. These helpers set conservative defaults for introspection
+caching and strict OAuth settings, but **do not** populate issuer, audience,
+JWKS URL, required scopes, or one-time bearer-token replay enforcement. Services
+must still set those fields per environment.
 
 ```rust
 use mcp_toolkit_auth::{AuthConfig, AuthSecurityProfile};
