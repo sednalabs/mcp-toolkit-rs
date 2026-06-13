@@ -616,15 +616,31 @@ where
 {
     let method = req.method().clone();
     let session_id = session_id_from_headers(req.headers());
+    let has_session_header = session_id.is_some();
+    tracing::debug!(
+        method = %method,
+        has_session_header,
+        auth_enabled = state.auth_enabled,
+        stateless_fallback = state.stateless_service.is_some(),
+        "streamable HTTP route-bundle request received"
+    );
 
     match method {
         Method::POST => handle_post(state, req, session_id).await,
         Method::GET | Method::DELETE => handle_stateful_read(state, req, session_id, method).await,
-        _ => session_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Method not allowed.",
-            "Use POST /mcp to initialize, then reuse the session id for later requests.",
-        ),
+        _ => {
+            log_route_rejection(
+                &method,
+                has_session_header,
+                "method_not_allowed",
+                StatusCode::METHOD_NOT_ALLOWED,
+            );
+            session_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Method not allowed.",
+                "Use POST /mcp to initialize, then reuse the session id for later requests.",
+            )
+        }
     }
 }
 
@@ -638,11 +654,17 @@ where
 {
     if let Some(session_id) = session_id {
         if session_exists(&state.session_manager, &session_id).await {
-            return forward_service(state.stateful_service, req).await;
+            return forward_service(state.stateful_service, req, "stateful_session").await;
         }
         if let Some(stateless) = state.stateless_service {
-            return forward_service(stateless, req).await;
+            return forward_service(stateless, req, "stateless_fallback").await;
         }
+        log_route_rejection(
+            req.method(),
+            true,
+            "invalid_or_expired_session",
+            StatusCode::NOT_FOUND,
+        );
         return session_error(
             StatusCode::NOT_FOUND,
             "Invalid or expired session ID.",
@@ -651,6 +673,12 @@ where
     }
 
     if content_length_exceeds(req.headers(), SESSIONLESS_POST_PROBE_LIMIT) {
+        log_route_rejection(
+            req.method(),
+            false,
+            "sessionless_body_too_large",
+            StatusCode::PAYLOAD_TOO_LARGE,
+        );
         return sessionless_body_too_large_response();
     }
 
@@ -658,9 +686,21 @@ where
     let bytes = match to_bytes(body, SESSIONLESS_POST_PROBE_LIMIT).await {
         Ok(bytes) => bytes,
         Err(err) if is_body_limit_error(&err) => {
+            log_route_rejection(
+                &parts.method,
+                false,
+                "sessionless_body_too_large",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            );
             return sessionless_body_too_large_response();
         }
         Err(_) => {
+            log_route_rejection(
+                &parts.method,
+                false,
+                "sessionless_body_read_failed",
+                StatusCode::BAD_REQUEST,
+            );
             return session_error(
                 StatusCode::BAD_REQUEST,
                 "Failed to read request body.",
@@ -670,11 +710,17 @@ where
     };
     let req = Request::from_parts(parts, Body::from(bytes.clone()));
     if is_initialize_payload(&bytes) {
-        return forward_service(state.stateful_service, req).await;
+        return forward_service(state.stateful_service, req, "initialize").await;
     }
     if let Some(stateless) = state.stateless_service {
-        return forward_service(stateless, req).await;
+        return forward_service(stateless, req, "stateless_fallback").await;
     }
+    log_route_rejection(
+        req.method(),
+        false,
+        "missing_session_id",
+        StatusCode::BAD_REQUEST,
+    );
     session_error(
         StatusCode::BAD_REQUEST,
         "Missing session ID.",
@@ -693,8 +739,16 @@ where
 {
     let Some(session_id) = session_id else {
         if matches!(method, Method::GET) && !state.auth_enabled {
+            tracing::debug!(
+                method = %method,
+                has_session_header = false,
+                phase = "endpoint_ready_hint",
+                status = StatusCode::OK.as_u16(),
+                "streamable HTTP route-bundle request completed"
+            );
             return endpoint_ready_hint();
         }
+        log_route_rejection(&method, false, "missing_session_id", StatusCode::BAD_REQUEST);
         return session_error(
             StatusCode::BAD_REQUEST,
             "Missing session ID.",
@@ -702,23 +756,41 @@ where
         );
     };
     if !session_exists(&state.session_manager, &session_id).await {
+        log_route_rejection(
+            &method,
+            true,
+            "invalid_or_expired_session",
+            StatusCode::NOT_FOUND,
+        );
         return session_error(
             StatusCode::NOT_FOUND,
             "Invalid or expired session ID.",
             "Re-initialize with POST /mcp to obtain a new session id.",
         );
     }
-    forward_service(state.stateful_service, req).await
+    forward_service(state.stateful_service, req, "stateful_session").await
 }
 
 async fn forward_service<S>(
     service: StreamableHttpService<S, RecordingSessionManager>,
     req: Request,
+    phase: &'static str,
 ) -> Response
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    service.handle(req).await.map(Body::new)
+    let method = req.method().clone();
+    let has_session_header = session_id_from_headers(req.headers()).is_some();
+    let response = service.handle(req).await.map(Body::new);
+    tracing::debug!(
+        method = %method,
+        has_session_header,
+        phase,
+        status = response.status().as_u16(),
+        close_reason = "rmcp_transport_completed",
+        "streamable HTTP route-bundle request forwarded"
+    );
+    response
 }
 
 async fn health<S>(State(state): State<LocalMcpHttpState<S>>) -> Json<serde_json::Value>
@@ -746,6 +818,13 @@ where
     if let Err(err) =
         validate_request_authority(Some(req.uri()), req.headers(), &state.allowed_hosts)
     {
+        tracing::warn!(
+            method = %req.method(),
+            has_session_header = session_id_from_headers(req.headers()).is_some(),
+            rejection_class = "host_rejected",
+            status = err.status_code().as_u16(),
+            "streamable HTTP route-bundle request rejected"
+        );
         return plain_response(err.status_code(), err.message());
     }
 
@@ -780,6 +859,21 @@ fn session_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn log_route_rejection(
+    method: &Method,
+    has_session_header: bool,
+    rejection_class: &'static str,
+    status: StatusCode,
+) {
+    tracing::warn!(
+        method = %method,
+        has_session_header,
+        rejection_class,
+        status = status.as_u16(),
+        "streamable HTTP route-bundle request rejected"
+    );
 }
 
 fn content_length_exceeds(headers: &http::HeaderMap, limit: usize) -> bool {

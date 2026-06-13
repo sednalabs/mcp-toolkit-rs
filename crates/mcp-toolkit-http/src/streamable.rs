@@ -150,13 +150,25 @@ where
 {
     let method = req.method().clone();
     let session_id = session_id_from_headers(req.headers());
+    let has_session_header = session_id.is_some();
+    tracing::debug!(
+        method = %method,
+        has_session_header,
+        "streamable HTTP request received"
+    );
 
     match method {
         Method::POST => {
             if let Some(session_id) = session_id.clone() {
                 if session_exists(&session_manager, &session_id).await {
-                    return forward_service(service, req).await;
+                    return forward_service(service, req, "stateful_session").await;
                 }
+                log_session_rejection(
+                    &method,
+                    true,
+                    "invalid_or_expired_session",
+                    StatusCode::NOT_FOUND,
+                );
                 return session_error(
                     StatusCode::NOT_FOUND,
                     "Invalid or expired session ID.",
@@ -168,6 +180,12 @@ where
             let bytes = match to_bytes(body, SESSIONLESS_INITIALIZE_BODY_LIMIT).await {
                 Ok(bytes) => bytes,
                 Err(err) if is_body_limit_error(&err) => {
+                    log_session_rejection(
+                        &method,
+                        false,
+                        "sessionless_body_too_large",
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                    );
                     return session_error(
                         StatusCode::PAYLOAD_TOO_LARGE,
                         "Request body too large.",
@@ -175,6 +193,12 @@ where
                     );
                 }
                 Err(_) => {
+                    log_session_rejection(
+                        &method,
+                        false,
+                        "sessionless_body_read_failed",
+                        StatusCode::BAD_REQUEST,
+                    );
                     return session_error(
                         StatusCode::BAD_REQUEST,
                         "Failed to read request body.",
@@ -184,8 +208,14 @@ where
             };
             if is_initialize_payload(&bytes) {
                 let req = Request::from_parts(parts, Body::from(bytes));
-                return forward_service(service, req).await;
+                return forward_service(service, req, "initialize").await;
             }
+            log_session_rejection(
+                &method,
+                false,
+                "missing_session_id",
+                StatusCode::BAD_REQUEST,
+            );
             session_error(
                 StatusCode::BAD_REQUEST,
                 "Missing session ID.",
@@ -194,6 +224,12 @@ where
         }
         Method::GET | Method::DELETE => {
             let Some(session_id) = session_id else {
+                log_session_rejection(
+                    &method,
+                    false,
+                    "missing_session_id",
+                    StatusCode::BAD_REQUEST,
+                );
                 return session_error(
                     StatusCode::BAD_REQUEST,
                     "Missing session ID.",
@@ -201,31 +237,57 @@ where
                 );
             };
             if !session_exists(&session_manager, &session_id).await {
+                log_session_rejection(
+                    &method,
+                    true,
+                    "invalid_or_expired_session",
+                    StatusCode::NOT_FOUND,
+                );
                 return session_error(
                     StatusCode::NOT_FOUND,
                     "Invalid or expired session ID.",
                     "Re-initialize with POST /mcp to obtain a new session id.",
                 );
             }
-            forward_service(service, req).await
+            forward_service(service, req, "stateful_session").await
         }
-        _ => session_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Method not allowed.",
-            "Use POST /mcp to initialize, then reuse the session id for later requests.",
-        ),
+        _ => {
+            log_session_rejection(
+                &method,
+                has_session_header,
+                "method_not_allowed",
+                StatusCode::METHOD_NOT_ALLOWED,
+            );
+            session_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Method not allowed.",
+                "Use POST /mcp to initialize, then reuse the session id for later requests.",
+            )
+        }
     }
 }
 
 async fn forward_service<S, M>(
     service: StreamableHttpService<S, M>,
     req: Request<Body>,
+    phase: &'static str,
 ) -> Response<Body>
 where
     S: rmcp::Service<RoleServer> + Send + 'static,
     M: SessionManager + Send + Sync + 'static,
 {
-    service.handle(req).await.map(Body::new)
+    let method = req.method().clone();
+    let has_session_header = session_id_from_headers(req.headers()).is_some();
+    let response = service.handle(req).await.map(Body::new);
+    tracing::debug!(
+        method = %method,
+        has_session_header,
+        phase,
+        status = response.status().as_u16(),
+        close_reason = "rmcp_transport_completed",
+        "streamable HTTP request forwarded"
+    );
+    response
 }
 
 fn is_body_limit_error(err: &axum::Error) -> bool {
@@ -239,6 +301,21 @@ fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn log_session_rejection(
+    method: &Method,
+    has_session_header: bool,
+    rejection_class: &'static str,
+    status: StatusCode,
+) {
+    tracing::warn!(
+        method = %method,
+        has_session_header,
+        rejection_class,
+        status = status.as_u16(),
+        "streamable HTTP request rejected"
+    );
 }
 
 fn is_initialize_payload(body: &[u8]) -> bool {
