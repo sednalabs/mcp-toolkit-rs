@@ -338,10 +338,13 @@ fn normalize_mcp_apps_security_schemes_in_tools_array(tools: &mut Value) -> usiz
     let Value::Array(tools) = tools else {
         return 0;
     };
-    tools
-        .iter_mut()
-        .filter(|tool| normalize_mcp_apps_security_schemes_in_tool_descriptor(tool))
-        .count()
+    tools.iter_mut().fold(0, |count, tool| {
+        if normalize_mcp_apps_security_schemes_in_tool_descriptor(tool) {
+            count + 1
+        } else {
+            count
+        }
+    })
 }
 
 fn security_schemes_value<I>(schemes: I) -> Value
@@ -513,10 +516,7 @@ mod tests {
             descriptor["_meta"]["securitySchemes"],
             descriptor["securitySchemes"]
         );
-        assert_eq!(
-            descriptor["_meta"]["ui"],
-            json!({"visibility": ["model"]})
-        );
+        assert_eq!(descriptor["_meta"]["ui"], json!({"visibility": ["model"]}));
     }
 
     #[test]
