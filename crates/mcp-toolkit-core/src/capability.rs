@@ -839,10 +839,7 @@ mod tests {
             .to_mcp_apps_tool_descriptor()
             .expect("apps tool descriptor");
 
-        assert_eq!(
-            value["securitySchemes"],
-            json!([{"type": "noauth"}])
-        );
+        assert_eq!(value["securitySchemes"], json!([{"type": "noauth"}]));
         assert_eq!(value["_meta"]["securitySchemes"], value["securitySchemes"]);
     }
 

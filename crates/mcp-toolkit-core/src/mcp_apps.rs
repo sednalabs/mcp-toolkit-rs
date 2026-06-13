@@ -257,7 +257,12 @@ fn security_schemes_value<I>(schemes: I) -> Value
 where
     I: IntoIterator<Item = McpAppsSecurityScheme>,
 {
-    Value::Array(schemes.into_iter().map(|scheme| scheme.to_value()).collect())
+    Value::Array(
+        schemes
+            .into_iter()
+            .map(|scheme| scheme.to_value())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -265,8 +270,8 @@ mod tests {
     use super::{
         mcp_apps_tool_descriptor_with_security_schemes, with_mcp_apps_oauth_security_scheme,
         with_mcp_apps_security_schemes, McpAppsOAuthSecurityScheme, McpAppsSecurityScheme,
-        MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE,
-        MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE, MCP_APPS_SECURITY_SCHEMES_META_KEY,
+        MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE, MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE,
+        MCP_APPS_SECURITY_SCHEMES_META_KEY,
     };
     use rmcp::model::{JsonObject, Meta, Tool};
     use serde_json::json;
