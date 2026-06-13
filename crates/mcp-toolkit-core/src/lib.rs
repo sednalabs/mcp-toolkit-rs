@@ -27,6 +27,7 @@
 //! ## References
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io)
 
+pub mod capability;
 pub mod mcp_apps;
 pub mod notifications;
 pub mod openai_tool_search;

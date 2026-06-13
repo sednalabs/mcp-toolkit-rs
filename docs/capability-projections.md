@@ -1,0 +1,113 @@
+# Shared Capability Projections
+
+This note scopes the generic capability model that lets toolkit consumers define
+one operation and project it into multiple AI-client contracts.
+
+## Rationale
+
+MCP servers increasingly need more than one client-facing surface. A server may
+publish MCP tools for native clients and also publish an OpenAPI contract for
+HTTP-native clients. If each surface hand-maintains names, schemas, scopes,
+safety hints, and audit identifiers, the contracts drift.
+
+The toolkit should provide reusable substrate for that shared metadata without
+absorbing a service's domain model, backend clients, deployment topology, or
+operator workflow.
+
+## Ownership
+
+`mcp-toolkit-core` owns the generic data model:
+
+- canonical capability identity;
+- model-facing title and description;
+- JSON Schema input and output contracts;
+- required OAuth scope metadata;
+- safety hints that can be projected into MCP annotations;
+- audit event identity;
+- examples suitable for docs and contract fixtures.
+
+Projection helpers may turn the same capability into:
+
+- `rmcp::model::Tool` values for MCP hosts;
+- OpenAPI operation objects for REST/OpenAPI hosts;
+- OpenAPI OAuth 2 authorization-code security scheme metadata from
+  caller-supplied endpoint URLs and scopes;
+- parity fixtures that compare the projected scopes, schemas, and safety
+  metadata.
+
+## Non-Ownership
+
+The toolkit does not own:
+
+- service-specific tool handlers;
+- backend clients;
+- database or data-access semantics;
+- deployment-specific hosts, tunnels, client IDs, or secrets;
+- product-specific domain vocabulary;
+- authorization decisions beyond carrying required scope metadata.
+
+Those remain in the consuming server or application repository. The toolkit
+helps keep the contracts aligned; it does not decide what a service is allowed
+to do.
+
+## Public API Boundary
+
+The first public shape is deliberately small:
+
+- `Capability` describes one operation.
+- `CapabilityRegistry` stores a deduplicated list of operations.
+- `CapabilitySafety` carries read-only, destructive, idempotent, and open-world
+  hints.
+- `ScopePolicy` carries normalized OAuth scope names.
+- `AuditPolicy` carries a stable event name for logs and downstream audit.
+- `OpenApiOAuth2AuthorizationCodeSecurityScheme` builds generic OpenAPI OAuth 2
+  security metadata when callers provide their own authorization and token URLs.
+- Projection helpers produce MCP and OpenAPI operation metadata without
+  registering handlers.
+
+The API should remain generic. Prefer names such as capability, projection,
+scope policy, and safety hints. Avoid crate names or public promises that imply
+ownership of a vendor SDK unless the implementation actually covers that
+contract.
+
+## Adapter Strategy
+
+Capability metadata is canonical, but adapters can differ:
+
+- MCP projection emits tool metadata and annotations.
+- OpenAPI projection emits operation metadata, request/response schemas, and
+  security requirements.
+- OAuth security scheme projection emits only standard OpenAPI metadata; callers
+  still choose real authorization URLs, token URLs, public hosts, client IDs,
+  and client secrets.
+- Service repositories decide route paths, handlers, request execution, and
+  deployment settings.
+
+The same capability can therefore serve a native MCP client and an HTTP/OpenAPI
+client while preserving the same schemas, required scopes, safety class, and
+audit identity.
+
+## Validation
+
+Every projection helper should have whole-object tests that prove:
+
+- required scopes are preserved across MCP metadata and OpenAPI security;
+- read-only and destructive hints project to MCP annotations;
+- input and output schemas are preserved;
+- duplicate capability identifiers are rejected by registries;
+- OpenAPI security scheme names are required when scoped capabilities are
+  projected;
+- OAuth 2 authorization-code security scheme metadata preserves caller URLs and
+  scopes;
+- generated OpenAPI operation identifiers are stable.
+
+Hosted validation remains the merge gate for public toolkit changes. Local test
+commands are not the shared proof surface for this repository.
+
+## References
+
+- `docs/toolkit-boundary.md`
+- `docs/golden-path.md`
+- `docs/server-composition-layer.md`
+- OpenAI GPT Actions documentation
+- OpenAI Apps SDK MCP server documentation
