@@ -3,13 +3,13 @@ pub(crate) use crate::auth_context_ref_from_parts;
 pub(crate) use crate::claims::extract_scopes;
 pub(crate) use crate::{
     AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext, Authenticator,
-    ClientAuthMethod,
+    AuthSecurityProfile, ClientAuthMethod,
 };
 
 mod tests {
     use super::{
         auth_context_from_parts, auth_context_ref_from_parts, AuthConfig, AuthContext, AuthError,
-        AuthMode, AuthRequestContext, Authenticator, ClientAuthMethod,
+        AuthMode, AuthRequestContext, AuthSecurityProfile, Authenticator, ClientAuthMethod,
     };
     use axum::extract::State;
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode};
@@ -470,12 +470,53 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn default_bearer_context_rejects_replayed_jti() {
+    async fn default_and_strong_profiles_allow_reusable_bearer_tokens() {
+        let mut configs = vec![("default", AuthConfig::default())];
+        configs.extend([
+            (
+                "L2Strong",
+                AuthConfig::with_profile(AuthSecurityProfile::L2Strong),
+            ),
+            (
+                "L3Boundary",
+                AuthConfig::with_profile(AuthSecurityProfile::L3Boundary),
+            ),
+        ]);
+
+        for (name, mut config) in configs {
+            config.mode = AuthMode::Delegation;
+            config.delegation_secret = Some("test-secret".to_string());
+            config.delegation_issuer = "issuer".to_string();
+            config.delegation_audience = "audience".to_string();
+
+            let auth = Authenticator::new(config).expect("auth");
+            let token = token_with_jti(&format!("{name}-streamable"));
+
+            auth.authenticate_token_with_context(
+                &HeaderMap::new(),
+                &token,
+                AuthRequestContext::bearer_only(),
+            )
+            .await
+            .expect("first use should pass");
+            auth.authenticate_token_with_context(
+                &HeaderMap::new(),
+                &token,
+                AuthRequestContext::bearer_only(),
+            )
+            .await
+            .expect("second use should also pass");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_bearer_jti_replay_guard_rejects_replayed_jti() {
         let auth = Authenticator::new(AuthConfig {
             mode: AuthMode::Delegation,
             delegation_secret: Some("test-secret".to_string()),
             delegation_issuer: "issuer".to_string(),
             delegation_audience: "audience".to_string(),
+            jti_enforce_bearer: true,
             ..Default::default()
         })
         .expect("auth");

@@ -120,7 +120,7 @@ impl AuthSecurityProfile {
                 config.introspection_force = false;
                 config.jti_ttl_s = 300.0;
                 config.jti_cache_size = 5000;
-                config.jti_enforce_bearer = true;
+                config.jti_enforce_bearer = false;
             }
             AuthSecurityProfile::L3Boundary => {
                 config.mode = AuthMode::Introspection;
@@ -129,7 +129,7 @@ impl AuthSecurityProfile {
                 config.introspection_force = false;
                 config.jti_ttl_s = 300.0;
                 config.jti_cache_size = 5000;
-                config.jti_enforce_bearer = true;
+                config.jti_enforce_bearer = false;
             }
         }
     }
@@ -289,7 +289,7 @@ impl Default for AuthConfig {
             delegation_audience: "mcp-toolkit".to_string(),
             jti_ttl_s: 300.0,
             jti_cache_size: 5000,
-            jti_enforce_bearer: true,
+            jti_enforce_bearer: false,
             clock_skew_s: 30.0,
         }
     }
@@ -317,7 +317,7 @@ mod profile_tests {
         assert!(cfg.strict_oauth);
         assert_eq!(cfg.jti_ttl_s, 300.0);
         assert_eq!(cfg.jti_cache_size, 5000);
-        assert!(cfg.jti_enforce_bearer);
+        assert!(!cfg.jti_enforce_bearer);
         assert_eq!(cfg.introspection_cache_ttl_s, 60.0);
     }
 
@@ -328,16 +328,16 @@ mod profile_tests {
         assert!(cfg.strict_oauth);
         assert_eq!(cfg.jti_ttl_s, 300.0);
         assert_eq!(cfg.jti_cache_size, 5000);
-        assert!(cfg.jti_enforce_bearer);
+        assert!(!cfg.jti_enforce_bearer);
         assert_eq!(cfg.introspection_cache_ttl_s, 30.0);
     }
 
     #[test]
-    fn default_config_enforces_bearer_jti_replay_guard() {
+    fn default_config_allows_reusable_bearer_tokens() {
         let cfg = AuthConfig::default();
         assert_eq!(cfg.jti_ttl_s, 300.0);
         assert_eq!(cfg.jti_cache_size, 5000);
-        assert!(cfg.jti_enforce_bearer);
+        assert!(!cfg.jti_enforce_bearer);
     }
 
     #[test]

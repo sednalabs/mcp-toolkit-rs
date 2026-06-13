@@ -46,8 +46,10 @@ security level explicit so new services do not drift or over/under-harden.
   change, config updates) and IP-sensitive content.
 - **Controls:**
   - JWKS validation + **optional introspection** (revocation-aware).
-  - JTI replay protection for bearer tokens by default, with sender-constrained
-    tokens preferred when available (DPoP/mTLS).
+  - JTI replay protection **only for sender-constrained tokens** (DPoP/mTLS);
+    bearer tokens remain reusable by design unless explicitly configured.
+  - Streamable HTTP clients normally reuse one bearer token across initialize,
+    initialized notification, and follow-up requests.
   - Client allowlists (`azp` / client_id) and strict token type where supported.
 - **Tooling fit:** `AuthMode::Jwks` + introspection cache + replay guard + allowlists.
 
