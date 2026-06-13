@@ -9,7 +9,7 @@ It demonstrates:
 - explicit bind safety for non-loopback listeners;
 - host allowlists for DNS rebinding defense;
 - `AuthSurfaceBuilder` with public health checks and `/mcp` bearer challenges;
-- device-code capable OAuth metadata;
+- device-code capable OAuth metadata for headless MCP client login;
 - route-level auth-surface contract tests;
 - tool schema snapshots for exported MCP tools.
 
@@ -35,6 +35,23 @@ When copying the template into a new repository, replace the path dependencies
 in `Cargo.toml` with Git dependencies, configure a real HTTPS
 `EXAMPLE_MCP_PUBLIC_BASE_URL`, and use a production token validator instead of
 the delegation-mode development skeleton.
+
+## Headless MCP Device Auth
+
+The template publishes OAuth metadata that can include a device authorization
+endpoint. MCP clients can use that metadata to authenticate from SSH sessions,
+remote shells, CI jobs, and other headless environments where a localhost
+browser callback is inconvenient.
+
+For [Codex Sedna](https://github.com/sednalabs/codex), configure the server in
+`config.toml`, start the hosted MCP server, then run:
+
+```bash
+codex mcp login <server-name> --device-auth
+```
+
+Codex prints the verification URL and user code supplied by the authorization
+server, then stores the resulting MCP credentials for that configured server.
 
 ## Safety Defaults
 
