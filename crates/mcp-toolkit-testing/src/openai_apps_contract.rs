@@ -129,10 +129,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
     /// Use this only when the connector is intentionally configured for a
     /// narrower token endpoint auth method set.
     #[must_use]
-    pub fn with_accepted_token_endpoint_auth_methods(
-        mut self,
-        methods: &'a [&'a str],
-    ) -> Self {
+    pub fn with_accepted_token_endpoint_auth_methods(mut self, methods: &'a [&'a str]) -> Self {
         self.accepted_token_endpoint_auth_methods = methods;
         self
     }
@@ -171,11 +168,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             Some(self.resource_url),
             "protected-resource metadata must publish the canonical MCP resource URL"
         );
-        assert_string_array_equals(
-            payload,
-            "authorization_servers",
-            self.authorization_servers,
-        );
+        assert_string_array_equals(payload, "authorization_servers", self.authorization_servers);
         assert_string_array_contains_all(payload, "scopes_supported", self.required_scopes);
     }
 
@@ -242,17 +235,14 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
     /// This assertion guards the metadata ChatGPT uses before deciding whether
     /// tool-level OAuth is available for a tool.
     pub fn assert_tool_descriptor(&self, descriptor: &Value) {
-        let security_schemes =
-            required_array(descriptor, MCP_APPS_SECURITY_SCHEMES_META_KEY);
+        let security_schemes = required_array(descriptor, MCP_APPS_SECURITY_SCHEMES_META_KEY);
         let meta = descriptor
             .get("_meta")
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("tool descriptor must include _meta object"));
         let meta_security_schemes = meta
             .get(MCP_APPS_SECURITY_SCHEMES_META_KEY)
-            .unwrap_or_else(|| {
-                panic!("tool descriptor must mirror securitySchemes into _meta")
-            });
+            .unwrap_or_else(|| panic!("tool descriptor must mirror securitySchemes into _meta"));
         assert_eq!(
             meta_security_schemes,
             &Value::Array(security_schemes.to_vec()),
@@ -305,7 +295,11 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
                 !oauth_scopes.is_empty(),
                 "tool descriptor must include oauth2 security for scoped tools"
             );
-            assert_contains_all(&oauth_scopes, self.required_scopes, "tool descriptor scopes");
+            assert_contains_all(
+                &oauth_scopes,
+                self.required_scopes,
+                "tool descriptor scopes",
+            );
         }
     }
 
@@ -351,15 +345,16 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             .map(String::as_str)
             .unwrap_or_else(|| panic!("WWW-Authenticate challenge must include error"));
         assert!(
-            matches!(error, "invalid_request" | "invalid_token" | "insufficient_scope"),
+            matches!(
+                error,
+                "invalid_request" | "invalid_token" | "insufficient_scope"
+            ),
             "WWW-Authenticate error must be an RFC 6750 bearer error"
         );
         let error_description = params
             .get("error_description")
             .map(String::as_str)
-            .unwrap_or_else(|| {
-                panic!("WWW-Authenticate challenge must include error_description")
-            });
+            .unwrap_or_else(|| panic!("WWW-Authenticate challenge must include error_description"));
         assert!(
             !error_description.trim().is_empty(),
             "WWW-Authenticate error_description must be non-empty"
@@ -371,7 +366,11 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
                 .map(String::as_str)
                 .unwrap_or_else(|| panic!("WWW-Authenticate challenge must include scope"));
             let scope_values = split_space_delimited(scope_hint);
-            assert_contains_all(&scope_values, self.required_scopes, "WWW-Authenticate scope");
+            assert_contains_all(
+                &scope_values,
+                self.required_scopes,
+                "WWW-Authenticate scope",
+            );
         }
     }
 
@@ -444,7 +443,9 @@ fn assert_string_array_contains_all(payload: &Value, key: &str, expected: &[&str
 fn assert_contains_all(actual: &[&str], expected: &[&str], label: &str) {
     for expected_value in expected {
         assert!(
-            actual.iter().any(|actual_value| actual_value == expected_value),
+            actual
+                .iter()
+                .any(|actual_value| actual_value == expected_value),
             "{label} missing required value {expected_value:?}"
         );
     }
@@ -721,11 +722,11 @@ mod tests {
 
     #[test]
     fn dynamic_client_registration_requires_registration_endpoint() {
-        let profile = OpenAiAppsConformanceProfile::new(
-            "https://example.test/mcp",
-            AUTHORIZATION_SERVERS,
-        )
-        .with_client_registration(OpenAiAppsClientRegistrationMode::DynamicClientRegistration);
+        let profile =
+            OpenAiAppsConformanceProfile::new("https://example.test/mcp", AUTHORIZATION_SERVERS)
+                .with_client_registration(
+                    OpenAiAppsClientRegistrationMode::DynamicClientRegistration,
+                );
         let metadata = json!({
             "issuer": "https://issuer.example",
             "authorization_endpoint": "https://issuer.example/oauth/authorize",
