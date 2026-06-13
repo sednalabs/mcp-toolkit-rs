@@ -258,6 +258,95 @@ where
     Ok(Value::Object(descriptor))
 }
 
+/// Ensures an Apps tool descriptor has both primary and `_meta` security schemes.
+///
+/// Some MCP SDK model types can carry only `_meta["securitySchemes"]`, while
+/// Apps clients read the primary descriptor-level `securitySchemes` field. This
+/// helper promotes either location to both locations without changing unrelated
+/// descriptor fields.
+///
+/// Returns `true` when the descriptor was changed.
+pub fn normalize_mcp_apps_security_schemes_in_tool_descriptor(descriptor: &mut Value) -> bool {
+    let Value::Object(object) = descriptor else {
+        return false;
+    };
+    let primary_security_schemes = object.get(MCP_APPS_SECURITY_SCHEMES_META_KEY).cloned();
+    let meta_security_schemes = object
+        .get("_meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get(MCP_APPS_SECURITY_SCHEMES_META_KEY))
+        .cloned();
+    let Some(security_schemes) = primary_security_schemes.or(meta_security_schemes) else {
+        return false;
+    };
+
+    let mut changed = false;
+    if object.get(MCP_APPS_SECURITY_SCHEMES_META_KEY) != Some(&security_schemes) {
+        object.insert(
+            MCP_APPS_SECURITY_SCHEMES_META_KEY.to_string(),
+            security_schemes.clone(),
+        );
+        changed = true;
+    }
+
+    let meta = object
+        .entry("_meta".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !meta.is_object() {
+        *meta = Value::Object(Map::new());
+        changed = true;
+    }
+    if let Value::Object(meta_object) = meta {
+        if meta_object.get(MCP_APPS_SECURITY_SCHEMES_META_KEY) != Some(&security_schemes) {
+            meta_object.insert(
+                MCP_APPS_SECURITY_SCHEMES_META_KEY.to_string(),
+                security_schemes,
+            );
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+/// Normalizes Apps security schemes in an MCP `tools/list` JSON-RPC payload.
+///
+/// This accepts a single JSON-RPC response, a JSON-RPC batch, or a direct
+/// object containing a `tools` array. It returns the number of tool descriptors
+/// changed.
+pub fn normalize_mcp_apps_security_schemes_in_tools_list_payload(payload: &mut Value) -> usize {
+    match payload {
+        Value::Array(items) => items
+            .iter_mut()
+            .map(normalize_mcp_apps_security_schemes_in_tools_list_message)
+            .sum(),
+        _ => normalize_mcp_apps_security_schemes_in_tools_list_message(payload),
+    }
+}
+
+fn normalize_mcp_apps_security_schemes_in_tools_list_message(message: &mut Value) -> usize {
+    if let Some(tools) = message.pointer_mut("/result/tools") {
+        return normalize_mcp_apps_security_schemes_in_tools_array(tools);
+    }
+    if let Some(tools) = message.get_mut("tools") {
+        return normalize_mcp_apps_security_schemes_in_tools_array(tools);
+    }
+    0
+}
+
+fn normalize_mcp_apps_security_schemes_in_tools_array(tools: &mut Value) -> usize {
+    let Value::Array(tools) = tools else {
+        return 0;
+    };
+    tools.iter_mut().fold(0, |count, tool| {
+        if normalize_mcp_apps_security_schemes_in_tool_descriptor(tool) {
+            count + 1
+        } else {
+            count
+        }
+    })
+}
+
 fn security_schemes_value<I>(schemes: I) -> Value
 where
     I: IntoIterator<Item = McpAppsSecurityScheme>,
@@ -273,10 +362,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        mcp_apps_tool_descriptor_with_security_schemes, with_mcp_apps_oauth_security_scheme,
-        with_mcp_apps_security_schemes, McpAppsOAuthSecurityScheme, McpAppsSecurityScheme,
-        MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE, MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE,
-        MCP_APPS_SECURITY_SCHEMES_META_KEY,
+        mcp_apps_tool_descriptor_with_security_schemes,
+        normalize_mcp_apps_security_schemes_in_tool_descriptor,
+        normalize_mcp_apps_security_schemes_in_tools_list_payload,
+        with_mcp_apps_oauth_security_scheme, with_mcp_apps_security_schemes,
+        McpAppsOAuthSecurityScheme, McpAppsSecurityScheme, MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE,
+        MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE, MCP_APPS_SECURITY_SCHEMES_META_KEY,
     };
     use rmcp::model::{JsonObject, Meta, Tool};
     use serde_json::json;
@@ -399,5 +490,153 @@ mod tests {
             descriptor["_meta"]["ui"],
             json!({"resourceUri": "ui://search.html"})
         );
+    }
+
+    #[test]
+    fn normalizes_tool_descriptor_from_meta_security_schemes() {
+        let mut descriptor = json!({
+            "name": "items.search",
+            "_meta": {
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["openid", "profile", "items:read"]}
+                ],
+                "ui": {"visibility": ["model"]}
+            }
+        });
+
+        assert!(normalize_mcp_apps_security_schemes_in_tool_descriptor(
+            &mut descriptor
+        ));
+
+        assert_eq!(
+            descriptor["securitySchemes"],
+            json!([{"type": "oauth2", "scopes": ["openid", "profile", "items:read"]}])
+        );
+        assert_eq!(
+            descriptor["_meta"]["securitySchemes"],
+            descriptor["securitySchemes"]
+        );
+        assert_eq!(descriptor["_meta"]["ui"], json!({"visibility": ["model"]}));
+    }
+
+    #[test]
+    fn normalizes_tool_descriptor_from_primary_security_schemes() {
+        let mut descriptor = json!({
+            "name": "items.search",
+            "securitySchemes": [
+                {"type": "oauth2", "scopes": ["items:read"]}
+            ]
+        });
+
+        assert!(normalize_mcp_apps_security_schemes_in_tool_descriptor(
+            &mut descriptor
+        ));
+
+        assert_eq!(
+            descriptor["_meta"]["securitySchemes"],
+            descriptor["securitySchemes"]
+        );
+    }
+
+    #[test]
+    fn normalizes_json_rpc_tools_list_response_security_schemes() {
+        let mut payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tools": [
+                    {
+                        "name": "items.search",
+                        "_meta": {
+                            "securitySchemes": [
+                                {"type": "oauth2", "scopes": ["items:read"]}
+                            ]
+                        }
+                    },
+                    {
+                        "name": "items.public"
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(
+            normalize_mcp_apps_security_schemes_in_tools_list_payload(&mut payload),
+            1
+        );
+
+        assert_eq!(
+            payload["result"]["tools"][0]["securitySchemes"],
+            json!([{"type": "oauth2", "scopes": ["items:read"]}])
+        );
+        assert!(payload["result"]["tools"][1]["securitySchemes"].is_null());
+    }
+
+    #[test]
+    fn normalizes_batch_tools_list_responses() {
+        let mut payload = json!([
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "items.search",
+                            "_meta": {
+                                "securitySchemes": [
+                                    {"type": "oauth2", "scopes": ["items:read"]}
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "items.lookup",
+                            "securitySchemes": [
+                                {"type": "oauth2", "scopes": ["items:lookup"]}
+                            ]
+                        }
+                    ]
+                }
+            }
+        ]);
+
+        assert_eq!(
+            normalize_mcp_apps_security_schemes_in_tools_list_payload(&mut payload),
+            2
+        );
+
+        assert_eq!(
+            payload[0]["result"]["tools"][0]["securitySchemes"],
+            payload[0]["result"]["tools"][0]["_meta"]["securitySchemes"]
+        );
+        assert_eq!(
+            payload[1]["result"]["tools"][0]["securitySchemes"],
+            payload[1]["result"]["tools"][0]["_meta"]["securitySchemes"]
+        );
+    }
+
+    #[test]
+    fn leaves_non_tools_list_payload_unchanged() {
+        let mut payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "capabilities": {}
+            }
+        });
+        let original = payload.clone();
+
+        assert_eq!(
+            normalize_mcp_apps_security_schemes_in_tools_list_payload(&mut payload),
+            0
+        );
+        assert_eq!(payload, original);
     }
 }
