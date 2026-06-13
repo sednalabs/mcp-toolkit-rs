@@ -16,7 +16,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit` | Umbrella crate with optional feature groups. |
 | `mcp-toolkit-core` | Protocol-facing helpers, notifications, and tool inventory types. |
 | `mcp-toolkit-auth` | Bearer auth, token validation, replay protection, and auth-surface helpers. |
-| `mcp-toolkit-http` | OAuth/PRM metadata helpers plus optional streamable HTTP session support. |
+| `mcp-toolkit-http` | OAuth/PRM metadata helpers, device-authorization metadata, and optional streamable HTTP session support. |
 | `mcp-toolkit-observability` | Redaction, sanitization, tracing bridge, metrics facade, and optional OTel helpers. |
 | `mcp-toolkit-policy-core` | Pure policy decisions, claims helpers, route/scope checks, and SQL read-only classification. |
 | `mcp-toolkit-policy-runtime` | Runtime policy authority adapters and capability guard helpers. |
@@ -91,7 +91,8 @@ stable public surface:
    request fragment, a richer documentation/resource template, and a local
    `allowed_tools` discovery envelope.
 4. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
-   MCP over HTTP with OAuth discovery and Protected Resource Metadata.
+   MCP over HTTP with OAuth discovery, Protected Resource Metadata, and
+   device-authorization metadata for headless MCP client login.
 5. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle.
@@ -102,8 +103,8 @@ stable public surface:
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for
 stdio intent tools and `templates/hosted-http-auth-server` for hosted HTTP with
-OAuth Protected Resource Metadata, bearer challenges, host guarding, schema
-snapshots, and contract tests.
+OAuth Protected Resource Metadata, headless device-auth metadata, bearer
+challenges, host guarding, schema snapshots, and contract tests.
 
 For existing service adoption, migrate one runtime seam at a time and prove the
 before/after contract through GitHub-hosted validation. The checklist in
