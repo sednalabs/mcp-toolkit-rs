@@ -25,6 +25,7 @@
 //!   contract they target.
 
 use rmcp::model::{Meta, Tool};
+use serde::ser::Error as _;
 use serde_json::{json, Map, Value};
 
 /// MCP app `_meta` key for tool OAuth security schemes.
@@ -222,7 +223,11 @@ where
 {
     let mut descriptor = match serde_json::to_value(tool)? {
         Value::Object(object) => object,
-        _ => Map::new(),
+        _ => {
+            return Err(serde_json::Error::custom(
+                "expected Tool to serialize to a JSON object",
+            ));
+        }
     };
     let security_schemes = security_schemes_value(schemes);
 
