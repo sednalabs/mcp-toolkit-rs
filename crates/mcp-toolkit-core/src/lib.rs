@@ -28,6 +28,7 @@
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io)
 
 pub mod notifications;
+pub mod openai_apps;
 pub mod openai_tool_search;
 pub mod rmcp_models;
 pub mod tool_inventory;
