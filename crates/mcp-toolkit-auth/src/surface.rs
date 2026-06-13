@@ -38,7 +38,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use futures_util::future::BoxFuture;
 use http::header::{CONTENT_TYPE, LOCATION, WWW_AUTHENTICATE};
-use http::{Request, Response, StatusCode};
+use http::{HeaderMap, Request, Response, StatusCode};
 use serde::Serialize;
 use thiserror::Error;
 use tower::Layer;
@@ -818,6 +818,43 @@ pub struct AuthSurfaceContext {
     pub issuer: String,
 }
 
+/// Sanitized auth failure event emitted by [`AuthSurfaceLayer`].
+///
+/// # Errors
+/// * This type does not emit errors directly.
+///
+/// # Security
+/// * `headers` may contain an `Authorization` header. Observers must never log
+///   raw credentials; derive redacted token hints instead.
+///
+/// # Panics
+/// * None.
+pub struct AuthFailureEvent<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub resource_path: &'a str,
+    pub resource_url: &'a str,
+    pub issuer: &'a str,
+    pub realm: &'a str,
+    pub error: &'a AuthError,
+    pub headers: &'a HeaderMap,
+}
+
+/// Observer hook for auth surface failures.
+///
+/// # Errors
+/// * Implementations should handle their own failures and must not panic.
+///
+/// # Security
+/// * Implementations must treat request headers as sensitive and avoid logging
+///   bearer tokens, cookies, or other raw credentials.
+///
+/// # Panics
+/// * This trait does not require panics; implementations should remain panic-free.
+pub trait AuthFailureObserver: Send + Sync + 'static {
+    fn observe_auth_failure(&self, event: AuthFailureEvent<'_>);
+}
+
 /// Tower layer that wraps an HTTP service with OAuth discovery + auth enforcement.
 ///
 /// # Errors
@@ -831,6 +868,7 @@ pub struct AuthSurfaceContext {
 #[derive(Clone)]
 pub struct AuthSurfaceLayer {
     registry: Arc<IssuerRegistry>,
+    auth_failure_observer: Option<Arc<dyn AuthFailureObserver>>,
 }
 
 impl AuthSurfaceLayer {
@@ -845,8 +883,26 @@ impl AuthSurfaceLayer {
     /// # Panics
     /// * None.
     pub fn new(registry: IssuerRegistry) -> Self {
+        Self::new_with_observer(registry, None)
+    }
+
+    /// Create a new auth surface layer with an auth failure observer.
+    ///
+    /// # Errors
+    /// * Does not return errors.
+    ///
+    /// # Security
+    /// * The observer receives request headers and must not log raw credentials.
+    ///
+    /// # Panics
+    /// * None.
+    pub fn new_with_observer(
+        registry: IssuerRegistry,
+        auth_failure_observer: Option<Arc<dyn AuthFailureObserver>>,
+    ) -> Self {
         Self {
             registry: Arc::new(registry),
+            auth_failure_observer,
         }
     }
 
@@ -864,6 +920,27 @@ impl AuthSurfaceLayer {
         Self::from_config_with_unmatched_route_policy(config, UnmatchedRoutePolicy::Deny)
     }
 
+    /// Build a new auth surface layer from config with an auth failure observer.
+    ///
+    /// # Errors
+    /// * Returns `AuthSurfaceError` when the registry fails validation.
+    ///
+    /// # Security
+    /// * The observer receives request headers and must not log raw credentials.
+    ///
+    /// # Panics
+    /// * None.
+    pub fn from_config_with_observer(
+        config: AuthSurfaceConfig,
+        auth_failure_observer: Arc<dyn AuthFailureObserver>,
+    ) -> Result<Self, AuthSurfaceError> {
+        Self::from_config_with_unmatched_route_policy_and_observer(
+            config,
+            UnmatchedRoutePolicy::Deny,
+            Some(auth_failure_observer),
+        )
+    }
+
     /// Build a new auth surface layer from config with an explicit unmatched-route policy.
     ///
     /// # Errors
@@ -878,10 +955,32 @@ impl AuthSurfaceLayer {
         config: AuthSurfaceConfig,
         unmatched_route_policy: UnmatchedRoutePolicy,
     ) -> Result<Self, AuthSurfaceError> {
-        Ok(Self::new(IssuerRegistry::new_with_unmatched_route_policy(
+        Self::from_config_with_unmatched_route_policy_and_observer(
             config,
             unmatched_route_policy,
-        )?))
+            None,
+        )
+    }
+
+    /// Build a new auth surface layer from config with explicit route policy and observer.
+    ///
+    /// # Errors
+    /// * Returns `AuthSurfaceError` when the registry fails validation.
+    ///
+    /// # Security
+    /// * The observer receives request headers and must not log raw credentials.
+    ///
+    /// # Panics
+    /// * None.
+    pub fn from_config_with_unmatched_route_policy_and_observer(
+        config: AuthSurfaceConfig,
+        unmatched_route_policy: UnmatchedRoutePolicy,
+        auth_failure_observer: Option<Arc<dyn AuthFailureObserver>>,
+    ) -> Result<Self, AuthSurfaceError> {
+        Ok(Self::new_with_observer(
+            IssuerRegistry::new_with_unmatched_route_policy(config, unmatched_route_policy)?,
+            auth_failure_observer,
+        ))
     }
 }
 
@@ -892,6 +991,7 @@ impl<S> Layer<S> for AuthSurfaceLayer {
         AuthSurfaceService {
             inner,
             registry: self.registry.clone(),
+            auth_failure_observer: self.auth_failure_observer.clone(),
         }
     }
 }
@@ -910,6 +1010,7 @@ impl<S> Layer<S> for AuthSurfaceLayer {
 pub struct AuthSurfaceService<S> {
     inner: S,
     registry: Arc<IssuerRegistry>,
+    auth_failure_observer: Option<Arc<dyn AuthFailureObserver>>,
 }
 
 impl<S> tower::Service<Request<Body>> for AuthSurfaceService<S>
@@ -931,6 +1032,7 @@ where
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
         let path = normalize_request_path(req.uri().path());
         let registry = self.registry.clone();
+        let auth_failure_observer = self.auth_failure_observer.clone();
 
         if let Some(route) = registry.well_known_route(&path) {
             let response = well_known_response(&route);
@@ -944,6 +1046,7 @@ where
 
         if let Some(entry) = registry.match_entry(&path) {
             let headers = req.headers().clone();
+            let method = req.method().as_str().to_string();
             let allowed_client_ids = entry.allowed_client_ids.clone();
             let realm = entry.realm.clone();
             let resource_metadata_url = entry.resource_metadata_url.clone();
@@ -965,6 +1068,19 @@ where
                                         .with_status(StatusCode::FORBIDDEN.as_u16())
                                         .with_code("AUTH_CLIENT_NOT_ALLOWED")
                                         .with_reason("client_not_allowed");
+                                observe_auth_failure(
+                                    auth_failure_observer.as_deref(),
+                                    AuthFailureEvent {
+                                        method: &method,
+                                        path: &path,
+                                        resource_path: &resource_path,
+                                        resource_url: &resource_url,
+                                        issuer: &issuer,
+                                        realm: &realm,
+                                        error: &err,
+                                        headers: &headers,
+                                    },
+                                );
                                 return Ok(auth_error_response(
                                     &realm,
                                     &resource_metadata_url,
@@ -982,12 +1098,27 @@ where
                             });
                         inner.call(req).await
                     }
-                    Err(err) => Ok(auth_error_response(
-                        &realm,
-                        &resource_metadata_url,
-                        &scopes_supported,
-                        err,
-                    )),
+                    Err(err) => {
+                        observe_auth_failure(
+                            auth_failure_observer.as_deref(),
+                            AuthFailureEvent {
+                                method: &method,
+                                path: &path,
+                                resource_path: &resource_path,
+                                resource_url: &resource_url,
+                                issuer: &issuer,
+                                realm: &realm,
+                                error: &err,
+                                headers: &headers,
+                            },
+                        );
+                        Ok(auth_error_response(
+                            &realm,
+                            &resource_metadata_url,
+                            &scopes_supported,
+                            err,
+                        ))
+                    }
                 }
             });
         }
@@ -998,6 +1129,12 @@ where
 
         let fut = self.inner.call(req);
         Box::pin(fut)
+    }
+}
+
+fn observe_auth_failure(observer: Option<&dyn AuthFailureObserver>, event: AuthFailureEvent<'_>) {
+    if let Some(observer) = observer {
+        observer.observe_auth_failure(event);
     }
 }
 
@@ -1145,6 +1282,38 @@ mod tests {
     use std::convert::Infallible;
     use std::sync::Mutex;
     use tower::{service_fn, Service};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedAuthFailure {
+        method: String,
+        path: String,
+        resource_path: String,
+        resource_url: String,
+        reason: Option<&'static str>,
+        has_authorization: bool,
+    }
+
+    #[derive(Default)]
+    struct RecordingAuthFailureObserver {
+        events: Mutex<Vec<RecordedAuthFailure>>,
+    }
+
+    impl AuthFailureObserver for RecordingAuthFailureObserver {
+        fn observe_auth_failure(&self, event: AuthFailureEvent<'_>) {
+            let has_authorization = event.headers.contains_key(http::header::AUTHORIZATION);
+            self.events
+                .lock()
+                .expect("lock")
+                .push(RecordedAuthFailure {
+                    method: event.method.to_string(),
+                    path: event.path.to_string(),
+                    resource_path: event.resource_path.to_string(),
+                    resource_url: event.resource_url.to_string(),
+                    reason: error_code_for_error(event.error),
+                    has_authorization,
+                });
+        }
+    }
 
     fn test_authenticator() -> Arc<Authenticator> {
         let cfg = crate::AuthConfig {
@@ -1734,6 +1903,72 @@ mod tests {
         }
 
         assert_eq!(*counter.lock().expect("lock"), 0);
+    }
+
+    #[tokio::test]
+    async fn auth_failure_observer_receives_protected_route_failures() {
+        let entry = IssuerEntry {
+            resource_path: "/mcp".to_string(),
+            issuer: "https://issuer.test".to_string(),
+            authorization_endpoint: "https://issuer.test/auth".to_string(),
+            token_endpoint: "https://issuer.test/token".to_string(),
+            registration_endpoint: None,
+            jwks_uri: None,
+            introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            grant_types_supported: None,
+            client_id_metadata_document_supported: None,
+            token_endpoint_auth_methods_supported: None,
+            code_challenge_methods_supported: None,
+            realm: "test".to_string(),
+            scopes_supported: vec!["openid".to_string(), "profile".to_string()],
+            allowed_client_ids: HashSet::new(),
+            authenticator: test_authenticator(),
+            resource_url_override: Some("https://example.com/mcp".to_string()),
+        };
+        let observer = Arc::new(RecordingAuthFailureObserver::default());
+        let observer_for_assertion = observer.clone();
+        let inner = service_fn(move |_req: Request<Body>| async {
+            Ok::<_, Infallible>(Response::new(Body::from("ok")))
+        });
+
+        let mut service = AuthSurfaceLayer::from_config_with_observer(
+            AuthSurfaceConfig {
+                public_base_url: "https://example.com".to_string(),
+                entries: vec![entry],
+                root_alias_policy: RootAliasPolicy::Disabled,
+                public_paths: HashSet::new(),
+                public_prefixes: Vec::new(),
+                allow_insecure_http: false,
+            },
+            observer,
+        )
+        .expect("layer")
+        .layer(inner);
+
+        let response = service
+            .call(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            *observer_for_assertion.events.lock().expect("lock"),
+            vec![RecordedAuthFailure {
+                method: "POST".to_string(),
+                path: "/mcp".to_string(),
+                resource_path: "/mcp".to_string(),
+                resource_url: "https://example.com/mcp".to_string(),
+                reason: Some("invalid_request"),
+                has_authorization: false,
+            }]
+        );
     }
 
     #[tokio::test]
