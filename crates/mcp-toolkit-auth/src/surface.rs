@@ -829,6 +829,7 @@ pub struct AuthSurfaceContext {
 ///
 /// # Panics
 /// * None.
+#[derive(Debug, Clone, Copy)]
 pub struct AuthFailureEvent<'a> {
     pub method: &'a str,
     pub path: &'a str,
@@ -1046,7 +1047,7 @@ where
 
         if let Some(entry) = registry.match_entry(&path) {
             let headers = req.headers().clone();
-            let method = req.method().as_str().to_string();
+            let method = req.method().clone();
             let allowed_client_ids = entry.allowed_client_ids.clone();
             let realm = entry.realm.clone();
             let resource_metadata_url = entry.resource_metadata_url.clone();
@@ -1071,7 +1072,7 @@ where
                                 observe_auth_failure(
                                     auth_failure_observer.as_deref(),
                                     AuthFailureEvent {
-                                        method: &method,
+                                        method: method.as_str(),
                                         path: &path,
                                         resource_path: &resource_path,
                                         resource_url: &resource_url,
@@ -1102,7 +1103,7 @@ where
                         observe_auth_failure(
                             auth_failure_observer.as_deref(),
                             AuthFailureEvent {
-                                method: &method,
+                                method: method.as_str(),
                                 path: &path,
                                 resource_path: &resource_path,
                                 resource_url: &resource_url,
