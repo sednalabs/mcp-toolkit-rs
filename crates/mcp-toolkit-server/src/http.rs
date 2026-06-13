@@ -748,7 +748,12 @@ where
             );
             return endpoint_ready_hint();
         }
-        log_route_rejection(&method, false, "missing_session_id", StatusCode::BAD_REQUEST);
+        log_route_rejection(
+            &method,
+            false,
+            "missing_session_id",
+            StatusCode::BAD_REQUEST,
+        );
         return session_error(
             StatusCode::BAD_REQUEST,
             "Missing session ID.",
