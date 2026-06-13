@@ -38,7 +38,10 @@ use std::sync::Arc;
 use rmcp::model::{JsonObject, Meta, Tool, ToolAnnotations};
 use serde_json::{json, Map, Value};
 
-use crate::mcp_apps::with_mcp_apps_oauth_security_scheme;
+use crate::mcp_apps::{
+    mcp_apps_tool_descriptor_with_security_schemes, with_mcp_apps_oauth_security_scheme,
+    McpAppsSecurityScheme,
+};
 
 /// Errors returned while building or projecting capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -484,6 +487,27 @@ impl Capability {
         tool
     }
 
+    /// Converts this capability into an Apps-compatible tool descriptor.
+    ///
+    /// The descriptor mirrors `securitySchemes` at both the standard
+    /// descriptor field and `_meta["securitySchemes"]`, using this
+    /// capability's required scope policy as the source of truth.
+    ///
+    /// # Errors
+    /// Returns `serde_json::Error` if the underlying `rmcp` tool cannot be
+    /// serialized.
+    pub fn to_mcp_apps_tool_descriptor(&self) -> Result<Value, serde_json::Error> {
+        let tool = self.to_mcp_tool();
+        let security_schemes = if self.scopes.is_empty() {
+            vec![McpAppsSecurityScheme::noauth()]
+        } else {
+            vec![McpAppsSecurityScheme::oauth2(
+                self.scopes.scopes().iter().map(String::as_str),
+            )]
+        };
+        mcp_apps_tool_descriptor_with_security_schemes(&tool, security_schemes)
+    }
+
     /// Converts this capability into an OpenAPI operation object.
     ///
     /// # Errors
@@ -780,6 +804,46 @@ mod tests {
             value["_meta"]["securitySchemes"],
             json!([{"type": "oauth2", "scopes": ["ops:read"]}])
         );
+    }
+
+    #[test]
+    fn apps_projection_mirrors_security_schemes_from_scope_policy() {
+        let value = search_capability()
+            .to_mcp_apps_tool_descriptor()
+            .expect("apps tool descriptor");
+
+        assert_eq!(value["name"], "work_items.search");
+        assert_eq!(
+            value["securitySchemes"],
+            json!([{"type": "oauth2", "scopes": ["ops:read"]}])
+        );
+        assert_eq!(value["_meta"]["securitySchemes"], value["securitySchemes"]);
+        assert_eq!(
+            value["_meta"]["capability"]["audit_event"],
+            "work_items.search"
+        );
+    }
+
+    #[test]
+    fn apps_projection_marks_unscoped_capabilities_noauth() {
+        let capability = Capability::new(
+            "status.ping",
+            "Ping status",
+            "Return public service status.",
+            json!({"type": "object"}),
+        )
+        .expect("valid capability")
+        .with_safety(CapabilitySafety::read_only());
+
+        let value = capability
+            .to_mcp_apps_tool_descriptor()
+            .expect("apps tool descriptor");
+
+        assert_eq!(
+            value["securitySchemes"],
+            json!([{"type": "noauth"}])
+        );
+        assert_eq!(value["_meta"]["securitySchemes"], value["securitySchemes"]);
     }
 
     #[test]

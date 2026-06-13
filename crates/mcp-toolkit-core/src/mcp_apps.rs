@@ -11,12 +11,12 @@
 //! register tools, or enforce authorization.
 //!
 //! ## Policy & Guarantees
-//! * **Typed Boundary**: Accepts and returns `rmcp::model::Meta` so callers do
-//!   not duplicate provider-specific JSON construction.
+//! * **Typed Boundary**: Accepts `rmcp` model values and emits Apps descriptor
+//!   metadata so callers do not duplicate provider-specific JSON construction.
 //! * **Scope Order Preservation**: Preserves caller scope order because some
 //!   hosts display or request scopes in descriptor order.
-//! * **Local Metadata Merge**: Replaces only the Apps `securitySchemes` entry and
-//!   preserves unrelated `_meta` keys.
+//! * **Local Metadata Merge**: Replaces only the Apps `securitySchemes` entries
+//!   and preserves unrelated descriptor or `_meta` keys.
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for:
@@ -24,14 +24,62 @@
 //! * Keeping host-facing descriptor metadata aligned with the app descriptor
 //!   contract they target.
 
-use rmcp::model::Meta;
-use serde_json::{json, Value};
+use rmcp::model::{Meta, Tool};
+use serde_json::{json, Map, Value};
 
 /// MCP app `_meta` key for tool OAuth security schemes.
 pub const MCP_APPS_SECURITY_SCHEMES_META_KEY: &str = "securitySchemes";
 
+/// No-auth security scheme type used by MCP app tool descriptors.
+pub const MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE: &str = "noauth";
+
 /// OAuth 2 security scheme type used by MCP app tool descriptors.
 pub const MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE: &str = "oauth2";
+
+/// Auth policy entry for an MCP app tool descriptor.
+///
+/// Apps clients read `securitySchemes` on the tool descriptor, and some hosts
+/// also require the same array mirrored into `_meta["securitySchemes"]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpAppsSecurityScheme {
+    NoAuth,
+    OAuth2(McpAppsOAuthSecurityScheme),
+}
+
+impl McpAppsSecurityScheme {
+    /// Builds a `noauth` security scheme.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    pub const fn noauth() -> Self {
+        Self::NoAuth
+    }
+
+    /// Builds an OAuth 2 security scheme with normalized scopes.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    pub fn oauth2<I, S>(scopes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::OAuth2(McpAppsOAuthSecurityScheme::new(scopes))
+    }
+
+    /// Serializes this security scheme as MCP app descriptor metadata.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    pub fn to_value(&self) -> Value {
+        match self {
+            Self::NoAuth => json!({
+                "type": MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE,
+            }),
+            Self::OAuth2(scheme) => scheme.to_value(),
+        }
+    }
+}
 
 /// Builds an OAuth 2 security scheme for an MCP app tool descriptor.
 ///
@@ -111,23 +159,118 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    with_mcp_apps_security_schemes(existing, [McpAppsSecurityScheme::oauth2(scopes)])
+}
+
+/// Upserts MCP app security schemes into an `rmcp` metadata object.
+///
+/// Existing metadata is preserved except for `securitySchemes`, which is
+/// replaced with the supplied scheme array.
+///
+/// ```
+/// use rmcp::model::Meta;
+/// use serde_json::json;
+/// use mcp_toolkit_core::mcp_apps::{
+///     with_mcp_apps_security_schemes, McpAppsSecurityScheme,
+/// };
+///
+/// let meta = with_mcp_apps_security_schemes(
+///     Some(Meta::new()),
+///     [
+///         McpAppsSecurityScheme::noauth(),
+///         McpAppsSecurityScheme::oauth2(["items:read"]),
+///     ],
+/// );
+///
+/// assert_eq!(
+///     meta.0["securitySchemes"],
+///     json!([
+///         {"type":"noauth"},
+///         {"type":"oauth2","scopes":["items:read"]},
+///     ])
+/// );
+/// ```
+///
+/// # Errors
+/// This function does not return errors.
+pub fn with_mcp_apps_security_schemes<I>(existing: Option<Meta>, schemes: I) -> Meta
+where
+    I: IntoIterator<Item = McpAppsSecurityScheme>,
+{
     let mut meta = existing.unwrap_or_default();
-    let security_scheme = McpAppsOAuthSecurityScheme::new(scopes);
     meta.0.insert(
         MCP_APPS_SECURITY_SCHEMES_META_KEY.to_string(),
-        Value::Array(vec![security_scheme.to_value()]),
+        security_schemes_value(schemes),
     );
     meta
+}
+
+/// Serializes an `rmcp` tool descriptor with Apps security schemes mirrored.
+///
+/// The returned JSON object includes both the descriptor-level
+/// `securitySchemes` field and the compatibility mirror at
+/// `_meta["securitySchemes"]`.
+///
+/// # Errors
+/// Returns `serde_json::Error` if the `rmcp` tool cannot be serialized.
+pub fn mcp_apps_tool_descriptor_with_security_schemes<I>(
+    tool: &Tool,
+    schemes: I,
+) -> Result<Value, serde_json::Error>
+where
+    I: IntoIterator<Item = McpAppsSecurityScheme>,
+{
+    let mut descriptor = match serde_json::to_value(tool)? {
+        Value::Object(object) => object,
+        _ => Map::new(),
+    };
+    let security_schemes = security_schemes_value(schemes);
+
+    descriptor.insert(
+        MCP_APPS_SECURITY_SCHEMES_META_KEY.to_string(),
+        security_schemes.clone(),
+    );
+    let meta = descriptor
+        .entry("_meta".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    match meta {
+        Value::Object(object) => {
+            object.insert(
+                MCP_APPS_SECURITY_SCHEMES_META_KEY.to_string(),
+                security_schemes,
+            );
+        }
+        _ => {
+            let mut object = Map::new();
+            object.insert(
+                MCP_APPS_SECURITY_SCHEMES_META_KEY.to_string(),
+                security_schemes,
+            );
+            *meta = Value::Object(object);
+        }
+    }
+
+    Ok(Value::Object(descriptor))
+}
+
+fn security_schemes_value<I>(schemes: I) -> Value
+where
+    I: IntoIterator<Item = McpAppsSecurityScheme>,
+{
+    Value::Array(schemes.into_iter().map(|scheme| scheme.to_value()).collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        with_mcp_apps_oauth_security_scheme, McpAppsOAuthSecurityScheme,
+        mcp_apps_tool_descriptor_with_security_schemes, with_mcp_apps_oauth_security_scheme,
+        with_mcp_apps_security_schemes, McpAppsOAuthSecurityScheme, McpAppsSecurityScheme,
+        MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE,
         MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE, MCP_APPS_SECURITY_SCHEMES_META_KEY,
     };
-    use rmcp::model::Meta;
+    use rmcp::model::{JsonObject, Meta, Tool};
     use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn oauth_security_scheme_preserves_scope_order_and_deduplicates() {
@@ -152,6 +295,21 @@ mod tests {
     }
 
     #[test]
+    fn generic_security_scheme_supports_noauth_and_oauth2() {
+        let noauth = McpAppsSecurityScheme::noauth();
+        let oauth2 = McpAppsSecurityScheme::oauth2(["items:read"]);
+
+        assert_eq!(
+            noauth.to_value(),
+            json!({"type": MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE})
+        );
+        assert_eq!(
+            oauth2.to_value(),
+            json!({"type": MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE, "scopes": ["items:read"]})
+        );
+    }
+
+    #[test]
     fn oauth_security_scheme_meta_preserves_unrelated_metadata() {
         let mut existing = Meta::new();
         existing
@@ -172,6 +330,64 @@ mod tests {
                 "type": "oauth2",
                 "scopes": ["openid", "profile", "ops:read"],
             }])
+        );
+    }
+
+    #[test]
+    fn generic_security_scheme_meta_replaces_only_security_schemes() {
+        let mut existing = Meta::new();
+        existing
+            .0
+            .insert("ui".to_string(), json!({"visibility": ["model"]}));
+
+        let meta = with_mcp_apps_security_schemes(
+            Some(existing),
+            [
+                McpAppsSecurityScheme::noauth(),
+                McpAppsSecurityScheme::oauth2(["items:read"]),
+            ],
+        );
+
+        assert_eq!(meta.0["ui"], json!({"visibility": ["model"]}));
+        assert_eq!(
+            meta.0[MCP_APPS_SECURITY_SCHEMES_META_KEY],
+            json!([
+                {"type": "noauth"},
+                {"type": "oauth2", "scopes": ["items:read"]},
+            ])
+        );
+    }
+
+    #[test]
+    fn apps_tool_descriptor_mirrors_security_schemes() {
+        let mut meta = Meta::new();
+        meta.0
+            .insert("ui".to_string(), json!({"resourceUri": "ui://search.html"}));
+        let tool = Tool::new(
+            "items.search",
+            "Search items",
+            Arc::new(JsonObject::default()),
+        )
+        .with_meta(meta);
+
+        let descriptor = mcp_apps_tool_descriptor_with_security_schemes(
+            &tool,
+            [McpAppsSecurityScheme::oauth2(["items:read"])],
+        )
+        .expect("tool descriptor");
+
+        assert_eq!(descriptor["name"], "items.search");
+        assert_eq!(
+            descriptor["securitySchemes"],
+            json!([{"type": "oauth2", "scopes": ["items:read"]}])
+        );
+        assert_eq!(
+            descriptor["_meta"]["securitySchemes"],
+            descriptor["securitySchemes"]
+        );
+        assert_eq!(
+            descriptor["_meta"]["ui"],
+            json!({"resourceUri": "ui://search.html"})
         );
     }
 }

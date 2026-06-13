@@ -29,6 +29,8 @@ operator workflow.
 Projection helpers may turn the same capability into:
 
 - `rmcp::model::Tool` values for MCP hosts;
+- Apps-compatible MCP tool descriptor JSON with `securitySchemes` mirrored at
+  both the descriptor field and `_meta["securitySchemes"]`;
 - OpenAPI operation objects for REST/OpenAPI hosts;
 - OpenAPI OAuth 2 authorization-code security scheme metadata from
   caller-supplied endpoint URLs and scopes;
@@ -62,6 +64,9 @@ The first public shape is deliberately small:
 - `AuditPolicy` carries a stable event name for logs and downstream audit.
 - `OpenApiOAuth2AuthorizationCodeSecurityScheme` builds generic OpenAPI OAuth 2
   security metadata when callers provide their own authorization and token URLs.
+- `Capability::to_mcp_apps_tool_descriptor()` builds the Apps-facing descriptor
+  projection from the same capability scopes. Scoped capabilities emit `oauth2`;
+  unscoped capabilities emit `noauth`.
 - Projection helpers produce MCP and OpenAPI operation metadata without
   registering handlers.
 
@@ -75,6 +80,10 @@ contract.
 Capability metadata is canonical, but adapters can differ:
 
 - MCP projection emits tool metadata and annotations.
+- Apps projection emits the same MCP tool fields plus per-tool
+  `securitySchemes` at the standard descriptor field and `_meta` compatibility
+  mirror. This projection is intentionally JSON-shaped because the current
+  `rmcp` tool model may not expose every host extension field.
 - OpenAPI projection emits operation metadata, request/response schemas, and
   security requirements.
 - OAuth security scheme projection emits only standard OpenAPI metadata; callers
@@ -92,6 +101,9 @@ audit identity.
 Every projection helper should have whole-object tests that prove:
 
 - required scopes are preserved across MCP metadata and OpenAPI security;
+- required scopes are preserved across Apps descriptor-level and `_meta`
+  `securitySchemes`;
+- unscoped Apps capabilities are explicitly projected as `noauth`;
 - read-only and destructive hints project to MCP annotations;
 - input and output schemas are preserved;
 - duplicate capability identifiers are rejected by registries;
