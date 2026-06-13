@@ -180,6 +180,13 @@ This first slice currently covers:
 This first slice does not yet cover invalid-token, insufficient-scope, or auth-server
 discovery variants.
 
+OpenAI Apps connectors should additionally use
+`mcp-toolkit-testing::openai_apps_contract::OpenAiAppsConformanceProfile`. That
+profile composes the generic auth-surface expectations with Apps-specific
+checks for descriptor-level and `_meta["securitySchemes"]` parity, PKCE `S256`,
+declared client registration mode, compatible token endpoint auth methods, and
+runtime `_meta["mcp/www_authenticate"]` challenge details.
+
 The contract test is required for every new HTTP MCP server.
 
 ## Server Adoption Checklist

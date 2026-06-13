@@ -84,6 +84,35 @@ use mcp_toolkit_testing::auth_surface_contract::assert_forbidden_without_bearer_
 assert_forbidden_without_bearer_challenge(response.status(), response.headers());
 ```
 
+## OpenAI Apps Contracts
+
+Use `openai_apps_contract::OpenAiAppsConformanceProfile` when a hosted HTTP
+server is exposed as an OpenAI Apps connector. This profile is stricter than the
+generic auth-surface contract: it checks protected-resource metadata,
+authorization-code + PKCE metadata, declared client registration mode, Apps tool
+descriptor `securitySchemes` parity, and runtime `mcp/www_authenticate`
+challenges.
+
+```rust
+use mcp_toolkit_testing::openai_apps_contract::{
+    OpenAiAppsClientRegistrationMode, OpenAiAppsConformanceProfile,
+};
+
+let authorization_servers = ["https://issuer.example"];
+let required_scopes = ["example.read"];
+let profile = OpenAiAppsConformanceProfile::new(
+    "https://example.test/mcp",
+    &authorization_servers,
+)
+.with_required_scopes(&required_scopes)
+.with_client_registration(OpenAiAppsClientRegistrationMode::ClientIdMetadataDocument);
+
+profile.assert_resource_metadata(&resource_metadata_json);
+profile.assert_authorization_server_metadata(&authorization_server_metadata_json);
+profile.assert_tool_descriptor(&apps_tool_descriptor_json);
+profile.assert_tool_result_authenticate_meta(&tool_result_meta_json);
+```
+
 ## Adoption Expectation
 
 New toolkit-built servers should include at least:
@@ -91,6 +120,7 @@ New toolkit-built servers should include at least:
 - one strict tool-schema snapshot;
 - one stdio or HTTP runtime smoke test, matching the served transport;
 - auth metadata and bearer-challenge contract tests for hosted HTTP servers;
+- OpenAI Apps conformance tests for hosted HTTP servers intended for ChatGPT;
 - pre-auth host rejection tests for hosted HTTP servers with host allowlists;
 - GitHub-hosted CI that runs the strict contract tests without update-mode
   environment variables.
