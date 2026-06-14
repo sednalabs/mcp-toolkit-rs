@@ -424,9 +424,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             "tool-only connector descriptors must disable widget access"
         );
         assert_eq!(
-            meta.get("ui")
-                .and_then(Value::as_object)
-                .and_then(|ui| ui.get("visibility")),
+            descriptor.pointer("/_meta/ui/visibility"),
             Some(&serde_json::json!(["model"])),
             "tool-only connector descriptors must be model-visible only"
         );
@@ -435,10 +433,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             "tool-only connector descriptors must not reference openai/outputTemplate"
         );
         assert!(
-            meta.get("ui")
-                .and_then(Value::as_object)
-                .and_then(|ui| ui.get("resourceUri"))
-                .is_none(),
+            descriptor.pointer("/_meta/ui/resourceUri").is_none(),
             "tool-only connector descriptors must not reference _meta.ui.resourceUri"
         );
     }
@@ -494,7 +489,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             budget.max_tools
         );
 
-        let page_bytes = serde_json::to_vec(descriptors)
+        let page_bytes = serde_json::to_vec(&serde_json::json!({ "tools": descriptors }))
             .unwrap_or_else(|err| panic!("tool-list page must serialize to JSON: {err}"))
             .len();
         assert!(
