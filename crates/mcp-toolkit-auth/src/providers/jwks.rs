@@ -108,7 +108,8 @@ impl JwksCache {
             }
         }
 
-        self.fetch_and_store().await
+        let result = self.fetch_and_store().await;
+        result
     }
 
     async fn refresh_on_kid_miss(&self) -> Result<JwkSet, AuthError> {
@@ -120,7 +121,8 @@ impl JwksCache {
         if let Some(set) = self.cached_set_within_kid_miss_cooldown(Instant::now())? {
             return Ok(set);
         }
-        self.fetch_and_store().await
+        let result = self.fetch_and_store().await;
+        result
     }
 
     fn cached_set_within_kid_miss_cooldown(
