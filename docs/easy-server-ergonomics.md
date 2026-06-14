@@ -45,6 +45,11 @@ path is configured, or a token request succeeded. They must not return access
 tokens, refresh tokens, private keys, raw client secrets, bearer headers, or
 whole credential files.
 
+For MCP Auth configurations, ordinary bearer tokens should remain reusable by
+default across the default, L2, and L3 security profiles. One-time bearer replay
+enforcement is an explicit opt-in, and sender-constrained replay protection
+should not be implied without a dedicated validator.
+
 If a provider offers both personal OAuth and service accounts, support both
 when the dependency already makes that cheap. Personal OAuth is usually the
 lowest-friction trial path; service accounts are usually the lowest-friction

@@ -87,6 +87,9 @@ Generated servers must be conservative by construction:
 - path, query, and body parameters validated before dispatch;
 - secrets reported only as present or absent in diagnostics;
 - generated errors include next steps without leaking upstream credentials.
+- generated MCP Auth configurations keep ordinary bearer tokens reusable by
+  default across the default, L2, and L3 security profiles, with one-time bearer
+  replay enforcement requiring an explicit opt-in.
 
 If the source schema marks OAuth scopes or security schemes, those should flow
 into generated profile docs and tool metadata. If the source schema does not
