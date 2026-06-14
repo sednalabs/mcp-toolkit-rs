@@ -446,6 +446,15 @@ impl ToolInventoryPolicy {
         }
     }
 
+    /// Create a strict policy for default read-only server profiles.
+    ///
+    /// This is the common safe baseline for MCP servers that expose read tools
+    /// by default and enable mutations only through an explicit operator
+    /// profile or similar higher-level switch.
+    pub fn strict_read_only() -> Self {
+        Self::strict().with_read_only_only(true)
+    }
+
     /// Enable read-only-only filtering.
     pub fn with_read_only_only(mut self, read_only_only: bool) -> Self {
         self.read_only_only = read_only_only;
@@ -785,9 +794,10 @@ mod tests {
         ]);
         assert!(result.is_ok());
         let inventory = result.unwrap_or_default();
-        let policy = ToolInventoryPolicy::strict().with_read_only_only(true);
+        let policy = ToolInventoryPolicy::strict_read_only();
         assert!(inventory.is_allowed("read.tool", ToolOperation::List, &policy));
         assert!(!inventory.is_allowed("write.tool", ToolOperation::List, &policy));
+        assert!(!inventory.is_allowed("unknown.tool", ToolOperation::List, &policy));
     }
 
     #[test]
