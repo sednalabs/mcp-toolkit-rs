@@ -377,7 +377,10 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
     }
 
     fn assert_tool_descriptor_shape(&self, descriptor: &Value) {
-        required_object_value(descriptor, "tool descriptor");
+        assert!(
+            descriptor.is_object(),
+            "tool descriptor must be a JSON object"
+        );
         let name = required_string(descriptor, "name");
         assert!(
             !name.trim().is_empty() && name.trim() == name,
@@ -619,15 +622,6 @@ fn required_array<'a>(payload: &'a Value, key: &str) -> &'a [Value] {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_else(|| panic!("metadata field {key} must be an array"))
-}
-
-fn required_object_value<'a>(
-    payload: &'a Value,
-    label: &str,
-) -> &'a serde_json::Map<String, Value> {
-    payload
-        .as_object()
-        .unwrap_or_else(|| panic!("{label} must be a JSON object"))
 }
 
 fn required_object<'a>(payload: &'a Value, key: &str) -> &'a serde_json::Map<String, Value> {
