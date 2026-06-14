@@ -39,7 +39,9 @@ Gemini CLI authentication.
 
 For the complete server creation, validation, review, and release route, start
 with `docs/golden-path.md`. For a copyable checklist that turns that route into
-a repeatable implementation lane, use `docs/new-server-delivery-lane.md`.
+a repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
+the operator-facing details that make a server easy to try and debug, use
+`docs/easy-server-ergonomics.md`.
 
 Add the specific crates you need from Git:
 
@@ -169,10 +171,15 @@ Security reporting guidance is documented in `SECURITY.md`.
   and deferred loading.
 - `docs/dependency-governance.md` defines dependency selection and update
   gates.
+- `docs/easy-server-ergonomics.md` lists the first-run, auth-status,
+  discovery-tool, and diagnostic patterns that make toolkit-built servers easy
+  to try.
 - `docs/ecosystem-map.md` explains where toolkit, reference architecture, and
   service-specific code should live.
 - `docs/golden-path.md` is the end-to-end path for creating, validating,
   reviewing, releasing, and adopting toolkit-built MCP servers.
+- `docs/instant-server-generation.md` records the direction for generating
+  secure MCP server scaffolds from OpenAPI, JSON Schema, docs, and examples.
 - `docs/new-server-delivery-lane.md` defines the seven-gate lane for rapid,
   reviewable MCP server creation from toolkit templates through proven
   promotion.

@@ -70,6 +70,11 @@ For each intent tool, record:
 - error shape for the common failure modes;
 - one example operator question it answers.
 
+Before finalizing the tool surface, check `docs/easy-server-ergonomics.md`.
+New servers should usually include a credential-free setup/status path and a
+first real discovery tool, so a user can get from install to useful data without
+reading implementation details.
+
 Generic API, SQL, or HTTP escape hatches are allowed only after the curated
 tools cover the primary workflows and safety policy. They must be labeled as
 debug, admin, or advanced surfaces and must not replace the curated path.
