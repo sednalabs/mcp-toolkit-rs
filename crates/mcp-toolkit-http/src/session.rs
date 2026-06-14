@@ -961,20 +961,21 @@ impl RecordingSessionManager {
         session_id: SessionId,
         stream: impl Stream<Item = ServerSseMessage> + Send + Sync + 'static,
     ) -> BoxServerSseStream {
-        let stream: BoxServerSseStream = if let Some(event_store) = self.event_store.clone() {
-            let session = session_id.to_string();
-            Box::pin(stream.then(move |message| {
-                let event_store = event_store.clone();
-                let session = session.clone();
-                async move {
-                    if let Err(err) = event_store.store_event(&session, &message).await {
-                        tracing::warn!(error = %err, "failed to persist streamable HTTP event");
+        let stream: BoxServerSseStream = match self.event_store.clone() {
+            Some(event_store) => {
+                let session = session_id.to_string();
+                Box::pin(stream.then(move |message| {
+                    let event_store = event_store.clone();
+                    let session = session.clone();
+                    async move {
+                        if let Err(err) = event_store.store_event(&session, &message).await {
+                            tracing::warn!(error = %err, "failed to persist streamable HTTP event");
+                        }
+                        message
                     }
-                    message
-                }
-            }))
-        } else {
-            Box::pin(stream)
+                }))
+            }
+            None => Box::pin(stream),
         };
         Box::pin(LifecycleTrackedStream::new(
             self.inner.clone(),
