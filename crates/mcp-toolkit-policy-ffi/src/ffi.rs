@@ -180,7 +180,7 @@ pub struct PkAbiVersion {
     pub minor: c_uint,
 }
 
-extern "C" {
+unsafe extern "C" {
     /// Return the ABI version of the linked policy kernel.
     pub fn pk_policy_kernel_abi_version() -> PkAbiVersion;
     /// Validates a bearer header.
