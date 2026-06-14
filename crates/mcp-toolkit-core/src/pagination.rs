@@ -135,10 +135,7 @@ mod tests {
         let page = paginate_list(&items, None, 2).expect("page should paginate");
 
         assert_eq!(page.items, vec!["a", "b"]);
-        assert_eq!(
-            page.next_cursor.as_deref(),
-            Some("mcp-toolkit-offset-v1:2")
-        );
+        assert_eq!(page.next_cursor.as_deref(), Some("mcp-toolkit-offset-v1:2"));
         assert_eq!(page.start, 0);
         assert_eq!(page.end, 2);
         assert_eq!(page.total, 3);

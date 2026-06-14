@@ -424,7 +424,9 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             "tool-only connector descriptors must disable widget access"
         );
         assert_eq!(
-            meta.pointer("/ui/visibility"),
+            meta.get("ui")
+                .and_then(Value::as_object)
+                .and_then(|ui| ui.get("visibility")),
             Some(&serde_json::json!(["model"])),
             "tool-only connector descriptors must be model-visible only"
         );
@@ -433,7 +435,10 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             "tool-only connector descriptors must not reference openai/outputTemplate"
         );
         assert!(
-            meta.pointer("/ui/resourceUri").is_none(),
+            meta.get("ui")
+                .and_then(Value::as_object)
+                .and_then(|ui| ui.get("resourceUri"))
+                .is_none(),
             "tool-only connector descriptors must not reference _meta.ui.resourceUri"
         );
     }
@@ -630,10 +635,7 @@ fn required_object_value<'a>(
         .unwrap_or_else(|| panic!("{label} must be a JSON object"))
 }
 
-fn required_object<'a>(
-    payload: &'a Value,
-    key: &str,
-) -> &'a serde_json::Map<String, Value> {
+fn required_object<'a>(payload: &'a Value, key: &str) -> &'a serde_json::Map<String, Value> {
     payload
         .get(key)
         .and_then(Value::as_object)
