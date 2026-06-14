@@ -969,7 +969,8 @@ impl RecordingSessionManager {
                     let session = session.clone();
                     async move {
                         if let Err(err) = event_store.store_event(&session, &message).await {
-                            tracing::warn!(error = %err, "failed to persist streamable HTTP event");
+                            let error = err.to_string();
+                            tracing::warn!(%error, "failed to persist streamable HTTP event");
                         }
                         message
                     }
