@@ -28,6 +28,15 @@ pub const OPENAI_APPS_COMPATIBLE_TOKEN_ENDPOINT_AUTH_METHODS: &[&str] = &[
     "client_secret_basic",
 ];
 
+/// Metadata profile expected from tool descriptors in an Apps connector.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenAiAppsToolPresentationMode {
+    /// Validate only the generic Apps/MCP descriptor contract.
+    Generic,
+    /// Validate a model-only, tool-only connector with no component template.
+    ToolOnlyConnector,
+}
+
 /// OAuth client registration mode expected for an OpenAI Apps connector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenAiAppsClientRegistrationMode {
@@ -37,6 +46,33 @@ pub enum OpenAiAppsClientRegistrationMode {
     ClientIdMetadataDocument,
     /// ChatGPT registers a client through Dynamic Client Registration.
     DynamicClientRegistration,
+}
+
+/// Host-facing size limits for one `tools/list` page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OpenAiAppsToolListPageBudget {
+    pub max_tools: usize,
+    pub max_serialized_bytes: usize,
+    pub max_tool_serialized_bytes: usize,
+}
+
+impl OpenAiAppsToolListPageBudget {
+    /// Builds a tool-list page budget.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    #[must_use]
+    pub const fn new(
+        max_tools: usize,
+        max_serialized_bytes: usize,
+        max_tool_serialized_bytes: usize,
+    ) -> Self {
+        Self {
+            max_tools,
+            max_serialized_bytes,
+            max_tool_serialized_bytes,
+        }
+    }
 }
 
 /// OpenAI Apps conformance profile for one protected MCP server.
@@ -69,6 +105,8 @@ pub struct OpenAiAppsConformanceProfile<'a> {
     required_scopes: &'a [&'a str],
     client_registration: OpenAiAppsClientRegistrationMode,
     accepted_token_endpoint_auth_methods: &'a [&'a str],
+    require_output_schema: bool,
+    tool_presentation_mode: OpenAiAppsToolPresentationMode,
 }
 
 impl<'a> OpenAiAppsConformanceProfile<'a> {
@@ -89,6 +127,8 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
             client_registration: OpenAiAppsClientRegistrationMode::PredefinedClient,
             accepted_token_endpoint_auth_methods:
                 OPENAI_APPS_COMPATIBLE_TOKEN_ENDPOINT_AUTH_METHODS,
+            require_output_schema: false,
+            tool_presentation_mode: OpenAiAppsToolPresentationMode::Generic,
         }
     }
 
@@ -132,6 +172,38 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
     pub fn with_accepted_token_endpoint_auth_methods(mut self, methods: &'a [&'a str]) -> Self {
         self.accepted_token_endpoint_auth_methods = methods;
         self
+    }
+
+    /// Requires every tool descriptor to advertise an object `outputSchema`.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    #[must_use]
+    pub const fn with_required_output_schema(mut self) -> Self {
+        self.require_output_schema = true;
+        self
+    }
+
+    /// Selects the expected tool presentation metadata profile.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    #[must_use]
+    pub const fn with_tool_presentation_mode(
+        mut self,
+        mode: OpenAiAppsToolPresentationMode,
+    ) -> Self {
+        self.tool_presentation_mode = mode;
+        self
+    }
+
+    /// Requires model-only metadata for a tool-only connector surface.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    #[must_use]
+    pub const fn with_tool_only_connector_metadata(self) -> Self {
+        self.with_tool_presentation_mode(OpenAiAppsToolPresentationMode::ToolOnlyConnector)
     }
 
     /// Returns the expected protected-resource metadata URL.
@@ -235,6 +307,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
     /// This assertion guards the metadata ChatGPT uses before deciding whether
     /// tool-level OAuth is available for a tool.
     pub fn assert_tool_descriptor(&self, descriptor: &Value) {
+        self.assert_tool_descriptor_shape(descriptor);
         let security_schemes = required_array(descriptor, MCP_APPS_SECURITY_SCHEMES_META_KEY);
         let meta = descriptor
             .get("_meta")
@@ -303,6 +376,68 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
         }
     }
 
+    fn assert_tool_descriptor_shape(&self, descriptor: &Value) {
+        required_object_value(descriptor, "tool descriptor");
+        let name = required_string(descriptor, "name");
+        assert!(
+            !name.trim().is_empty() && name.trim() == name,
+            "tool descriptor name must be non-empty and trimmed"
+        );
+        let description = required_string(descriptor, "description");
+        assert!(
+            !description.trim().is_empty(),
+            "tool descriptor description must be non-empty"
+        );
+        required_object(descriptor, "inputSchema");
+        if self.require_output_schema {
+            let output_schema = required_object(descriptor, "outputSchema");
+            assert_eq!(
+                output_schema.get("type").and_then(Value::as_str),
+                Some("object"),
+                "tool descriptor outputSchema must be an object schema"
+            );
+        }
+
+        let annotations = required_object(descriptor, "annotations");
+        for key in [
+            "readOnlyHint",
+            "destructiveHint",
+            "idempotentHint",
+            "openWorldHint",
+        ] {
+            assert!(
+                annotations.get(key).and_then(Value::as_bool).is_some(),
+                "tool descriptor annotations.{key} must be a boolean"
+            );
+        }
+
+        if self.tool_presentation_mode == OpenAiAppsToolPresentationMode::ToolOnlyConnector {
+            self.assert_tool_only_connector_metadata(descriptor);
+        }
+    }
+
+    fn assert_tool_only_connector_metadata(&self, descriptor: &Value) {
+        let meta = required_object(descriptor, "_meta");
+        assert_eq!(
+            meta.get("openai/widgetAccessible").and_then(Value::as_bool),
+            Some(false),
+            "tool-only connector descriptors must disable widget access"
+        );
+        assert_eq!(
+            meta.pointer("/ui/visibility"),
+            Some(&serde_json::json!(["model"])),
+            "tool-only connector descriptors must be model-visible only"
+        );
+        assert!(
+            meta.get("openai/outputTemplate").is_none(),
+            "tool-only connector descriptors must not reference openai/outputTemplate"
+        );
+        assert!(
+            meta.pointer("/ui/resourceUri").is_none(),
+            "tool-only connector descriptors must not reference _meta.ui.resourceUri"
+        );
+    }
+
     /// Asserts every Apps tool descriptor in a tool list.
     ///
     /// # Panics
@@ -319,6 +454,66 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
         for descriptor in descriptors {
             self.assert_tool_descriptor(descriptor);
         }
+    }
+
+    /// Asserts every Apps tool descriptor in one bounded `tools/list` page.
+    ///
+    /// # Panics
+    /// Panics when the page exceeds the supplied host-facing budget or any
+    /// descriptor fails `assert_tool_descriptor`.
+    ///
+    /// # Security
+    /// Use this to prevent a connector from accidentally growing a discovery
+    /// surface that is too large for host validation and model routing.
+    pub fn assert_tool_list_page(
+        &self,
+        descriptors: &[Value],
+        budget: OpenAiAppsToolListPageBudget,
+    ) {
+        assert!(
+            budget.max_tools > 0,
+            "tool-list page budget max_tools must be greater than zero"
+        );
+        assert!(
+            budget.max_serialized_bytes > 0,
+            "tool-list page budget max_serialized_bytes must be greater than zero"
+        );
+        assert!(
+            budget.max_tool_serialized_bytes > 0,
+            "tool-list page budget max_tool_serialized_bytes must be greater than zero"
+        );
+        assert!(
+            descriptors.len() <= budget.max_tools,
+            "tools/list page exposes {} tools, exceeding budget {}",
+            descriptors.len(),
+            budget.max_tools
+        );
+
+        let page_bytes = serde_json::to_vec(descriptors)
+            .unwrap_or_else(|err| panic!("tool-list page must serialize to JSON: {err}"))
+            .len();
+        assert!(
+            page_bytes <= budget.max_serialized_bytes,
+            "tools/list page is {page_bytes} bytes, exceeding budget {}",
+            budget.max_serialized_bytes
+        );
+
+        for descriptor in descriptors {
+            let name = descriptor
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing>");
+            let descriptor_bytes = serde_json::to_vec(descriptor)
+                .unwrap_or_else(|err| panic!("tool descriptor must serialize to JSON: {err}"))
+                .len();
+            assert!(
+                descriptor_bytes <= budget.max_tool_serialized_bytes,
+                "tool descriptor {name:?} is {descriptor_bytes} bytes, exceeding budget {}",
+                budget.max_tool_serialized_bytes
+            );
+        }
+
+        self.assert_tool_descriptors(descriptors);
     }
 
     /// Asserts a runtime `WWW-Authenticate` Bearer challenge.
@@ -424,6 +619,25 @@ fn required_array<'a>(payload: &'a Value, key: &str) -> &'a [Value] {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_else(|| panic!("metadata field {key} must be an array"))
+}
+
+fn required_object_value<'a>(
+    payload: &'a Value,
+    label: &str,
+) -> &'a serde_json::Map<String, Value> {
+    payload
+        .as_object()
+        .unwrap_or_else(|| panic!("{label} must be a JSON object"))
+}
+
+fn required_object<'a>(
+    payload: &'a Value,
+    key: &str,
+) -> &'a serde_json::Map<String, Value> {
+    payload
+        .get(key)
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("metadata field {key} must be an object"))
 }
 
 fn assert_string_array_equals(payload: &Value, key: &str, expected: &[&str]) {
@@ -619,7 +833,10 @@ fn is_bearer_token_char(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenAiAppsClientRegistrationMode, OpenAiAppsConformanceProfile};
+    use super::{
+        OpenAiAppsClientRegistrationMode, OpenAiAppsConformanceProfile,
+        OpenAiAppsToolListPageBudget,
+    };
     use serde_json::json;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -630,6 +847,8 @@ mod tests {
         OpenAiAppsConformanceProfile::new("https://example.test/mcp", AUTHORIZATION_SERVERS)
             .with_required_scopes(REQUIRED_SCOPES)
             .with_client_registration(OpenAiAppsClientRegistrationMode::ClientIdMetadataDocument)
+            .with_required_output_schema()
+            .with_tool_only_connector_metadata()
     }
 
     #[test]
@@ -651,10 +870,31 @@ mod tests {
         }));
         profile.assert_tool_descriptor(&json!({
             "name": "items.write",
+            "description": "Writes an item.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"}
+                }
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"}
+                }
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
             "securitySchemes": [
                 {"type": "oauth2", "scopes": ["items:read", "items:write"]}
             ],
             "_meta": {
+                "ui": {"visibility": ["model"]},
+                "openai/widgetAccessible": false,
                 "securitySchemes": [
                     {"type": "oauth2", "scopes": ["items:read", "items:write"]}
                 ]
@@ -671,10 +911,22 @@ mod tests {
     fn openai_apps_profile_requires_descriptor_meta_mirror() {
         let profile = profile();
         let descriptor = json!({
+            "name": "items.write",
+            "description": "Writes an item.",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {"type": "object"},
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
             "securitySchemes": [
                 {"type": "oauth2", "scopes": ["items:read", "items:write"]}
             ],
             "_meta": {
+                "ui": {"visibility": ["model"]},
+                "openai/widgetAccessible": false,
                 "securitySchemes": [
                     {"type": "oauth2", "scopes": ["items:read"]}
                 ]
@@ -718,6 +970,69 @@ mod tests {
             profile.assert_tool_result_authenticate_meta(&meta);
         }))
         .is_err());
+    }
+
+    #[test]
+    fn openai_apps_profile_requires_annotation_booleans() {
+        let profile = profile();
+        let descriptor = json!({
+            "name": "items.write",
+            "description": "Writes an item.",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {"type": "object"},
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "openWorldHint": false
+            },
+            "securitySchemes": [
+                {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+            ],
+            "_meta": {
+                "ui": {"visibility": ["model"]},
+                "openai/widgetAccessible": false,
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                ]
+            }
+        });
+
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            profile.assert_tool_descriptor(&descriptor);
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn openai_apps_profile_checks_tool_list_page_budget() {
+        let profile = profile();
+        let descriptor = json!({
+            "name": "items.write",
+            "description": "Writes an item.",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {"type": "object"},
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
+            "securitySchemes": [
+                {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+            ],
+            "_meta": {
+                "ui": {"visibility": ["model"]},
+                "openai/widgetAccessible": false,
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                ]
+            }
+        });
+
+        profile.assert_tool_list_page(
+            &[descriptor],
+            OpenAiAppsToolListPageBudget::new(2, 4096, 4096),
+        );
     }
 
     #[test]
