@@ -20,7 +20,7 @@ fn main() {
                 .join("..")
                 .join("..")
                 .join("..")
-                .join("mcp-policy-kernel")
+                .join("policy-kernel")
         });
     let header = kernel_root
         .join("spark")
@@ -106,7 +106,7 @@ fn extract_define(contents: &str, key: &str) -> Option<String> {
 
 fn extract_ada_positive_constant(contents: &str, key: &str) -> Option<usize> {
     for line in contents.lines() {
-        let line = line.trim();
+        let line = line.split("--").next().unwrap_or("").trim();
         if !line.starts_with(key) {
             continue;
         }
