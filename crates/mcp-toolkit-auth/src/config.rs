@@ -239,10 +239,14 @@ fn validate_oidc_metadata(
 }
 
 fn required_metadata_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str, AuthError> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AuthError::new(format!("Discovery metadata missing {}", field)))
+    let value = value.map(str::trim).unwrap_or("");
+    if value.is_empty() {
+        return Err(AuthError::new(format!(
+            "Discovery metadata missing {}",
+            field
+        )));
+    }
+    Ok(value)
 }
 
 fn validate_metadata_url(field: &str, value: &str) -> Result<(), AuthError> {

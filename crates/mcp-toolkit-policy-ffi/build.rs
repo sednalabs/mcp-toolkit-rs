@@ -72,6 +72,8 @@ fn extract_define(contents: &str, key: &str) -> Option<String> {
 }
 
 fn read_kernel_file(path: &Path, desc: &str) -> String {
-    fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("failed to read {desc} at {}: {err}", path.display()))
+    match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) => panic!("failed to read {} at {}: {}", desc, path.display(), err),
+    }
 }
