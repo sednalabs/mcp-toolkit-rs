@@ -28,6 +28,7 @@ The generated output should include:
   schema printing, and generated docs;
 - typed request/response models generated from the source schema;
 - upstream auth configuration with safe diagnostics;
+- reusable upstream OAuth providers, when the source API advertises OAuth2;
 - read-only defaults and explicit mutation gates;
 - schema snapshots and transport contract tests;
 - fake-adapter or fixture-backed output contract tests;
@@ -86,15 +87,18 @@ Generated servers must be conservative by construction:
 - no generated generic `call_any_endpoint` tool;
 - path, query, and body parameters validated before dispatch;
 - secrets reported only as present or absent in diagnostics;
-- generated errors include next steps without leaking upstream credentials.
+- generated errors include next steps without leaking upstream credentials;
 - generated MCP Auth configurations keep ordinary bearer tokens reusable by
   default across the default, L2, and L3 security profiles, with one-time bearer
   replay enforcement requiring an explicit opt-in.
 
 If the source schema marks OAuth scopes or security schemes, those should flow
-into generated profile docs and tool metadata. If the source schema does not
-mark safety, the generator should choose the safer classification and require
-review.
+into generated profile docs, auth-status tools, and
+`mcp_toolkit_auth::upstream_oauth` provider config where the flow is an upstream
+API credential flow. Generated code should call the toolkit's setup, refresh,
+cache, and redaction helpers rather than constructing raw token-exchange HTTP
+clients. If the source schema does not mark safety, the generator should choose
+the safer classification and require review.
 
 ## Human Review Boundary
 
@@ -120,6 +124,8 @@ This direction likely wants these reusable pieces:
 - OpenAPI/JSON Schema parser and operation classifier;
 - intent-tool proposal engine with allowlist output;
 - auth-profile templates for common upstream schemes;
+- upstream OAuth setup templates that produce status, login, reauth, logout,
+  and probe tools without exposing raw tokens;
 - generated fake-adapter and fixture-test helpers;
 - redaction policy generation from schema field names and formats;
 - operation review report renderer;

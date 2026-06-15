@@ -10,6 +10,8 @@ domain model, backend topology, or operational vocabulary.
 Good toolkit candidates are reusable substrate concerns such as:
 
 - auth primitives, auth-surface wiring, and shared OAuth or discovery helpers
+- upstream OAuth primitives for browser login, refresh-token storage, and
+  redacted credential diagnostics
 - streamable HTTP and HTTP transport helpers
 - session, event-store, and protocol-adjacent infrastructure
 - observability, logging, redaction, and tracing helpers

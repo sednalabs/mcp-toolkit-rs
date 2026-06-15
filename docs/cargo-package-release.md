@@ -35,6 +35,13 @@ Do not publish crates from routine pull request validation. A crates.io release
 requires an approved release owner and an approved publication path before any
 `cargo publish` step runs.
 
+The first public release build should be a GitHub draft prerelease, using a tag
+such as `v0.1.0-alpha.1`, until hosted validation, downstream adoption smoke
+tests, and the review gate are complete. Treat that alpha as a Git consumption
+and operator artifact milestone, not a crates.io stability promise. Promote to a
+normal `0.1.0` release only after the public API and package publication path
+are intentionally approved.
+
 The release owner must record:
 
 1. the crate set included in the release;
