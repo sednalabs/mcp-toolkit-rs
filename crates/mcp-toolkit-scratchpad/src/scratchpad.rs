@@ -1549,9 +1549,10 @@ fn dedupe_column_names(raw: Vec<String>) -> Vec<String> {
 }
 
 fn supports_wrapped_pagination(sql: &str) -> Result<bool, ScratchpadError> {
-    let upper = trim_sql_for_subquery(&lexical_sql_surface(sql).map_err(|err| {
-        ScratchpadError::scratchpad_sql_rejected(err.code, err.message)
-    })?)
+    let upper = trim_sql_for_subquery(
+        &lexical_sql_surface(sql)
+            .map_err(|err| ScratchpadError::scratchpad_sql_rejected(err.code, err.message))?,
+    )
     .to_ascii_uppercase();
     Ok(upper.starts_with("SELECT") || upper.starts_with("WITH"))
 }
@@ -2916,9 +2917,8 @@ mod tests {
     #[test]
     fn query_rows_preserves_duckdb_result_aliases() {
         let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
-        let manager =
-            ScratchpadSessionManager::new(engine, test_config("query-rows-aliases"))
-                .expect("manager");
+        let manager = ScratchpadSessionManager::new(engine, test_config("query-rows-aliases"))
+            .expect("manager");
         manager
             .open_session("query_alias_session")
             .expect("session should open");
@@ -2937,7 +2937,10 @@ mod tests {
         assert_eq!(projection.columns[1].name, "Total Clicks_2");
         assert_eq!(projection.columns[2].name, "MixedCase");
         assert_eq!(projection.rows[0]["Total Clicks"], Value::Number(7.into()));
-        assert_eq!(projection.rows[0]["Total Clicks_2"], Value::Number(8.into()));
+        assert_eq!(
+            projection.rows[0]["Total Clicks_2"],
+            Value::Number(8.into())
+        );
         assert_eq!(projection.rows[0]["MixedCase"], Value::Number(9.into()));
 
         let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
