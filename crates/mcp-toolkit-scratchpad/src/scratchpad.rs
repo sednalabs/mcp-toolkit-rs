@@ -1366,6 +1366,30 @@ fn validate_sql_identifier(identifier: &str, field: &'static str) -> Result<(), 
     Ok(())
 }
 
+fn normalize_sql_identifier(value: &str, fallback: &str) -> String {
+    let mut normalized = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            normalized.push(ch.to_ascii_lowercase());
+        } else {
+            normalized.push('_');
+        }
+    }
+    let normalized = normalized.trim_matches('_');
+    if normalized.is_empty() {
+        return fallback.to_string();
+    }
+    if normalized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit())
+    {
+        format!("col_{normalized}")
+    } else {
+        normalized.to_string()
+    }
+}
+
 fn quote_ident(identifier: &str) -> String {
     let escaped = identifier.replace('"', "\"\"");
     format!("\"{escaped}\"")
@@ -1950,9 +1974,10 @@ fn json_value_to_duck_value(value: Option<&Value>, logical_type: &str) -> DuckVa
             if matches!(
                 logical_type,
                 "number" | "currency" | "distance" | "duration_minutes"
-            ) && let Ok(v) = text.parse::<f64>()
-            {
-                return DuckValue::Double(v);
+            ) {
+                if let Ok(v) = text.parse::<f64>() {
+                    return DuckValue::Double(v);
+                }
             }
             DuckValue::Text(text.clone())
         }

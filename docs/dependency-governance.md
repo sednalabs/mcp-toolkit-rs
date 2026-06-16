@@ -63,6 +63,10 @@ for release hygiene:
 - `duckdb` and `libduckdb-sys` are MIT-licensed.
 - Arrow transitive dependencies observed in the scan are Apache-2.0 and
   Apache-2.0 AND MIT.
+- `tiny-keccak` enters through Arrow hashing support and is allowed only as a
+  package-specific CC0-1.0 exception.
+- `webpki-roots` enters through Rustls/Reqwest in the DuckDB build-time graph
+  and is allowed only as a package-specific CDLA-Permissive-2.0 exception.
 - If a release artifact bundles DuckDB native code, include the relevant
   third-party notices with the artifact distribution.
 
