@@ -1492,7 +1492,10 @@ fn execute_duckdb_query_rows(
                     "failed to decode scratchpad column value: {err}"
                 ))
             })?;
-            projected.insert(column_name.clone(), duck_value_to_json(DuckValue::from(value)));
+            projected.insert(
+                column_name.clone(),
+                duck_value_to_json(DuckValue::from(value)),
+            );
         }
         projected_rows.push(projected);
     }
