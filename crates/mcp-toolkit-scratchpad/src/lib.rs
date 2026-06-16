@@ -29,4 +29,4 @@ pub use scratchpad::{
     ScratchpadTableInfo, SessionDatabaseConfig, SharedScratchpadEngine,
     SharedScratchpadSessionManager,
 };
-pub use sql_safety::{ScratchpadSqlPolicyCode, ScratchpadSqlPolicyError, validate_scratchpad_sql};
+pub use sql_safety::{validate_scratchpad_sql, ScratchpadSqlPolicyCode, ScratchpadSqlPolicyError};
