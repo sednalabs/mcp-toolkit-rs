@@ -107,7 +107,7 @@ pub fn validate_scratchpad_sql(
         ));
     }
 
-    let lexical = lexical_surface(sql)?;
+    let lexical = lexical_sql_surface(sql)?;
     let trimmed = lexical.trim();
     let upper = trimmed.to_ascii_uppercase();
 
@@ -206,7 +206,7 @@ fn is_identifier_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-fn lexical_surface(sql: &str) -> Result<String, ScratchpadSqlPolicyError> {
+pub(crate) fn lexical_sql_surface(sql: &str) -> Result<String, ScratchpadSqlPolicyError> {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum State {
         Normal,
