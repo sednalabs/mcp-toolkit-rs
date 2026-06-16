@@ -1366,30 +1366,6 @@ fn validate_sql_identifier(identifier: &str, field: &'static str) -> Result<(), 
     Ok(())
 }
 
-fn normalize_sql_identifier(value: &str, fallback: &str) -> String {
-    let mut normalized = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            normalized.push(ch.to_ascii_lowercase());
-        } else {
-            normalized.push('_');
-        }
-    }
-    let normalized = normalized.trim_matches('_');
-    if normalized.is_empty() {
-        return fallback.to_string();
-    }
-    if normalized
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_digit())
-    {
-        format!("col_{normalized}")
-    } else {
-        normalized.to_string()
-    }
-}
-
 fn quote_ident(identifier: &str) -> String {
     let escaped = identifier.replace('"', "\"\"");
     format!("\"{escaped}\"")
@@ -1473,10 +1449,12 @@ fn query_row_count(conn: &Connection, sql: &str) -> Result<usize, ScratchpadErro
     Ok(duck_value_to_usize(DuckValue::from(value)))
 }
 
+type ScratchpadQueryRows = (Vec<ScratchpadTableColumnInfo>, Vec<Map<String, Value>>);
+
 fn execute_duckdb_query_rows(
     conn: &Connection,
     sql: &str,
-) -> Result<(Vec<ScratchpadTableColumnInfo>, Vec<Map<String, Value>>), ScratchpadError> {
+) -> Result<ScratchpadQueryRows, ScratchpadError> {
     let mut stmt = conn.prepare(sql).map_err(|err| {
         ScratchpadError::ScratchpadEngine(format!("failed to prepare scratchpad query: {err}"))
     })?;
@@ -1508,16 +1486,13 @@ fn execute_duckdb_query_rows(
         ScratchpadError::ScratchpadEngine(format!("failed to fetch scratchpad query row: {err}"))
     })? {
         let mut projected = Map::new();
-        for idx in 0..column_count {
+        for (idx, column_name) in column_names.iter().enumerate().take(column_count) {
             let value = row.get_ref(idx).map_err(|err| {
                 ScratchpadError::ScratchpadEngine(format!(
                     "failed to decode scratchpad column value: {err}"
                 ))
             })?;
-            projected.insert(
-                column_names[idx].clone(),
-                duck_value_to_json(DuckValue::from(value)),
-            );
+            projected.insert(column_name.clone(), duck_value_to_json(DuckValue::from(value)));
         }
         projected_rows.push(projected);
     }
