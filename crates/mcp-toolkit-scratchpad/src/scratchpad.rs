@@ -5,7 +5,7 @@
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -189,12 +189,38 @@ impl ScratchpadSessionConfig {
                 "must be greater than zero",
             ));
         }
+        validate_scratchpad_root_dir(&self.root_dir)?;
         Ok(())
     }
 }
 
 fn default_root_dir() -> PathBuf {
     std::env::temp_dir().join("mcp-toolkit").join("scratchpad")
+}
+
+fn validate_scratchpad_root_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
+    if root_dir.as_os_str().is_empty() {
+        return Err(ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            "must not be empty",
+        ));
+    }
+    if !root_dir.is_absolute() {
+        return Err(ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            "must be an absolute path",
+        ));
+    }
+    if root_dir
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            "must not contain parent-directory components",
+        ));
+    }
+    Ok(root_dir.to_path_buf())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -342,15 +368,17 @@ pub struct ScratchpadSessionManager {
 impl ScratchpadSessionManager {
     pub fn new(
         engine: SharedScratchpadEngine,
-        config: ScratchpadSessionConfig,
+        mut config: ScratchpadSessionConfig,
     ) -> Result<Self, ScratchpadError> {
         config.validate()?;
-        fs::create_dir_all(&config.root_dir).map_err(|err| {
+        let root_dir = validate_scratchpad_root_dir(&config.root_dir)?;
+        fs::create_dir_all(&root_dir).map_err(|err| {
             ScratchpadError::ScratchpadEngine(format!(
                 "failed to create scratchpad root directory {}: {err}",
-                config.root_dir.display()
+                root_dir.display()
             ))
         })?;
+        config.root_dir = root_dir;
 
         Ok(Self {
             engine,
@@ -2123,6 +2151,33 @@ mod tests {
     }
 
     #[test]
+    fn session_config_rejects_relative_root_dir() {
+        let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let config = test_config("relative-root").with_root_dir(PathBuf::from("relative"));
+
+        let err = match ScratchpadSessionManager::new(engine, config) {
+            Ok(_) => panic!("relative root directory should fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), "INVALID_PARAMS");
+        assert!(err.to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn session_config_rejects_parent_dir_root_components() {
+        let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let config =
+            test_config("parent-root").with_root_dir(std::env::temp_dir().join("nested/.."));
+
+        let err = match ScratchpadSessionManager::new(engine, config) {
+            Ok(_) => panic!("parent directory components should fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), "INVALID_PARAMS");
+        assert!(err.to_string().contains("parent-directory"));
+    }
+
+    #[test]
     fn duckdb_engine_probe_succeeds() {
         let engine = DuckDbEngine::new().expect("engine should initialize");
         engine.probe().expect("probe must pass");
@@ -2144,8 +2199,6 @@ mod tests {
             .open_connection("session_b")
             .expect_err("second session should exceed limit");
         assert_eq!(err.code(), "SCRATCHPAD_LIMIT_EXCEEDED");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2192,8 +2245,6 @@ mod tests {
             .set_max_sessions_limit(0)
             .expect_err("zero runtime limit must fail");
         assert_eq!(invalid.code(), "INVALID_PARAMS");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2228,8 +2279,6 @@ mod tests {
             .set_max_tables_per_session_limit(0)
             .expect_err("zero runtime table limit must fail");
         assert_eq!(invalid.code(), "INVALID_PARAMS");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2264,8 +2313,6 @@ mod tests {
             .note_rows_ingested("quota_session", 2)
             .expect_err("rows beyond limit should fail");
         assert_eq!(row_err.code(), "SCRATCHPAD_LIMIT_EXCEEDED");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2287,8 +2334,6 @@ mod tests {
             .session_snapshot("ephemeral")
             .expect("snapshot query should succeed");
         assert!(snapshot.is_none());
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2301,8 +2346,6 @@ mod tests {
             .open_connection("bad/id")
             .expect_err("slash should be rejected");
         assert_eq!(err.code(), "INVALID_PARAMS");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2315,8 +2358,6 @@ mod tests {
             .validate_query_sql("SELECT * FROM read_csv_auto('input.csv')")
             .expect_err("external scan should be rejected");
         assert_eq!(err.code(), "SCRATCHPAD_SQL_REJECTED");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2334,8 +2375,6 @@ mod tests {
             .run_guarded("cancelled_session", "SELECT 1", hooks, |_conn| Ok(()))
             .expect_err("cancelled token should fail execution");
         assert_eq!(err.code(), "SCRATCHPAD_QUERY_CANCELLED");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2353,8 +2392,6 @@ mod tests {
             })
             .expect_err("timeout should trigger");
         assert_eq!(err.code(), "SCRATCHPAD_QUERY_TIMEOUT");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2370,8 +2407,6 @@ mod tests {
         assert_eq!(info.tables_used, 0);
         assert_eq!(info.rows_used, 0);
         assert!(info.ttl_seconds_remaining <= 60);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2386,8 +2421,6 @@ mod tests {
         let sessions = manager.list_sessions(1).expect("list should succeed");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "a_session");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2400,8 +2433,6 @@ mod tests {
             .list_tables("missing", 50)
             .expect_err("missing session should fail");
         assert_eq!(err.code(), "SCRATCHPAD_SESSION_NOT_FOUND");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2430,8 +2461,6 @@ mod tests {
         assert_eq!(events_table.columns[0].name, "id");
         assert_eq!(events_table.columns[0].logical_type, "integer");
         assert!(events_table.columns[0].nullable);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2465,8 +2494,6 @@ mod tests {
         assert_eq!(wide_table.column_count, 40);
         assert_eq!(wide_table.columns.len(), MAX_TABLE_SCHEMA_COLUMNS_PREVIEW);
         assert!(wide_table.columns_truncated);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2511,8 +2538,6 @@ mod tests {
             .list_tables("ingest_session", 50)
             .expect("table list should succeed");
         assert!(tables.iter().any(|table| table.name == "ga_report"));
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2546,8 +2571,6 @@ mod tests {
             .expect("session info should succeed");
         assert_eq!(info.tables_used, 1);
         assert_eq!(info.rows_used, 1);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2597,8 +2620,6 @@ mod tests {
             .expect("session info should resolve");
         assert_eq!(info.tables_used, 1);
         assert_eq!(info.rows_used, 2);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2664,8 +2685,6 @@ mod tests {
             .expect("session info should resolve");
         assert_eq!(info.tables_used, 1);
         assert_eq!(info.rows_used, 1);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2723,8 +2742,6 @@ mod tests {
             .expect("session info should resolve");
         assert_eq!(info.tables_used, 1);
         assert_eq!(info.rows_used, 1);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2767,8 +2784,6 @@ mod tests {
         assert_eq!(drop_stats.rows_removed, 2);
         assert_eq!(drop_stats.session_snapshot.tables_used, 0);
         assert_eq!(drop_stats.session_snapshot.rows_used, 0);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2787,8 +2802,6 @@ mod tests {
         assert_eq!(drop_stats.rows_removed, 0);
         assert_eq!(drop_stats.session_snapshot.tables_used, 0);
         assert_eq!(drop_stats.session_snapshot.rows_used, 0);
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2805,8 +2818,6 @@ mod tests {
             .expect_err("drop should fail when table is missing");
         assert_eq!(err.code(), "INVALID_PARAMS");
         assert!(err.to_string().contains("not found"));
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2859,8 +2870,6 @@ mod tests {
         assert_eq!(projection.rows[0]["page"], Value::String("/b".to_string()));
         assert_eq!(projection.columns[0].name, "page");
         assert_eq!(projection.columns[1].logical_type, "integer");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2888,8 +2897,6 @@ mod tests {
         assert_eq!(projection.row_count_total, 3);
         assert_eq!(projection.rows.len(), 1);
         assert_eq!(projection.rows[0]["value"], Value::Number(1.into()));
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2920,8 +2927,6 @@ mod tests {
             Value::Number(8.into())
         );
         assert_eq!(projection.rows[0]["MixedCase"], Value::Number(9.into()));
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 
     #[test]
@@ -2938,7 +2943,5 @@ mod tests {
             .expect_err("mutating sql should be rejected");
 
         assert_eq!(err.code(), "SCRATCHPAD_SQL_REJECTED");
-
-        let _ = std::fs::remove_dir_all(manager.config().root_dir.clone());
     }
 }
