@@ -24,6 +24,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-policy-ffi` | Optional dynamic policy-runtime loader. |
 | `mcp-toolkit-policy-kernel-adapters` | Compatibility adapters for exact external policy-kernel parity work. |
 | `mcp-toolkit-postgres` | PostgreSQL connection and TLS helpers. |
+| `mcp-toolkit-scratchpad` | DuckDB-backed scratchpad sessions, bounded SQL helpers, and session/table lifecycle utilities. |
 | `mcp-toolkit-process` | Process and signal helpers. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract test helpers. |
@@ -98,7 +99,11 @@ stable public surface:
    the default MCP route bundle.
 6. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-7. Add policy crates only when the service has an authorization, SQL
+7. Use `mcp-toolkit-scratchpad` when the service needs a bounded DuckDB-backed
+   scratchpad session store or reusable scratchpad SQL guardrails. Release
+   artifacts that bundle DuckDB native code should carry the required
+   third-party notices.
+8. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for

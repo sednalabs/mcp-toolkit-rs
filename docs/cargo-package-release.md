@@ -69,10 +69,13 @@ Before a crate can move from Git-only consumption to crates.io publication:
 3. Confirm internal dependencies include both `version` and `path`, so local
    workspace development remains ergonomic and registry publication resolves by
    version.
-4. Publish or dry-run the dependency graph in order, starting with leaf crates
+4. If a crate bundles native code, include the required third-party notices in
+   the package or release artifact and verify they ship with the published
+   payload.
+5. Publish or dry-run the dependency graph in order, starting with leaf crates
    that have no unpublished toolkit dependencies.
-5. Run the required hosted checks on the exact commit being released.
-6. Record the validation run, package names, versions, and consumer migration
+6. Run the required hosted checks on the exact commit being released.
+7. Record the validation run, package names, versions, and consumer migration
    notes in the release work item or PR.
 
 The likely first-wave order is:

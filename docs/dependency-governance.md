@@ -46,6 +46,26 @@ Dependency change note
 - exception (if any): <risk accepted, owner, expiry date>
 ```
 
+For crates that bundle native code, add one more line to the policy note:
+
+```text
+- bundled native code notices: <included | not needed>
+```
+
+## Bundled Native Code Notes
+
+Some crates intentionally ship or link bundled native code. The DuckDB-backed
+`mcp-toolkit-scratchpad` crate is the current example in this workspace.
+
+For that crate, the current dependency scan should be treated as a baseline
+for release hygiene:
+
+- `duckdb` and `libduckdb-sys` are MIT-licensed.
+- Arrow transitive dependencies observed in the scan are Apache-2.0 and
+  Apache-2.0 AND MIT.
+- If a release artifact bundles DuckDB native code, include the relevant
+  third-party notices with the artifact distribution.
+
 ## Enforcement
 
 Prerequisites:
