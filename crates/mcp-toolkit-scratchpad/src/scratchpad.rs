@@ -195,22 +195,11 @@ impl ScratchpadSessionConfig {
 }
 
 fn default_root_dir() -> PathBuf {
-    std::env::temp_dir().join("mcp-toolkit").join("scratchpad")
+    std::env::temp_dir()
 }
 
 fn prepare_scratchpad_root_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
     let root_dir = validate_scratchpad_root_dir(root_dir)?;
-    let default_root = default_root_dir();
-    if root_dir == default_root {
-        fs::create_dir_all(&default_root).map_err(|err| {
-            ScratchpadError::ScratchpadEngine(format!(
-                "failed to create scratchpad root directory {}: {err}",
-                default_root.display()
-            ))
-        })?;
-        return Ok(default_root);
-    }
-
     let canonical = root_dir.canonicalize().map_err(|err| {
         ScratchpadError::invalid(
             "scratchpad_root_dir",
@@ -2164,9 +2153,11 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("clock should be monotonic")
             .as_nanos();
-        let root_dir = std::env::temp_dir().join(format!("mcp-toolkit-test-{name}-{nanos}"));
-        std::fs::create_dir_all(&root_dir).expect("test root should be created");
-        root_dir
+        tempfile::Builder::new()
+            .prefix(&format!("mcp-toolkit-test-{name}-{nanos}-"))
+            .tempdir()
+            .expect("test root should be created")
+            .keep()
     }
 
     fn test_config(name: &str) -> ScratchpadSessionConfig {
@@ -2204,8 +2195,12 @@ mod tests {
     #[test]
     fn session_config_rejects_missing_custom_root_dir() {
         let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
-        let missing_root = std::env::temp_dir().join("mcp-toolkit-test-missing-custom-root");
-        let _ = std::fs::remove_dir(&missing_root);
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock should be monotonic")
+            .as_nanos();
+        let missing_root =
+            std::env::temp_dir().join(format!("mcp-toolkit-test-missing-custom-root-{nanos}"));
         let config = test_config("missing-root").with_root_dir(missing_root);
 
         let err = match ScratchpadSessionManager::new(engine, config) {
