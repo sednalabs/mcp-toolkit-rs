@@ -2912,11 +2912,11 @@ mod tests {
 
         assert_eq!(projection.pagination_mode, "wrapped_sql");
         assert_eq!(projection.columns[0].name, "Total Clicks");
-        assert_eq!(projection.columns[1].name, "Total Clicks_2");
+        assert_eq!(projection.columns[1].name, "Total Clicks_1");
         assert_eq!(projection.columns[2].name, "MixedCase");
         assert_eq!(projection.rows[0]["Total Clicks"], Value::Number(7.into()));
         assert_eq!(
-            projection.rows[0]["Total Clicks_2"],
+            projection.rows[0]["Total Clicks_1"],
             Value::Number(8.into())
         );
         assert_eq!(projection.rows[0]["MixedCase"], Value::Number(9.into()));
