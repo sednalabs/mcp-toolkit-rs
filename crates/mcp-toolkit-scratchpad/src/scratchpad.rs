@@ -198,6 +198,34 @@ fn default_root_dir() -> PathBuf {
     std::env::temp_dir().join("mcp-toolkit").join("scratchpad")
 }
 
+fn prepare_scratchpad_root_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
+    let root_dir = validate_scratchpad_root_dir(root_dir)?;
+    let default_root = default_root_dir();
+    if root_dir == default_root {
+        fs::create_dir_all(&default_root).map_err(|err| {
+            ScratchpadError::ScratchpadEngine(format!(
+                "failed to create scratchpad root directory {}: {err}",
+                default_root.display()
+            ))
+        })?;
+        return Ok(default_root);
+    }
+
+    let canonical = root_dir.canonicalize().map_err(|err| {
+        ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            format!("custom scratchpad root directory must already exist and be readable: {err}"),
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            "custom scratchpad root directory must be a directory",
+        ));
+    }
+    validate_scratchpad_root_dir(&canonical)
+}
+
 fn validate_scratchpad_root_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
     if root_dir.as_os_str().is_empty() {
         return Err(ScratchpadError::invalid(
@@ -371,13 +399,7 @@ impl ScratchpadSessionManager {
         mut config: ScratchpadSessionConfig,
     ) -> Result<Self, ScratchpadError> {
         config.validate()?;
-        let root_dir = validate_scratchpad_root_dir(&config.root_dir)?;
-        fs::create_dir_all(&root_dir).map_err(|err| {
-            ScratchpadError::ScratchpadEngine(format!(
-                "failed to create scratchpad root directory {}: {err}",
-                root_dir.display()
-            ))
-        })?;
+        let root_dir = prepare_scratchpad_root_dir(&config.root_dir)?;
         config.root_dir = root_dir;
 
         Ok(Self {
@@ -2142,7 +2164,9 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("clock should be monotonic")
             .as_nanos();
-        std::env::temp_dir().join(format!("mcp-toolkit-test-{name}-{nanos}"))
+        let root_dir = std::env::temp_dir().join(format!("mcp-toolkit-test-{name}-{nanos}"));
+        std::fs::create_dir_all(&root_dir).expect("test root should be created");
+        root_dir
     }
 
     fn test_config(name: &str) -> ScratchpadSessionConfig {
@@ -2175,6 +2199,21 @@ mod tests {
         };
         assert_eq!(err.code(), "INVALID_PARAMS");
         assert!(err.to_string().contains("parent-directory"));
+    }
+
+    #[test]
+    fn session_config_rejects_missing_custom_root_dir() {
+        let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let missing_root = std::env::temp_dir().join("mcp-toolkit-test-missing-custom-root");
+        let _ = std::fs::remove_dir(&missing_root);
+        let config = test_config("missing-root").with_root_dir(missing_root);
+
+        let err = match ScratchpadSessionManager::new(engine, config) {
+            Ok(_) => panic!("missing custom root directory should fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), "INVALID_PARAMS");
+        assert!(err.to_string().contains("must already exist"));
     }
 
     #[test]
