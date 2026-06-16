@@ -3,7 +3,7 @@
 //! Restricted SQL policy for DuckDB scratchpad execution.
 
 use mcp_toolkit_policy_core::sql_read_only::{
-    RestrictedSqlError, RestrictedSqlErrorCode, classify_restricted_sql,
+    classify_restricted_sql, RestrictedSqlError, RestrictedSqlErrorCode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -106,7 +106,9 @@ impl ScratchpadError {
 
     pub fn hint(&self) -> Option<&'static str> {
         match self {
-            Self::InvalidArgument { .. } => Some("Check the tool argument schema and required fields."),
+            Self::InvalidArgument { .. } => {
+                Some("Check the tool argument schema and required fields.")
+            }
             Self::ScratchpadEngine(_) => {
                 Some("Check DuckDB runtime availability and server scratchpad configuration.")
             }

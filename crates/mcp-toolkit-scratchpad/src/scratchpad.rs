@@ -2,22 +2,22 @@
 //!
 //! DuckDB engine adapter and session lifecycle manager for DuckDB scratchpad workflows.
 
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use duckdb::arrow::datatypes::DataType as DuckDataType;
 use duckdb::types::Value as DuckValue;
-use duckdb::{Connection, params_from_iter};
-use mcp_toolkit_observability::{EventContext, Level, emit_event, safe_error, safe_text};
-use serde_json::{Map, Value, json};
+use duckdb::{params_from_iter, Connection};
+use mcp_toolkit_observability::{emit_event, safe_error, safe_text, EventContext, Level};
+use serde_json::{json, Map, Value};
 
 use super::error::ScratchpadError;
 use super::sql_safety::validate_scratchpad_sql;
@@ -1457,7 +1457,9 @@ fn query_row_count(conn: &Connection, sql: &str) -> Result<usize, ScratchpadErro
         ))
     })?;
     let Some(row) = rows.next().map_err(|err| {
-        ScratchpadError::ScratchpadEngine(format!("failed to fetch scratchpad row-count row: {err}"))
+        ScratchpadError::ScratchpadEngine(format!(
+            "failed to fetch scratchpad row-count row: {err}"
+        ))
     })?
     else {
         return Ok(0);
@@ -1751,11 +1753,13 @@ fn fetch_table_column_preview(
             "failed to prepare table column preview query for '{table_schema}.{table_name}': {err}"
         ))
     })?;
-    let mut rows = columns_stmt.query([table_schema, table_name]).map_err(|err| {
-        ScratchpadError::ScratchpadEngine(format!(
-            "failed to execute table column preview query for '{table_schema}.{table_name}': {err}"
-        ))
-    })?;
+    let mut rows = columns_stmt
+        .query([table_schema, table_name])
+        .map_err(|err| {
+            ScratchpadError::ScratchpadEngine(format!(
+                "failed to execute table column preview query for '{table_schema}.{table_name}': {err}"
+            ))
+        })?;
 
     let mut columns = Vec::new();
     while let Some(row) = rows.next().map_err(|err| {
@@ -2664,10 +2668,9 @@ mod tests {
             )
             .expect_err("append schema mismatch should fail");
         assert_eq!(err.code(), "INVALID_PARAMS");
-        assert!(
-            err.to_string()
-                .contains("append mode requires identical column order")
-        );
+        assert!(err
+            .to_string()
+            .contains("append mode requires identical column order"));
 
         let info = manager
             .session_info("append_schema_session")
@@ -2723,10 +2726,9 @@ mod tests {
             )
             .expect_err("append type mismatch should fail");
         assert_eq!(err.code(), "INVALID_PARAMS");
-        assert!(
-            err.to_string()
-                .contains("append mode requires type-compatible columns")
-        );
+        assert!(err
+            .to_string()
+            .contains("append mode requires type-compatible columns"));
         assert!(err.to_string().contains("event_count"));
 
         let info = manager
