@@ -48,8 +48,10 @@ impl QueryCostEvidence {
     /// ignores row payload contents except for counting result rows.
     pub fn from_cloudflare_d1_response(raw: &Value) -> Self {
         if let Some(results) = raw.as_array() {
-            let mut evidence = Self::default();
-            evidence.result_count = sum_result_counts(results);
+            let mut evidence = Self {
+                result_count: sum_result_counts(results),
+                ..Self::default()
+            };
             for item in results {
                 if let Some(meta) = item.get("meta") {
                     evidence.merge_meta(meta);
