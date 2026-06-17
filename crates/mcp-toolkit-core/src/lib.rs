@@ -32,6 +32,7 @@ pub mod mcp_apps;
 pub mod notifications;
 pub mod openai_tool_search;
 pub mod pagination;
+pub mod query_evidence;
 pub mod rmcp_models;
 pub mod tool_inventory;
 pub mod tool_schema;
