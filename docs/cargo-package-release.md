@@ -87,8 +87,8 @@ graph, and adopting-service evidence are ready for the same semver promise.
 Before a crate can move from Git-only consumption to crates.io publication:
 
 1. Remove `publish = false` only for crates in the approved package set.
-2. Confirm each package has `description`, `license`, `repository`, and
-   `readme` metadata.
+2. Confirm each package has `description`, `license`, `repository`,
+   `documentation`, and `readme` metadata.
 3. Confirm internal dependencies include both `version` and `path`, so local
    workspace development remains ergonomic and registry publication resolves by
    version.
@@ -108,6 +108,20 @@ crates without unpublished toolkit dependencies, and explicitly marks registry
 package verification as deferred for crates whose verification requires
 predecessor toolkit crates to be published or available in an approved staging
 registry first.
+
+## Docs.rs and Version Notes
+
+First-wave crates should set `documentation = "https://docs.rs/<crate-name>"`
+and `[package.metadata.docs.rs] all-features = true` before publication. This
+keeps crates.io and docs.rs aligned and makes optional feature documentation
+visible unless a crate has a documented reason to build docs with a smaller
+feature set.
+
+The first public package versions are currently `0.1.0`. Treat all pre-1.0
+versions as semver-minor-compatible at the crate level but not as a 1.0 API
+stability promise. Any publication approval should include a changelog entry
+for the exact crate set and should call out consumer-facing breaking changes
+before increasing any published version.
 
 The likely first-wave order is:
 
