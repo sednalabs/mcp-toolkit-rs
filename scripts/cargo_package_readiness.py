@@ -47,6 +47,7 @@ REGISTRY_DEFERRED = [
 ]
 
 REQUIRED_PACKAGE_FIELDS = {
+    "documentation",
     "description",
     "license",
     "repository",
@@ -132,6 +133,22 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
 
     if metadata.get("repository") != "https://github.com/sednalabs/mcp-toolkit-rs":
         errors.append(f"{package.name}: package.repository is not the public repo URL")
+
+    expected_docs_url = f"https://docs.rs/{package.name}"
+    if metadata.get("documentation") != expected_docs_url:
+        errors.append(
+            f"{package.name}: package.documentation must be {expected_docs_url}"
+        )
+
+    docs_rs = (
+        metadata.get("metadata", {})
+        .get("docs", {})
+        .get("rs", {})
+    )
+    if docs_rs.get("all-features") is not True:
+        errors.append(
+            f"{package.name}: package.metadata.docs.rs.all-features must be true"
+        )
 
     if metadata.get("publish") is not False:
         errors.append(
