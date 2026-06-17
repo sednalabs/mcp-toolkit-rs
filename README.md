@@ -14,7 +14,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | Crate | Purpose |
 | --- | --- |
 | `mcp-toolkit` | Umbrella crate with optional feature groups. |
-| `mcp-toolkit-core` | Protocol-facing helpers, notifications, and tool inventory types. |
+| `mcp-toolkit-core` | Protocol-facing helpers, notifications, query-evidence helpers, and tool inventory types. |
 | `mcp-toolkit-auth` | Bearer auth, token validation, replay protection, and auth-surface helpers. |
 | `mcp-toolkit-http` | OAuth/PRM metadata helpers, device-authorization metadata, and optional streamable HTTP session support. |
 | `mcp-toolkit-observability` | Redaction, sanitization, tracing bridge, metrics facade, and optional OTel helpers. |
@@ -100,7 +100,10 @@ stable public surface:
    the default MCP route bundle.
 6. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-7. Add policy crates only when the service has an authorization, SQL
+7. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+   provider query-cost and read-only evidence without returning raw provider
+   payloads.
+8. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for
