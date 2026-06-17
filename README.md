@@ -72,7 +72,7 @@ consumer intentionally wants a long-lived frozen toolkit ref.
 
 See `docs/cargo-package-release.md` for the Rust package release and migration
 path. The planned crates.io package names use the concise `mcp-toolkit-*` crate
-line; npm and PyPI companion packages have separate naming constraints and must
+prefix; npm and PyPI companion packages have separate naming constraints and must
 not be inferred from the Rust crate names.
 
 Run the baseline checks from the repository root:
