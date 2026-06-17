@@ -7,9 +7,20 @@ import argparse
 import os
 import subprocess
 import sys
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        print(
+            "error: Python 3.11+ or the 'tomli' package is required",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 FIRST_WAVE = [
@@ -42,6 +53,8 @@ REQUIRED_PACKAGE_FIELDS = {
     "readme",
 }
 
+WRITE_GITHUB_SUMMARY = True
+
 
 @dataclass(frozen=True)
 class Package:
@@ -61,6 +74,10 @@ class Package:
     def dev_dependencies(self) -> dict:
         return self.manifest.get("dev-dependencies", {})
 
+    @property
+    def build_dependencies(self) -> dict:
+        return self.manifest.get("build-dependencies", {})
+
 
 def load_package(crate_dir: Path) -> Package:
     manifest_path = crate_dir / "Cargo.toml"
@@ -74,6 +91,8 @@ def load_package(crate_dir: Path) -> Package:
 
 
 def github_summary(message: str) -> None:
+    if not WRITE_GITHUB_SUMMARY:
+        return
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -93,6 +112,7 @@ def dependency_items(package: Package) -> list[tuple[str, object, str]]:
     for section_name, section in (
         ("dependencies", package.dependencies),
         ("dev-dependencies", package.dev_dependencies),
+        ("build-dependencies", package.build_dependencies),
     ):
         for name, spec in section.items():
             items.append((name, spec, section_name))
@@ -149,7 +169,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    global WRITE_GITHUB_SUMMARY
+
     args = parse_args()
+    WRITE_GITHUB_SUMMARY = not args.dry_run
     repo_root = Path(__file__).resolve().parents[1]
     crates_root = repo_root / "crates"
     first_wave = set(FIRST_WAVE)
