@@ -29,6 +29,12 @@ FULL_VERIFY = {
     "mcp-toolkit-http",
 }
 
+REGISTRY_DEFERRED = [
+    "mcp-toolkit-testing",
+    "mcp-toolkit-policy-conformance",
+    "mcp-toolkit-auth",
+]
+
 REQUIRED_PACKAGE_FIELDS = {
     "description",
     "license",
@@ -147,6 +153,17 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     crates_root = repo_root / "crates"
     first_wave = set(FIRST_WAVE)
+    deferred = set(REGISTRY_DEFERRED)
+
+    expected_deferred = first_wave - FULL_VERIFY
+    if deferred != expected_deferred:
+        missing = sorted(expected_deferred - deferred)
+        extra = sorted(deferred - expected_deferred)
+        print(
+            f"Registry-deferred package mismatch. missing={missing} extra={extra}",
+            file=sys.stderr,
+        )
+        return 1
 
     packages = [load_package(crates_root / name) for name in FIRST_WAVE]
     package_names = {package.name for package in packages}
@@ -179,6 +196,7 @@ def main() -> int:
             repo_root=repo_root,
             dry_run=args.dry_run,
         )
+        github_summary(f"- `{package}`: package file list generated\n")
 
     for package in FIRST_WAVE:
         if package in FULL_VERIFY:
@@ -188,17 +206,13 @@ def main() -> int:
                 dry_run=args.dry_run,
             )
             github_summary(f"- `{package}`: full package verification passed\n")
-        else:
-            run(
-                ["cargo", "package", "--package", package, "--no-verify"],
-                repo_root=repo_root,
-                dry_run=args.dry_run,
-            )
-            github_summary(
-                f"- `{package}`: package tarball assembled with `--no-verify`; "
-                "full registry verification waits for prerequisite toolkit crates "
-                "to be published or staged\n"
-            )
+
+    for package in REGISTRY_DEFERRED:
+        github_summary(
+            f"- `{package}`: full registry package verification deferred until "
+            "its prerequisite toolkit crates are published or available in an "
+            "approved staging registry\n"
+        )
 
     return 0
 
