@@ -1150,13 +1150,13 @@ mod tests {
                     "openWorldHint": false
                 },
                 "securitySchemes": [
-                    {"type": "oauth2", "scopes": ["items:read"]}
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
                 ],
                 "_meta": {
                     "ui": {"visibility": ["model"]},
                     "openai/widgetAccessible": false,
                     "securitySchemes": [
-                        {"type": "oauth2", "scopes": ["items:read"]}
+                        {"type": "oauth2", "scopes": ["items:read", "items:write"]}
                     ],
                     "example/discovery": {
                         "coldStart": true,
@@ -1176,13 +1176,13 @@ mod tests {
                     "openWorldHint": false
                 },
                 "securitySchemes": [
-                    {"type": "oauth2", "scopes": ["items:read"]}
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
                 ],
                 "_meta": {
                     "ui": {"visibility": ["model"]},
                     "openai/widgetAccessible": false,
                     "securitySchemes": [
-                        {"type": "oauth2", "scopes": ["items:read"]}
+                        {"type": "oauth2", "scopes": ["items:read", "items:write"]}
                     ],
                     "example/discovery": {
                         "coldStart": true,
@@ -1214,13 +1214,13 @@ mod tests {
                 "openWorldHint": false
             },
             "securitySchemes": [
-                {"type": "oauth2", "scopes": ["items:read"]}
+                {"type": "oauth2", "scopes": ["items:read", "items:write"]}
             ],
             "_meta": {
                 "ui": {"visibility": ["model"]},
                 "openai/widgetAccessible": false,
                 "securitySchemes": [
-                    {"type": "oauth2", "scopes": ["items:read"]}
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
                 ]
             }
         });
