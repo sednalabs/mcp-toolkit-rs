@@ -548,7 +548,7 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
         let missing = required_tool_names
             .iter()
             .copied()
-            .filter(|required| !names.iter().any(|name| name == required))
+            .filter(|required| !names.contains(required))
             .collect::<Vec<_>>();
         assert!(
             missing.is_empty(),
@@ -779,10 +779,12 @@ fn duplicate_descriptor_names<'a>(names: &'a [&'a str]) -> Vec<&'a str> {
     for name in names {
         *counts.entry(*name).or_insert(0usize) += 1;
     }
-    counts
+    let mut duplicates = counts
         .into_iter()
         .filter_map(|(name, count)| (count > 1).then_some(name))
-        .collect()
+        .collect::<Vec<_>>();
+    duplicates.sort_unstable();
+    duplicates
 }
 
 fn parse_bearer_challenge(challenge: &str) -> Result<HashMap<String, String>, String> {
