@@ -47,6 +47,17 @@ impl QueryCostEvidence {
     /// MCP wrappers that carry a top-level `truncated` flag. It deliberately
     /// ignores row payload contents except for counting result rows.
     pub fn from_cloudflare_d1_response(raw: &Value) -> Self {
+        if let Some(results) = raw.as_array() {
+            let mut evidence = Self::default();
+            evidence.result_count = sum_result_counts(results);
+            for item in results {
+                if let Some(meta) = item.get("meta") {
+                    evidence.merge_meta(meta);
+                }
+            }
+            return evidence;
+        }
+
         let mut evidence = Self {
             truncated: raw.get("truncated").and_then(Value::as_bool),
             ..Self::default()
@@ -137,8 +148,16 @@ fn merge_sum_f64(current: Option<f64>, next: Option<f64>) -> Option<f64> {
 }
 
 fn value_u64(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(|value| match value {
-        Value::Number(number) => number.as_u64(),
+    value.get(key).and_then(|field| match field {
+        Value::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok()))
+            .or_else(|| {
+                number
+                    .as_f64()
+                    .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
+                    .map(|value| value as u64)
+            }),
         Value::String(text) => text.parse::<u64>().ok(),
         _ => None,
     })
@@ -242,6 +261,40 @@ mod tests {
         assert_eq!(evidence.total_attempts, Some(3));
         assert_eq!(evidence.result_count, Some(3));
         assert_eq!(evidence.truncated, Some(false));
+    }
+
+    #[test]
+    fn supports_raw_result_arrays_and_float_backed_integers() {
+        let evidence = QueryCostEvidence::from_cloudflare_d1_response(&json!([
+            {
+                "meta": {
+                    "changed_db": false,
+                    "rows_read": 4.0,
+                    "rows_written": 0.0,
+                    "duration_ms": 1.25,
+                    "total_attempts": 1.0
+                },
+                "results": [{"id": 1}]
+            },
+            {
+                "meta": {
+                    "changed_db": false,
+                    "rows_read": "6",
+                    "rows_written": 0,
+                    "changes": 0.0,
+                    "duration": 2.0
+                },
+                "results": [{"id": 2}, {"id": 3}]
+            }
+        ]));
+
+        assert_eq!(evidence.changed_db, Some(false));
+        assert_eq!(evidence.rows_read, Some(10));
+        assert_eq!(evidence.rows_written, Some(0));
+        assert_eq!(evidence.changes, Some(0));
+        assert_eq!(evidence.duration_ms, Some(3.25));
+        assert_eq!(evidence.total_attempts, Some(1));
+        assert_eq!(evidence.result_count, Some(3));
     }
 
     #[test]
