@@ -44,20 +44,43 @@ The release owner must record:
 5. the hosted validation run URL for that commit;
 6. the rollback plan for consumers.
 
-## First Package Set
+## Public Package Names
+
+The Rust crates should keep the concise `mcp-toolkit-*` names for crates.io
+unless the release owner records a different decision before publication.
+These names are the public Rust package names, not a claim of vendor
+endorsement or official MCP/OpenAI status. Repository metadata, README text,
+release notes, and docs should make the Sedna Labs maintenance boundary clear.
+
+Other ecosystems have different naming constraints:
+
+- npm packages should use the scoped `@sednalabs/*` names because npm supports
+  organization scopes and the unscoped `mcp-toolkit` name is already occupied.
+- PyPI names should be decided per package when a Python companion is actually
+  ready. In particular, do not assume `mcp-probe` or `mcp-forge`; those names
+  are occupied by unrelated packages.
+
+Recheck every registry name immediately before publication. Availability checks
+in planning notes are evidence, not a reservation.
+
+## First Rust Package Set
 
 The first package set should be as small as the adopting services need. Start
-with the stable helper crates already used by downstream MCP services:
+with the Rust crates that define the reusable public surface and the proof
+helpers needed by downstream MCP services:
 
 - `mcp-toolkit-core`
-- `mcp-toolkit-http`
-- `mcp-toolkit-observability`
-- `mcp-toolkit-postgres`
 - `mcp-toolkit-testing`
+- `mcp-toolkit-observability`
 - `mcp-toolkit-auth`
+- `mcp-toolkit-http`
+- `mcp-toolkit-policy-core`
+- `mcp-toolkit-policy-conformance`
 
-Add the umbrella, server, policy, process, docs, and Gemini crates only when
-their public API and dependency graph are ready for the same semver promise.
+Hold back the umbrella, server, policy-runtime, policy-ffi,
+policy-kernel-adapters, process, docs, Gemini, Postgres, and other
+service-specific or convenience crates until their public API, dependency
+graph, and adopting-service evidence are ready for the same semver promise.
 
 ## Readiness Checklist
 
@@ -77,15 +100,20 @@ Before a crate can move from Git-only consumption to crates.io publication:
 
 The likely first-wave order is:
 
-1. `mcp-toolkit-core`, `mcp-toolkit-http`, `mcp-toolkit-observability`,
-   `mcp-toolkit-postgres`
-2. `mcp-toolkit-testing`
-3. `mcp-toolkit-auth`
+1. `mcp-toolkit-core`, `mcp-toolkit-observability`,
+   `mcp-toolkit-policy-core`
+2. `mcp-toolkit-http`
+3. `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`
+4. `mcp-toolkit-auth`
 
 `mcp-toolkit-testing` currently depends on `mcp-toolkit-core` and
-`mcp-toolkit-http`, while `mcp-toolkit-auth` uses `mcp-toolkit-testing` as a
-dev-dependency for contract tests. Adjust the order if the approved package set
-or dependency graph changes.
+`mcp-toolkit-http`; `mcp-toolkit-policy-conformance` depends on
+`mcp-toolkit-policy-core`; and `mcp-toolkit-auth` uses `mcp-toolkit-testing` as
+a dev-dependency for contract tests. Adjust the order if the approved package
+set or dependency graph changes.
+
+Do not include server-generation or scaffold tooling in the required first Rust
+GO path until that product shape and name are explicitly approved.
 
 ## Consumer Migration After Publication
 
