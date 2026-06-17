@@ -140,12 +140,13 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
             f"{package.name}: package.documentation must be {expected_docs_url}"
         )
 
-    docs_rs = (
-        metadata.get("metadata", {})
-        .get("docs", {})
-        .get("rs", {})
+    docs_metadata = metadata.get("metadata")
+    docs = docs_metadata.get("docs") if isinstance(docs_metadata, dict) else None
+    docs_rs = docs.get("rs") if isinstance(docs, dict) else None
+    all_features = (
+        docs_rs.get("all-features") if isinstance(docs_rs, dict) else None
     )
-    if docs_rs.get("all-features") is not True:
+    if all_features is not True:
         errors.append(
             f"{package.name}: package.metadata.docs.rs.all-features must be true"
         )
