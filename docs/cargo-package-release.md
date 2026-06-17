@@ -113,7 +113,7 @@ a dev-dependency for contract tests. Adjust the order if the approved package
 set or dependency graph changes.
 
 Do not include server-generation or scaffold tooling in the required first Rust
-GO path until that product shape and name are explicitly approved.
+release path until that product shape and name are explicitly approved.
 
 ## Consumer Migration After Publication
 
