@@ -6,7 +6,7 @@ clients.
 `mcp-toolkit-rs` is an early public workspace for the shared substrate that
 keeps Rust MCP services consistent: auth discovery, HTTP/session support,
 policy primitives, tool inventory helpers, observability, process utilities,
-and test harnesses. It is pre-1.0 and the crates are not published to
+and test harnesses. It is pre-1.0 and the Rust crates are not published to
 crates.io yet, so adopters should consume it from Git for now.
 
 ## What Is Included
@@ -68,8 +68,12 @@ mcp-toolkit = {
 
 Commit the consumer `Cargo.lock` after resolution. The lockfile records the
 exact toolkit SHA; manifest `rev` pins are only needed for special cases where a
-consumer intentionally wants a long-lived frozen toolkit ref. See
-`docs/cargo-package-release.md` for the package release and migration path.
+consumer intentionally wants a long-lived frozen toolkit ref.
+
+See `docs/cargo-package-release.md` for the Rust package release and migration
+path. The planned crates.io package names use the concise `mcp-toolkit-*` crate
+prefix; npm and PyPI companion packages have separate naming constraints and must
+not be inferred from the Rust crate names.
 
 Run the baseline checks from the repository root:
 
@@ -205,7 +209,7 @@ Security reporting guidance is documented in `SECURITY.md`.
 
 The workspace is useful today, but it is still pre-1.0. Expect APIs to tighten
 as the public surface settles. Crates are marked `publish = false` until the
-crate-level release process is ready; consumers should use public Git
+crate-level release process is approved; consumers should use public Git
 dependencies plus committed lockfiles until crates are published.
 
 ## License

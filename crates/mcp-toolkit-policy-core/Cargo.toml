@@ -5,9 +5,13 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Pure policy primitives and deterministic validators for Rust MCP services."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+documentation = "https://docs.rs/mcp-toolkit-policy-core"
 readme = "../../README.md"
 publish = false
 build = "build.rs"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 path = "src/lib.rs"
