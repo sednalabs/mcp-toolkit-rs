@@ -98,6 +98,17 @@ Before a crate can move from Git-only consumption to crates.io publication:
 6. Record the validation run, package names, versions, and consumer migration
    notes in the release work item or PR.
 
+Routine pull requests keep publication disabled, but they should still prove
+the first-wave package shape. The `cargo-package-readiness` workflow runs
+`scripts/cargo_package_readiness.py`, which checks required manifest metadata,
+keeps the routine `publish = false` guard in place, verifies internal toolkit
+dependencies have both `version` and `path`, runs `cargo package --list` for
+the first-wave crates, runs full `cargo package` verification for first-wave
+crates without unpublished toolkit dependencies, and explicitly marks registry
+package verification as deferred for crates whose verification requires
+predecessor toolkit crates to be published or available in an approved staging
+registry first.
+
 The likely first-wave order is:
 
 1. `mcp-toolkit-core`, `mcp-toolkit-observability`,
