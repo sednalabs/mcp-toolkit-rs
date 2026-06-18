@@ -315,7 +315,10 @@ mod tests {
                 .await;
         });
 
-        (format!("http://{addr}/introspect"), shutdown_tx)
+        (
+            format!("http://{addr}/introspect"), // DevSkim: ignore DS137138 loopback test fixture
+            shutdown_tx,
+        )
     }
 
     /// Executes extract_scopes_from_scope_string.

@@ -38,6 +38,10 @@ jobs:
       - name: Run DevSkim scanner
         # Microsoft DevSkim Action v1
         uses: microsoft/DevSkim-Action@4b5047945a44163b94642a1cecc0d93a3f428cc6
+        with:
+          # Loopback hosts are intentional in this MCP server toolkit's auth,
+          # host-validation, streamable HTTP, and template contract tests.
+          exclude-rules: DS162092
 
       - name: Upload DevSkim scan results to GitHub code scanning
         # github/codeql-action v4
