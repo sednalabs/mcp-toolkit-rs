@@ -9,10 +9,21 @@ on:
       - "crates/mcp-toolkit-policy-*/**"
       - "docs/sql-policy-kernel-conformance.md"
       - "scripts/sql_policy_kernel_conformance.sh"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/policy-kernel-consumption.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/mcp-toolkit-policy-*/**"
+      - "docs/sql-policy-kernel-conformance.md"
+      - "scripts/sql_policy_kernel_conformance.sh"
   workflow_dispatch:
     inputs:
       policy_kernel_repository:
-        description: "Optional public repository that provides policy-kernel contracts and vectors. For private targets, configure repository settings/secrets instead of putting the name in this workflow file."
+        description: "Optional public repository that provides policy-kernel contracts and vectors. Private targets require a separate trusted proof workflow."
         required: false
         default: ""
       policy_kernel_ref:
@@ -42,11 +53,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      POLICY_KERNEL_REPOSITORY: ${{ inputs.policy_kernel_repository || vars.POLICY_KERNEL_REPOSITORY || secrets.POLICY_KERNEL_REPOSITORY }}
+      POLICY_KERNEL_REPOSITORY: ${{ inputs.policy_kernel_repository || vars.POLICY_KERNEL_REPOSITORY }}
       POLICY_KERNEL_REF: ${{ inputs.policy_kernel_ref || 'main' }}
       POLICY_KERNEL_RUN_ID: ${{ inputs.policy_kernel_run_id }}
       POLICY_KERNEL_ARTIFACT_NAME: ${{ inputs.policy_kernel_artifact_name }}
-      HAS_POLICY_KERNEL_READ_TOKEN: ${{ secrets.POLICY_KERNEL_READ_TOKEN != '' }}
       PK_POLICY_KERNEL_ROOT: ${{ github.workspace }}/.policy-kernel
       KERNEL_ROOT: ${{ github.workspace }}/.policy-kernel
       CONSUMPTION_REPORT_DIR: ${{ github.workspace }}/.tmp/policy_kernel_consumption
@@ -96,7 +106,7 @@ jobs:
               handle.write(f"- Manifest: `{manifest_path.relative_to(workspace)}`\n")
           PY
 
-            message="Policy-kernel repository target is not configured. Set the workflow input for a public target, or configure POLICY_KERNEL_REPOSITORY plus POLICY_KERNEL_READ_TOKEN as repository settings/secrets for a private target."
+            message="Policy-kernel repository target is not configured. Set the workflow input or POLICY_KERNEL_REPOSITORY repository variable to a public target."
             if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
               echo "::error::$message"
               exit 1
@@ -106,7 +116,7 @@ jobs:
             exit 0
           fi
 
-          if [[ "$POLICY_KERNEL_REPOSITORY" != "$GITHUB_REPOSITORY" && "$HAS_POLICY_KERNEL_READ_TOKEN" != "true" ]]; then
+          if [[ "$POLICY_KERNEL_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
             repo_visibility="unknown"
             if repo_private="$(gh repo view "$POLICY_KERNEL_REPOSITORY" --json isPrivate --jq .isPrivate 2>/dev/null)"; then
               if [[ "$repo_private" == "false" ]]; then
@@ -117,7 +127,7 @@ jobs:
             fi
 
             if [[ "$repo_visibility" == "public" ]]; then
-              echo "::notice::Policy-kernel repository target is public; continuing without POLICY_KERNEL_READ_TOKEN."
+              echo "::notice::Policy-kernel repository target is public; continuing with the workflow token."
               exit 0
             fi
 
@@ -132,7 +142,7 @@ jobs:
           manifest = {
               "schema_version": "policy-kernel-consumption.v1",
               "status": "skipped",
-              "reason": "POLICY_KERNEL_READ_TOKEN is required because the policy-kernel repository is private or not publicly readable from this workflow",
+              "reason": "policy-kernel repository target is private or not publicly readable from this fork-safe workflow",
               "toolkit_repository": os.environ["GITHUB_REPOSITORY"],
               "policy_kernel_repository_configured": True,
               "policy_kernel_repository": "redacted",
@@ -146,11 +156,11 @@ jobs:
           with summary.open("a", encoding="utf-8") as handle:
               handle.write("### Policy-kernel consumption\n\n")
               handle.write("- Status: `skipped`\n")
-              handle.write("- Reason: `POLICY_KERNEL_READ_TOKEN` is required because the policy-kernel repository is private or not publicly readable from this workflow.\n")
+              handle.write("- Reason: policy-kernel repository target is private or not publicly readable from this fork-safe workflow.\n")
               handle.write(f"- Manifest: `{manifest_path.relative_to(workspace)}`\n")
           PY
 
-            message="POLICY_KERNEL_READ_TOKEN is required because the configured policy-kernel repository is private or not publicly readable from this workflow. Public policy-kernel repositories do not need this secret. Configure a least-privilege read token as a repository secret, then rerun this workflow."
+            message="Policy-kernel repository target is private or not publicly readable from this fork-safe workflow. Use a public target here, or run private target validation from a separate trusted workflow."
             if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
               echo "::error::$message"
               exit 1
@@ -169,7 +179,6 @@ jobs:
           path: .policy-kernel
           fetch-depth: 1
           persist-credentials: false
-          token: ${{ secrets.POLICY_KERNEL_READ_TOKEN || github.token }}
 
       - name: Resolve target metadata
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
@@ -200,7 +209,7 @@ jobs:
       - name: Download policy-kernel validation artifact
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' && env.POLICY_KERNEL_RUN_ID != '' }}
         env:
-          GH_TOKEN: ${{ secrets.POLICY_KERNEL_READ_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
