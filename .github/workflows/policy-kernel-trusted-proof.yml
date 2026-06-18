@@ -1,0 +1,327 @@
+name: policy-kernel-trusted-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      policy_kernel_repository:
+        description: "Optional repository override. Leave empty to use the protected environment configuration."
+        required: false
+        default: ""
+      policy_kernel_ref:
+        description: "Ref to check out from the policy-kernel repository."
+        required: false
+        default: "main"
+      policy_kernel_run_id:
+        description: "Optional policy-kernel workflow run id whose artifact should be downloaded for provenance."
+        required: false
+        default: ""
+      policy_kernel_artifact_name:
+        description: "Optional artifact name from policy_kernel_run_id. Empty downloads every artifact from that run."
+        required: false
+        default: ""
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: policy-kernel-trusted-proof::${{ github.ref_name }}::${{ inputs.policy_kernel_ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  policy-kernel-trusted-proof:
+    name: Validate trusted policy-kernel consumption
+    runs-on: ubuntu-24.04
+    environment: policy-kernel-private-proof
+    timeout-minutes: 30
+    env:
+      POLICY_KERNEL_REPOSITORY: ${{ inputs.policy_kernel_repository || vars.POLICY_KERNEL_REPOSITORY || secrets.POLICY_KERNEL_REPOSITORY }}
+      POLICY_KERNEL_REF: ${{ inputs.policy_kernel_ref || 'main' }}
+      POLICY_KERNEL_RUN_ID: ${{ inputs.policy_kernel_run_id }}
+      POLICY_KERNEL_ARTIFACT_NAME: ${{ inputs.policy_kernel_artifact_name }}
+      POLICY_KERNEL_AUTH_TOKEN: ${{ secrets.POLICY_KERNEL_READ_TOKEN }}
+      PK_POLICY_KERNEL_ROOT: ${{ github.workspace }}/.policy-kernel
+      KERNEL_ROOT: ${{ github.workspace }}/.policy-kernel
+      CONSUMPTION_REPORT_DIR: ${{ github.workspace }}/.tmp/policy_kernel_consumption
+      POLICY_KERNEL_ARTIFACT_DIR: ${{ github.workspace }}/.tmp/policy_kernel_artifacts
+    steps:
+      - name: Checkout toolkit
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check policy-kernel access
+        env:
+          GH_TOKEN: ${{ env.POLICY_KERNEL_AUTH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$CONSUMPTION_REPORT_DIR"
+          if [[ -z "$POLICY_KERNEL_REPOSITORY" ]]; then
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          report_dir = Path(os.environ["CONSUMPTION_REPORT_DIR"])
+          manifest_path = report_dir / "manifest.json"
+          manifest = {
+              "schema_version": "policy-kernel-consumption.v1",
+              "status": "skipped",
+              "reason": "policy-kernel repository target is not configured in the trusted environment",
+              "toolkit_repository": os.environ["GITHUB_REPOSITORY"],
+              "policy_kernel_repository_configured": False,
+              "policy_kernel_ref": os.environ["POLICY_KERNEL_REF"],
+              "policy_kernel_run_id": os.environ.get("POLICY_KERNEL_RUN_ID") or None,
+              "policy_kernel_artifact_name": os.environ.get("POLICY_KERNEL_ARTIFACT_NAME") or None,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("### Policy-kernel trusted proof\n\n")
+              handle.write("- Status: `skipped`\n")
+              handle.write("- Reason: policy-kernel repository target is not configured in the trusted environment.\n")
+              handle.write(f"- Manifest: `{manifest_path.relative_to(workspace)}`\n")
+          PY
+
+            echo "::error::Policy-kernel repository target is not configured in the trusted environment."
+            exit 1
+          fi
+
+          if [[ -z "$POLICY_KERNEL_AUTH_TOKEN" ]]; then
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          report_dir = Path(os.environ["CONSUMPTION_REPORT_DIR"])
+          manifest_path = report_dir / "manifest.json"
+          manifest = {
+              "schema_version": "policy-kernel-consumption.v1",
+              "status": "skipped",
+              "reason": "POLICY_KERNEL_READ_TOKEN is not configured in the trusted environment",
+              "toolkit_repository": os.environ["GITHUB_REPOSITORY"],
+              "policy_kernel_repository_configured": True,
+              "policy_kernel_repository": "redacted",
+              "policy_kernel_ref": os.environ["POLICY_KERNEL_REF"],
+              "policy_kernel_run_id": os.environ.get("POLICY_KERNEL_RUN_ID") or None,
+              "policy_kernel_artifact_name": os.environ.get("POLICY_KERNEL_ARTIFACT_NAME") or None,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("### Policy-kernel trusted proof\n\n")
+              handle.write("- Status: `skipped`\n")
+              handle.write("- Reason: `POLICY_KERNEL_READ_TOKEN` is not configured in the trusted environment.\n")
+              handle.write(f"- Manifest: `{manifest_path.relative_to(workspace)}`\n")
+          PY
+
+            echo "::error::POLICY_KERNEL_READ_TOKEN is not configured in the trusted environment."
+            exit 1
+          fi
+
+          if ! gh repo view "$POLICY_KERNEL_REPOSITORY" --json isPrivate --jq .isPrivate >/dev/null; then
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          report_dir = Path(os.environ["CONSUMPTION_REPORT_DIR"])
+          manifest_path = report_dir / "manifest.json"
+          manifest = {
+              "schema_version": "policy-kernel-consumption.v1",
+              "status": "skipped",
+              "reason": "trusted environment token could not read policy-kernel repository metadata",
+              "toolkit_repository": os.environ["GITHUB_REPOSITORY"],
+              "policy_kernel_repository_configured": True,
+              "policy_kernel_repository": "redacted",
+              "policy_kernel_ref": os.environ["POLICY_KERNEL_REF"],
+              "policy_kernel_run_id": os.environ.get("POLICY_KERNEL_RUN_ID") or None,
+              "policy_kernel_artifact_name": os.environ.get("POLICY_KERNEL_ARTIFACT_NAME") or None,
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("### Policy-kernel trusted proof\n\n")
+              handle.write("- Status: `skipped`\n")
+              handle.write("- Reason: trusted environment token could not read policy-kernel repository metadata.\n")
+              handle.write(f"- Manifest: `{manifest_path.relative_to(workspace)}`\n")
+          PY
+
+            echo "::error::Trusted environment token could not read policy-kernel repository metadata."
+            exit 1
+          fi
+
+      - name: Checkout policy kernel
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: ${{ env.POLICY_KERNEL_REPOSITORY }}
+          ref: ${{ env.POLICY_KERNEL_REF }}
+          path: .policy-kernel
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ env.POLICY_KERNEL_AUTH_TOKEN }}
+
+      - name: Resolve target metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$CONSUMPTION_REPORT_DIR"
+          toolkit_sha="$(git rev-parse HEAD)"
+          policy_kernel_sha="$(git -C "$PK_POLICY_KERNEL_ROOT" rev-parse HEAD)"
+
+          {
+            echo "### Policy-kernel trusted proof"
+            echo
+            echo "- Toolkit ref: \`${GITHUB_REF_NAME}\`"
+            echo "- Toolkit SHA: \`${toolkit_sha}\`"
+            echo "- Policy-kernel repository target: configured"
+            echo "- Policy-kernel ref: \`${POLICY_KERNEL_REF}\`"
+            echo "- Policy-kernel SHA: \`${policy_kernel_sha}\`"
+            echo "- Setup class: \`trusted-rust-policy-crates\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "TOOLKIT_SHA=${toolkit_sha}"
+            echo "POLICY_KERNEL_SHA=${policy_kernel_sha}"
+          } >> "$GITHUB_ENV"
+
+      - name: Download policy-kernel validation artifact
+        if: ${{ env.POLICY_KERNEL_RUN_ID != '' }}
+        env:
+          GH_TOKEN: ${{ env.POLICY_KERNEL_AUTH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$POLICY_KERNEL_ARTIFACT_DIR"
+          args=(
+            run
+            download
+            "$POLICY_KERNEL_RUN_ID"
+            --repo
+            "$POLICY_KERNEL_REPOSITORY"
+            --dir
+            "$POLICY_KERNEL_ARTIFACT_DIR"
+          )
+          if [[ -n "$POLICY_KERNEL_ARTIFACT_NAME" ]]; then
+            args+=(--name "$POLICY_KERNEL_ARTIFACT_NAME")
+          fi
+          gh "${args[@]}"
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Cache cargo artifacts
+        # swatinem/rust-cache v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: policy-kernel-trusted-proof-${{ runner.os }}
+          cache-targets: true
+
+      - name: Run policy crate tests against checked-out kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo test --locked \
+            -p mcp-toolkit-policy-core \
+            -p mcp-toolkit-policy-conformance \
+            -p mcp-toolkit-policy-kernel-adapters \
+            -p mcp-toolkit-policy-runtime \
+            -p mcp-toolkit-policy-ffi \
+            --all-targets
+
+      - name: Run SQL policy-kernel conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./scripts/sql_policy_kernel_conformance.sh \
+            --report "$CONSUMPTION_REPORT_DIR/sql_policy_core_vs_kernel_report.json"
+
+      - name: Capture consumption manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          report_dir = Path(os.environ["CONSUMPTION_REPORT_DIR"])
+          artifact_dir = Path(os.environ["POLICY_KERNEL_ARTIFACT_DIR"])
+          conformance_path = report_dir / "sql_policy_core_vs_kernel_report.json"
+
+          conformance = json.loads(conformance_path.read_text(encoding="utf-8"))
+          downloaded_artifacts = []
+          if artifact_dir.exists():
+              downloaded_artifacts = [
+                  str(path.relative_to(workspace))
+                  for path in sorted(artifact_dir.rglob("*"))
+                  if path.is_file()
+              ]
+
+          manifest = {
+              "schema_version": "policy-kernel-consumption.v1",
+              "toolkit_sha": os.environ["TOOLKIT_SHA"],
+              "policy_kernel_repository_configured": True,
+              "policy_kernel_repository": "redacted",
+              "policy_kernel_ref": os.environ["POLICY_KERNEL_REF"],
+              "policy_kernel_sha": os.environ["POLICY_KERNEL_SHA"],
+              "policy_kernel_run_id": os.environ.get("POLICY_KERNEL_RUN_ID") or None,
+              "policy_kernel_artifact_name": os.environ.get("POLICY_KERNEL_ARTIFACT_NAME") or None,
+              "pk_policy_kernel_root": str(Path(os.environ["PK_POLICY_KERNEL_ROOT"]).relative_to(workspace)),
+              "runtime_modes_exercised": ["rust"],
+              "decision_metadata_coverage": [
+                  "decision_source",
+                  "runtime_mode",
+                  "policy_contract_version",
+              ],
+              "conformance": {
+                  "report": str(conformance_path.relative_to(workspace)),
+                  "evaluated_cases": conformance["evaluated_cases"],
+                  "mismatch_count": conformance["mismatch_count"],
+                  "policy_contract_version": conformance["policy_contract_version"],
+              },
+              "downloaded_artifact_file_count": len(downloaded_artifacts),
+              "downloaded_artifacts": downloaded_artifacts[:100],
+          }
+          manifest_path = report_dir / "manifest.json"
+          manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("\n## Consumption Results\n\n")
+              handle.write(f"- SQL conformance cases: `{manifest['conformance']['evaluated_cases']}`\n")
+              handle.write(f"- SQL conformance mismatches: `{manifest['conformance']['mismatch_count']}`\n")
+              handle.write(f"- Runtime modes exercised: `{', '.join(manifest['runtime_modes_exercised'])}`\n")
+              handle.write(f"- Downloaded policy-kernel artifact files: `{len(downloaded_artifacts)}`\n")
+              handle.write(f"- Manifest: `{manifest_path.relative_to(workspace)}`\n")
+          PY
+
+      - name: Upload consumption artifact
+        if: ${{ always() }}
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: policy-kernel-trusted-proof-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .tmp/policy_kernel_consumption/**
+            .tmp/policy_kernel_artifacts/**
