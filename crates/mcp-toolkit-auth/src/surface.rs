@@ -1352,7 +1352,7 @@ mod tests {
         let config = AuthSurfaceConfig {
             public_base_url: "https://example.com".to_string(),
             entries: vec![IssuerEntry {
-                issuer: "http://issuer.test".to_string(),
+                issuer: "http://issuer.test".to_string(), // DevSkim: ignore DS137138 insecure URL detection fixture
                 ..test_entry("/mcp", Some("https://example.com/mcp"))
             }],
             root_alias_policy: RootAliasPolicy::Automatic,
