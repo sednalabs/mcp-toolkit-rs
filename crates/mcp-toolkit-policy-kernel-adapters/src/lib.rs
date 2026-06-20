@@ -556,6 +556,9 @@ fn normalized_claim_audience_within_limits(claims: &serde_json::Map<String, Valu
 }
 
 fn auth_claim_within_boundary_limits(claims: &serde_json::Map<String, Value>, key: &str) -> bool {
+    // Intentionally do not normalize (trim/filter empty) auth claims.
+    // These values may be consumed as exact opaque tokens (for example hash-like fields),
+    // so boundary checking is applied to the raw string representation only.
     optional_string_within_boundary_limit(claims.get(key).and_then(Value::as_str))
 }
 
