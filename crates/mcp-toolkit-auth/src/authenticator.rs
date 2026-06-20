@@ -5,6 +5,7 @@ use http::HeaderMap;
 use reqwest::Client;
 use serde_json::json;
 
+use crate::bearer::parse_strict_bearer_authorization;
 use crate::claims::{extract_roles, extract_scopes, merge_claims, validate_issuer_audience};
 use crate::providers::{IntrospectionCache, JwksCache};
 use crate::replay::JtiCache;
@@ -335,32 +336,18 @@ impl Authenticator {
 }
 
 fn bearer_token(headers: &HeaderMap, strict: bool) -> Option<String> {
+    if strict {
+        return parse_strict_bearer_authorization(headers)
+            .ok()
+            .map(|token| token.as_str().to_owned());
+    }
+
     let mut values = headers.get_all(http::header::AUTHORIZATION).iter();
     let value = values.next()?;
     if values.next().is_some() {
         return None;
     }
     let raw = value.to_str().ok()?;
-    if strict {
-        if raw.trim() != raw {
-            return None;
-        }
-        if raw.chars().any(|ch| ch.is_control()) {
-            return None;
-        }
-        if raw.matches(' ').count() != 1 {
-            return None;
-        }
-        let (scheme, token) = raw.split_once(' ')?;
-        if !scheme.eq_ignore_ascii_case("bearer") {
-            return None;
-        }
-        if token.is_empty() {
-            return None;
-        }
-        return Some(token.to_string());
-    }
-
     let raw: String = raw.chars().filter(|c| !c.is_control()).collect();
     let raw = raw.trim();
     let (scheme, token) = raw.split_once(' ')?;

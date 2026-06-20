@@ -104,6 +104,12 @@ Protected resource paths require valid bearer tokens. Failures return:
 - `WWW-Authenticate: Bearer` with `resource_metadata=...`
 - RFC 6750 error codes only (`invalid_request`, `invalid_token`, `insufficient_scope`)
 
+Services that need to extract bearer tokens before handing them to an auth
+backend should use `mcp_toolkit_auth::parse_strict_bearer_authorization`. The
+helper enforces the toolkit strict-mode shape: one `Authorization` header,
+case-insensitive `Bearer`, exactly one ASCII space, no control characters, and
+a non-empty token.
+
 ### Public Paths
 Some endpoints (health checks, metrics) can bypass auth enforcement by configuring:
 - `public_paths` for exact path matches
