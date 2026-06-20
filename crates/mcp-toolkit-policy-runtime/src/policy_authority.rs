@@ -205,9 +205,13 @@ impl<Request> PolicyAuthority<Request> for KernelPolicyAuthority<Request> {
     fn evaluate(&self, request: &Request) -> PolicyAuthorityDecision {
         match self.runtime_mode {
             PolicyRuntimeMode::Rust => self.evaluate_rust(request),
-            PolicyRuntimeMode::SparkPrefer => self
-                .evaluate_spark(request)
-                .unwrap_or_else(|_| self.evaluate_rust(request)),
+            PolicyRuntimeMode::SparkPrefer => self.evaluate_spark(request).unwrap_or_else(|err| {
+                eprintln!(
+                    "Spark evaluation failed in SparkPrefer mode for source '{}': {}. Falling back to Rust evaluator.",
+                    self.decision_source, err
+                );
+                self.evaluate_rust(request)
+            }),
             PolicyRuntimeMode::SparkRequired => self
                 .evaluate_spark(request)
                 .unwrap_or_else(|_| self.evaluate_spark_required_failure()),
