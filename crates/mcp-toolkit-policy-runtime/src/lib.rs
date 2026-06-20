@@ -26,9 +26,17 @@
 //! * Policy Kernel: `mcp-policy-kernel` (upstream policy authority)
 
 pub mod capability_guard;
+#[cfg(feature = "http")]
+pub mod http_policy;
 pub mod policy_authority;
 
 pub use capability_guard::{CapabilityGuard, CapabilityGuardError, CapabilityRefreshState};
+#[cfg(feature = "http")]
+pub use http_policy::{
+    policy_authority_decision_ref_from_parts, JsonPolicyDenyHandler, PolicyAuthorityLayer,
+    PolicyAuthorityService, PolicyHttpAuthContext, PolicyHttpDenyHandler, PolicyHttpRequestContext,
+    PolicyHttpSurfaceContext, PolicyRequestMapper,
+};
 pub use policy_authority::{
     configured_das_observability_policy_authority, configured_das_query_policy_authority,
     configured_gateway_policy_authority, configured_sql_restricted_policy_authority,
