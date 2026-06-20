@@ -841,18 +841,16 @@ impl ToolInventory {
         groups.sort();
         groups.dedup();
 
-        let visible_tools = tool_names.iter().cloned().collect::<HashSet<_>>();
-        let visible_groups = groups.iter().cloned().collect::<HashSet<_>>();
         let missing_required_tools = profile
             .required_tools
             .iter()
-            .filter(|tool| !visible_tools.contains(*tool))
+            .filter(|tool| tool_names.binary_search(tool).is_err())
             .cloned()
             .collect::<Vec<_>>();
         let missing_required_groups = profile
             .required_groups
             .iter()
-            .filter(|group| !visible_groups.contains(*group))
+            .filter(|group| groups.binary_search(group).is_err())
             .cloned()
             .collect::<Vec<_>>();
 
