@@ -28,8 +28,6 @@
 use std::{
     future::Future,
     marker::PhantomData,
-    pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
