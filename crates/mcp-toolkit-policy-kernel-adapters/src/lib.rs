@@ -538,11 +538,11 @@ fn normalized_claim_audience_within_limits(claims: &serde_json::Map<String, Valu
             let mut count = 0usize;
             for value in values {
                 let Some(aud) = value.as_str() else {
-                    continue;
+                    return false;
                 };
                 let aud = aud.trim();
                 if aud.is_empty() {
-                    continue;
+                    return false;
                 }
                 count += 1;
                 if count > BOUNDARY_MAX_LIST_LENGTH || !string_within_boundary_limit(aud) {
