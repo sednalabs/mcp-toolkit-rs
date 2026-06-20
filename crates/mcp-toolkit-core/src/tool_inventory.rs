@@ -534,6 +534,174 @@ impl ToolInventoryPolicy {
     }
 }
 
+/// Named native catalog profile for a coherent MCP tool surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCatalogProfile {
+    key: String,
+    title: String,
+    description: String,
+    instructions: Option<String>,
+    policy: ToolInventoryPolicy,
+    required_tools: Vec<String>,
+    required_groups: Vec<String>,
+}
+
+impl ToolCatalogProfile {
+    /// Create a profile with normalized public identity fields.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when any identity field is blank.
+    pub fn new(
+        key: impl AsRef<str>,
+        title: impl AsRef<str>,
+        description: impl AsRef<str>,
+    ) -> Result<Self, ToolInventoryError> {
+        Ok(Self {
+            key: normalize_non_empty("catalog profile key", key.as_ref())?,
+            title: normalize_non_empty("catalog profile title", title.as_ref())?,
+            description: normalize_non_empty("catalog profile description", description.as_ref())?,
+            instructions: None,
+            policy: ToolInventoryPolicy::strict(),
+            required_tools: Vec::new(),
+            required_groups: Vec::new(),
+        })
+    }
+
+    /// Attach short host-facing instructions for this profile.
+    #[must_use]
+    pub fn with_instructions(mut self, instructions: impl AsRef<str>) -> Self {
+        let instructions = instructions.as_ref().trim();
+        self.instructions = (!instructions.is_empty()).then(|| instructions.to_string());
+        self
+    }
+
+    /// Replace the inventory policy used to shape this profile.
+    #[must_use]
+    pub fn with_policy(mut self, policy: ToolInventoryPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Set tools that must be present after profile filtering.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when any tool name is blank.
+    pub fn with_required_tools<I, S>(mut self, tools: I) -> Result<Self, ToolInventoryError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.required_tools = normalize_non_empty_list("required tool", tools)?;
+        Ok(self)
+    }
+
+    /// Set tool groups that must have at least one visible tool.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when any group name is blank.
+    pub fn with_required_groups<I, S>(mut self, groups: I) -> Result<Self, ToolInventoryError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.required_groups = normalize_non_empty_list("required group", groups)?;
+        Ok(self)
+    }
+
+    /// Stable profile key.
+    pub fn key(&self) -> &str {
+        self.key.as_str()
+    }
+
+    /// Human-readable profile title.
+    pub fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    /// Human-readable profile description.
+    pub fn description(&self) -> &str {
+        self.description.as_str()
+    }
+
+    /// Optional host-facing profile instructions.
+    pub fn instructions(&self) -> Option<&str> {
+        self.instructions.as_deref()
+    }
+
+    /// Inventory policy that shapes this profile.
+    pub fn policy(&self) -> &ToolInventoryPolicy {
+        &self.policy
+    }
+
+    /// Tools that must remain visible in this profile.
+    pub fn required_tools(&self) -> &[String] {
+        self.required_tools.as_slice()
+    }
+
+    /// Groups that must have at least one visible tool in this profile.
+    pub fn required_groups(&self) -> &[String] {
+        self.required_groups.as_slice()
+    }
+}
+
+/// Probe-readable contract emitted for one native catalog profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCatalogContract {
+    pub profile_key: String,
+    pub title: String,
+    pub description: String,
+    pub instructions: Option<String>,
+    pub operation: ToolOperation,
+    pub tool_names: Vec<String>,
+    pub groups: Vec<String>,
+    pub required_tools: Vec<String>,
+    pub missing_required_tools: Vec<String>,
+    pub required_groups: Vec<String>,
+    pub missing_required_groups: Vec<String>,
+    pub allowed_groups: Option<Vec<String>>,
+    pub read_only_only: bool,
+    pub include_unregistered: bool,
+    pub enabled_feature_flags: Vec<String>,
+}
+
+impl ToolCatalogContract {
+    /// Return true when required tools and groups are present.
+    pub fn is_satisfied(&self) -> bool {
+        self.missing_required_tools.is_empty() && self.missing_required_groups.is_empty()
+    }
+
+    /// Serialize this profile contract into a stable JSON artifact.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "schema": "mcp_tool_catalog_profile_contract",
+            "version": 1,
+            "profile": {
+                "key": self.profile_key,
+                "title": self.title,
+                "description": self.description,
+                "instructions": self.instructions,
+            },
+            "operation": operation_label(self.operation),
+            "tool_count": self.tool_names.len(),
+            "tool_names": self.tool_names,
+            "groups": self.groups,
+            "requirements": {
+                "required_tools": self.required_tools,
+                "missing_required_tools": self.missing_required_tools,
+                "required_groups": self.required_groups,
+                "missing_required_groups": self.missing_required_groups,
+                "satisfied": self.is_satisfied(),
+            },
+            "policy": {
+                "allowed_groups": self.allowed_groups,
+                "read_only_only": self.read_only_only,
+                "include_unregistered": self.include_unregistered,
+                "enabled_feature_flags": self.enabled_feature_flags,
+            },
+        })
+    }
+}
+
 /// Inventory of registered tool capabilities.
 #[derive(Debug, Clone, Default)]
 pub struct ToolInventory {
@@ -632,6 +800,79 @@ impl ToolInventory {
             .into_iter()
             .filter(|tool| self.is_allowed(tool_name(tool), operation, policy))
             .collect()
+    }
+
+    /// Filter a tool list through a named catalog profile.
+    pub fn filter_tools_for_profile<T, F>(
+        &self,
+        tools: Vec<T>,
+        operation: ToolOperation,
+        profile: &ToolCatalogProfile,
+        tool_name: F,
+    ) -> Vec<T>
+    where
+        F: Fn(&T) -> &str,
+    {
+        self.filter_tools(tools, operation, profile.policy(), tool_name)
+    }
+
+    /// Build a probe-readable contract for a named catalog profile.
+    pub fn catalog_contract(
+        &self,
+        profile: &ToolCatalogProfile,
+        operation: ToolOperation,
+    ) -> ToolCatalogContract {
+        let visible = self
+            .capabilities()
+            .into_iter()
+            .filter(|capability| profile.policy.allows_capability(capability, operation))
+            .collect::<Vec<_>>();
+
+        let mut tool_names = visible
+            .iter()
+            .map(|capability| capability.name.clone())
+            .collect::<Vec<_>>();
+        tool_names.sort();
+
+        let mut groups = visible
+            .iter()
+            .filter_map(|capability| capability.group.clone())
+            .collect::<Vec<_>>();
+        groups.sort();
+        groups.dedup();
+
+        let visible_tools = tool_names.iter().cloned().collect::<HashSet<_>>();
+        let visible_groups = groups.iter().cloned().collect::<HashSet<_>>();
+        let missing_required_tools = profile
+            .required_tools
+            .iter()
+            .filter(|tool| !visible_tools.contains(*tool))
+            .cloned()
+            .collect::<Vec<_>>();
+        let missing_required_groups = profile
+            .required_groups
+            .iter()
+            .filter(|group| !visible_groups.contains(*group))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        ToolCatalogContract {
+            profile_key: profile.key.clone(),
+            title: profile.title.clone(),
+            description: profile.description.clone(),
+            instructions: profile.instructions.clone(),
+            operation,
+            tool_names,
+            groups,
+            required_tools: profile.required_tools.clone(),
+            missing_required_tools,
+            required_groups: profile.required_groups.clone(),
+            missing_required_groups,
+            allowed_groups: sorted_optional_set(&profile.policy.allowed_groups),
+            read_only_only: profile.policy.read_only_only,
+            include_unregistered: profile.policy.include_unregistered,
+            enabled_feature_flags: sorted_set(&profile.policy.enabled_feature_flags),
+        }
     }
 
     /// Search registered tool metadata under a policy.
@@ -753,9 +994,43 @@ fn normalize_non_empty(field: &str, value: &str) -> Result<String, ToolInventory
     Ok(trimmed.to_string())
 }
 
+fn normalize_non_empty_list<I, S>(field: &str, values: I) -> Result<Vec<String>, ToolInventoryError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut normalized = Vec::new();
+    for value in values {
+        normalized.push(normalize_non_empty(field, value.as_ref())?);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn sorted_set(values: &HashSet<String>) -> Vec<String> {
+    let mut values = values.iter().cloned().collect::<Vec<_>>();
+    values.sort();
+    values
+}
+
+fn sorted_optional_set(values: &Option<HashSet<String>>) -> Option<Vec<String>> {
+    values.as_ref().map(sorted_set)
+}
+
+fn operation_label(operation: ToolOperation) -> &'static str {
+    match operation {
+        ToolOperation::List => "list",
+        ToolOperation::Call => "call",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ToolCapability, ToolExposure, ToolInventory, ToolInventoryPolicy, ToolOperation};
+    use super::{
+        ToolCapability, ToolCatalogProfile, ToolExposure, ToolInventory, ToolInventoryPolicy,
+        ToolOperation,
+    };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse};
     use serde_json::json;
 
@@ -941,6 +1216,115 @@ mod tests {
         assert_eq!(
             value["openai_deferred_loading"]["find_tools_scope"],
             value["openai_deferred_loading"]["local_search_scope"]
+        );
+    }
+
+    #[test]
+    fn catalog_profile_filters_tools_and_emits_satisfied_contract() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("items.search")
+                .with_group("items")
+                .with_read_only(true),
+            ToolCapability::new("items.update")
+                .with_group("items")
+                .with_read_only(false),
+            ToolCapability::new("graph.neighbors")
+                .with_group("graph")
+                .with_read_only(true),
+            ToolCapability::new("admin.rotate_key")
+                .with_group("admin")
+                .with_read_only(false),
+        ])
+        .expect("inventory");
+        let profile = ToolCatalogProfile::new(
+            "read-core",
+            "Read Core",
+            "Read-only item and graph tools for default discovery.",
+        )
+        .expect("profile")
+        .with_instructions("Use mutations only in an explicit write profile.")
+        .with_policy(
+            ToolInventoryPolicy::strict_read_only().with_allowed_groups(["items", "graph"]),
+        )
+        .with_required_tools(["items.search", "graph.neighbors"])
+        .expect("required tools")
+        .with_required_groups(["items", "graph"])
+        .expect("required groups");
+
+        let filtered = inventory.filter_tools_for_profile(
+            vec![
+                "admin.rotate_key",
+                "graph.neighbors",
+                "items.search",
+                "items.update",
+            ],
+            ToolOperation::List,
+            &profile,
+            |tool| tool,
+        );
+        assert_eq!(filtered, vec!["graph.neighbors", "items.search"]);
+
+        let contract = inventory.catalog_contract(&profile, ToolOperation::List);
+        assert!(contract.is_satisfied());
+        assert_eq!(
+            contract.to_value(),
+            json!({
+                "schema": "mcp_tool_catalog_profile_contract",
+                "version": 1,
+                "profile": {
+                    "key": "read-core",
+                    "title": "Read Core",
+                    "description": "Read-only item and graph tools for default discovery.",
+                    "instructions": "Use mutations only in an explicit write profile.",
+                },
+                "operation": "list",
+                "tool_count": 2,
+                "tool_names": ["graph.neighbors", "items.search"],
+                "groups": ["graph", "items"],
+                "requirements": {
+                    "required_tools": ["graph.neighbors", "items.search"],
+                    "missing_required_tools": [],
+                    "required_groups": ["graph", "items"],
+                    "missing_required_groups": [],
+                    "satisfied": true,
+                },
+                "policy": {
+                    "allowed_groups": ["graph", "items"],
+                    "read_only_only": true,
+                    "include_unregistered": false,
+                    "enabled_feature_flags": [],
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn catalog_profile_contract_reports_missing_requirements() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("items.search")
+            .with_group("items")
+            .with_read_only(true)])
+        .expect("inventory");
+        let profile = ToolCatalogProfile::new(
+            "graph",
+            "Graph",
+            "Graph navigation profile with required relationship tools.",
+        )
+        .expect("profile")
+        .with_policy(ToolInventoryPolicy::strict_read_only().with_allowed_groups(["graph"]))
+        .with_required_tools(["graph.neighbors"])
+        .expect("required tools")
+        .with_required_groups(["graph"])
+        .expect("required groups");
+
+        let contract = inventory.catalog_contract(&profile, ToolOperation::List);
+
+        assert!(!contract.is_satisfied());
+        assert_eq!(contract.tool_names, Vec::<String>::new());
+        assert_eq!(contract.missing_required_tools, vec!["graph.neighbors"]);
+        assert_eq!(contract.missing_required_groups, vec!["graph"]);
+        assert_eq!(
+            contract.to_value()["requirements"]["satisfied"],
+            json!(false)
         );
     }
 }

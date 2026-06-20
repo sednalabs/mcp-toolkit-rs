@@ -90,24 +90,29 @@ stable public surface:
 
 1. Use `mcp-toolkit-core::tool_inventory` to register the tools your server can
    expose.
-2. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
+2. Define native catalog profiles with `ToolCatalogProfile` when a server has
+   large or role-shaped tool surfaces. Emit `ToolCatalogContract` artifacts from
+   the same inventory and validate them with
+   `mcp_toolkit_testing::catalog_profile_contract` so required tools and groups
+   are probe-visible without adding production `find_tools` workarounds.
+3. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
    `tools/list` contract.
-3. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
+4. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
    catalogs should publish a reusable `defer_loading` plus `tool_search`
    request fragment, a richer documentation/resource template, and a local
    `allowed_tools` discovery envelope.
-4. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
+5. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery, Protected Resource Metadata, and
    device-authorization metadata for headless MCP client login.
-5. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+6. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle.
-6. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+7. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-7. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+8. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.
-8. Add policy crates only when the service has an authorization, SQL
+9. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for
