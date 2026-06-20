@@ -1062,13 +1062,29 @@ where
                 match authenticator.authenticate_headers(&headers).await {
                     Ok(context) => {
                         if !allowed_client_ids.is_empty() {
-                            let azp = context.azp.as_deref().unwrap_or_default();
-                            if azp.is_empty() || !allowed_client_ids.contains(azp) {
-                                let err =
+                            let authz_error = match context.azp.as_deref() {
+                                None => Some(
+                                    AuthError::new("missing azp claim for this service")
+                                        .with_status(StatusCode::FORBIDDEN.as_u16())
+                                        .with_code("AUTH_CLIENT_NOT_ALLOWED")
+                                        .with_reason("client_not_allowed"),
+                                ),
+                                Some("") => Some(
+                                    AuthError::new("empty azp claim for this service")
+                                        .with_status(StatusCode::FORBIDDEN.as_u16())
+                                        .with_code("AUTH_CLIENT_NOT_ALLOWED")
+                                        .with_reason("client_not_allowed"),
+                                ),
+                                Some(azp) if !allowed_client_ids.contains(azp) => Some(
                                     AuthError::new("client_id is not allowed for this service")
                                         .with_status(StatusCode::FORBIDDEN.as_u16())
                                         .with_code("AUTH_CLIENT_NOT_ALLOWED")
-                                        .with_reason("client_not_allowed");
+                                        .with_reason("client_not_allowed"),
+                                ),
+                                Some(_) => None,
+                            };
+
+                            if let Some(err) = authz_error {
                                 observe_auth_failure(
                                     auth_failure_observer.as_deref(),
                                     AuthFailureEvent {
