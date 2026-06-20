@@ -137,7 +137,10 @@ fn required_non_empty_string_from<'a>(
     payload
         .get(field)
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty() && value.trim() == *value)
+        .filter(|value| {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && trimmed == *value
+        })
         .unwrap_or_else(|| {
             panic!("catalog profile contract must include non-empty trimmed string field {field:?}")
         })
