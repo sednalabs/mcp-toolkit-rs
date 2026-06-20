@@ -314,6 +314,57 @@ static INVOCATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 static SESSION_PROBE_SNAPSHOT_TMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 const SESSION_PROBE_CACHED_429_RESET_LIMIT: Duration = Duration::from_secs(60);
 
+#[cfg(not(windows))]
+fn default_artifact_root() -> PathBuf {
+    PathBuf::from("/tmp/gemini-cli-mcp")
+}
+
+#[cfg(windows)]
+fn default_artifact_root() -> PathBuf {
+    PathBuf::from("target").join("gemini-cli-mcp")
+}
+
+fn configured_artifact_path(raw: Option<&str>) -> Option<PathBuf> {
+    let value = raw?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let requested = Path::new(value);
+    if requested
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+
+    let file_name = requested.file_name()?.to_str()?;
+    if !is_safe_artifact_file_name(file_name) {
+        return None;
+    }
+
+    let root = default_artifact_root();
+    if requested.is_absolute() {
+        let parent = requested.parent()?;
+        if parent != root {
+            return None;
+        }
+    } else if requested.components().count() != 1 {
+        return None;
+    }
+
+    Some(root.join(file_name))
+}
+
+fn is_safe_artifact_file_name(file_name: &str) -> bool {
+    !file_name.is_empty()
+        && file_name != "."
+        && file_name != ".."
+        && file_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 #[derive(Clone)]
 struct FanoutGeminiInvocationObserver {
     observers: Vec<Arc<dyn GeminiInvocationObserver>>,
@@ -978,12 +1029,7 @@ struct TokenUsageLedger {
 
 impl TokenUsageLedger {
     fn new(config: &GeminiExecutionConfig) -> Self {
-        let path = config
-            .usage_ledger_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
+        let path = configured_artifact_path(config.usage_ledger_path.as_deref());
         Self { path }
     }
 
@@ -1043,12 +1089,7 @@ struct ResponseEnvelopeDebugArtifact {
 
 impl ResponseEnvelopeDebugArtifact {
     fn new(config: &GeminiExecutionConfig) -> Self {
-        let path = config
-            .response_debug_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
+        let path = configured_artifact_path(config.response_debug_path.as_deref());
         Self { path }
     }
 
@@ -1078,12 +1119,7 @@ struct SessionProbeSnapshotArtifact {
 
 impl SessionProbeSnapshotArtifact {
     fn new(config: &GeminiExecutionConfig) -> Self {
-        let path = config
-            .session_probe_snapshot_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
+        let path = configured_artifact_path(config.session_probe_snapshot_path.as_deref())
             .or_else(|| derived_session_probe_snapshot_path(config));
         Self { path }
     }
@@ -1170,10 +1206,8 @@ fn derived_session_probe_snapshot_path(config: &GeminiExecutionConfig) -> Option
     ]
     .into_iter()
     .flatten()
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
     .find_map(|value| {
-        let path = PathBuf::from(value);
+        let path = configured_artifact_path(Some(value))?;
         path.parent()
             .map(|parent| parent.join("session-probe.latest.json"))
     })
@@ -9227,10 +9261,11 @@ mod tests {
         blocking_codebase_fallback_category, build_sql_guardrail_prompt,
         build_sql_guardrail_repair_prompt, cached_session_probe_warning, classify_stderr_error,
         codebase_investigator_fallback_prompt, codebase_investigator_prompt,
-        codebase_scout_fallback_prompt, codebase_scout_prompt, current_unix_timestamp_ms,
-        default_to_no_nested_mcp_servers, extract_context_window_snapshot,
-        extract_sql_table_references, extract_token_usage, is_cache_eligible_session_probe_failure,
-        mobile_provider_evidence_prompt, model_not_allowed_issue, next_allowlisted_downgrade_model,
+        codebase_scout_fallback_prompt, codebase_scout_prompt, configured_artifact_path,
+        current_unix_timestamp_ms, default_artifact_root, default_to_no_nested_mcp_servers,
+        extract_context_window_snapshot, extract_sql_table_references, extract_token_usage,
+        is_cache_eligible_session_probe_failure, mobile_provider_evidence_prompt,
+        model_not_allowed_issue, next_allowlisted_downgrade_model,
         normalize_allowed_mcp_servers_override, normalize_ask_gemini_output,
         normalize_codebase_tool_response, normalize_mobile_provider_field, normalize_model_list,
         normalize_optional_model_field, normalize_optional_resume_selector,
@@ -9250,8 +9285,59 @@ mod tests {
     use serde_json::json;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
+
+    static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    fn test_temp_root() -> PathBuf {
+        PathBuf::from("target").join("mcp-toolkit-gemini-tests")
+    }
+
+    fn test_temp_dir(stem: &str) -> PathBuf {
+        let dir = test_temp_root().join(format!(
+            "{}-{}-{}",
+            stem,
+            std::process::id(),
+            TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("create test temp dir");
+        dir
+    }
+
+    fn test_temp_path(stem: &str, extension: &str) -> PathBuf {
+        let root = test_temp_root();
+        std::fs::create_dir_all(&root).expect("create test temp root");
+        root.join(format!(
+            "{}-{}-{}.{}",
+            stem,
+            std::process::id(),
+            TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+            extension
+        ))
+    }
+
+    #[test]
+    fn configured_artifact_path_confines_operator_paths() {
+        let root = default_artifact_root();
+        assert_eq!(
+            configured_artifact_path(Some("usage.jsonl")),
+            Some(root.join("usage.jsonl"))
+        );
+        assert_eq!(
+            configured_artifact_path(Some(
+                root.join("response-debug.jsonl")
+                    .to_str()
+                    .expect("artifact path should be utf-8")
+            )),
+            Some(root.join("response-debug.jsonl"))
+        );
+        assert!(configured_artifact_path(Some("../usage.jsonl")).is_none());
+        assert!(configured_artifact_path(Some("nested/usage.jsonl")).is_none());
+        assert!(configured_artifact_path(Some("/tmp/elsewhere/usage.jsonl")).is_none());
+    }
 
     #[test]
     fn codebase_scout_prompt_has_required_guardrails_and_schema() {
@@ -10355,11 +10441,7 @@ mod tests {
 
     #[test]
     fn usage_ledger_writes_jsonl_record_when_path_is_configured() {
-        let path = std::env::temp_dir().join(format!(
-            "gemini-usage-ledger-test-{}-{}.jsonl",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
+        let path = test_temp_path("gemini-usage-ledger-test", "jsonl");
         let ledger = TokenUsageLedger {
             path: Some(path.clone()),
         };
@@ -10451,11 +10533,7 @@ mod tests {
 
     #[test]
     fn response_debug_artifact_writes_jsonl_record_when_path_is_configured() {
-        let path = std::env::temp_dir().join(format!(
-            "gemini-response-debug-test-{}-{}.jsonl",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
+        let path = test_temp_path("gemini-response-debug-test", "jsonl");
         let artifact = ResponseEnvelopeDebugArtifact {
             path: Some(path.clone()),
         };
@@ -10514,11 +10592,7 @@ mod tests {
 
     #[test]
     fn session_probe_snapshot_artifact_reads_recent_snapshot() {
-        let path = std::env::temp_dir().join(format!(
-            "gemini-session-probe-snapshot-test-{}-{}.json",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
+        let path = test_temp_path("gemini-session-probe-snapshot-test", "json");
         let artifact = SessionProbeSnapshotArtifact {
             path: Some(path.clone()),
         };
@@ -10563,12 +10637,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gemini_session_stats_returns_cached_snapshot_for_transient_timeout() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "gemini-session-probe-fallback-test-{}-{}",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
-        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let temp_dir = test_temp_dir("gemini-session-probe-fallback-test");
 
         let script_path = temp_dir.join("fake-gemini-timeout.sh");
         std::fs::write(
@@ -10681,11 +10750,7 @@ sleep 5
     #[cfg(unix)]
     #[test]
     fn session_probe_snapshot_artifact_persists_private_permissions() {
-        let path = std::env::temp_dir().join(format!(
-            "gemini-session-probe-permissions-test-{}-{}.json",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
+        let path = test_temp_path("gemini-session-probe-permissions-test", "json");
         let artifact = SessionProbeSnapshotArtifact {
             path: Some(path.clone()),
         };
@@ -10777,12 +10842,7 @@ sleep 5
     #[cfg(unix)]
     #[test]
     fn gemini_session_stats_does_not_return_snapshot_that_became_stale() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "gemini-session-probe-stale-during-timeout-test-{}-{}",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
-        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let temp_dir = test_temp_dir("gemini-session-probe-stale-during-timeout-test");
 
         let script_path = temp_dir.join("fake-gemini-timeout.sh");
         std::fs::write(
@@ -10858,11 +10918,7 @@ sleep 5
 
     #[test]
     fn session_probe_snapshot_artifact_reports_parse_failures() {
-        let path = std::env::temp_dir().join(format!(
-            "gemini-session-probe-invalid-test-{}-{}.json",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
+        let path = test_temp_path("gemini-session-probe-invalid-test", "json");
         std::fs::write(&path, b"not-json").expect("write invalid snapshot");
         let artifact = SessionProbeSnapshotArtifact {
             path: Some(path.clone()),
@@ -10878,11 +10934,7 @@ sleep 5
 
     #[test]
     fn session_probe_snapshot_artifact_rejects_stale_snapshot() {
-        let path = std::env::temp_dir().join(format!(
-            "gemini-session-probe-stale-test-{}-{}.json",
-            std::process::id(),
-            current_unix_timestamp_ms()
-        ));
+        let path = test_temp_path("gemini-session-probe-stale-test", "json");
         let payload = json!({
             "version": 1,
             "captured_at_ms": current_unix_timestamp_ms().saturating_sub(120_000),
@@ -11192,8 +11244,7 @@ sleep 5
 
     #[test]
     fn target_validation_requires_path_within_include_directories() {
-        let temp_root =
-            std::env::temp_dir().join(format!("gemini-target-scope-{}", std::process::id()));
+        let temp_root = test_temp_dir("gemini-target-scope");
         let allowed_root = temp_root.join("allowed");
         let nested = allowed_root.join("nested");
         let nested_alias = allowed_root.join("nested/../nested");
@@ -11226,8 +11277,7 @@ sleep 5
 
     #[test]
     fn scoped_ask_gemini_target_defaults_to_inferred_cwd_when_missing() {
-        let temp_root =
-            std::env::temp_dir().join(format!("gemini-ask-scope-target-{}", std::process::id()));
+        let temp_root = test_temp_dir("gemini-ask-scope-target");
         let allowed_root = temp_root.join("allowed");
         let cwd = allowed_root.join("repo");
         std::fs::create_dir_all(&cwd).expect("create inferred cwd");

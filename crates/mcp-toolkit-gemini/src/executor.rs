@@ -1412,14 +1412,20 @@ mod tests {
     };
     use crate::config::{AllowedMcpServers, GeminiExecutionConfig};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
-    fn make_temp_dir(suffix: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mcp-toolkit-gemini-command-spec-{}-{}",
-            std::process::id(),
-            suffix
-        ));
+    static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    fn make_temp_dir(stem: &str) -> PathBuf {
+        let dir = PathBuf::from("target")
+            .join("mcp-toolkit-gemini-command-spec")
+            .join(format!(
+                "{}-{}-{}",
+                stem,
+                std::process::id(),
+                TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }

@@ -16,16 +16,25 @@ use mcp_toolkit_gemini::{
 };
 use tokio_util::sync::CancellationToken;
 
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn make_test_dir() -> PathBuf {
+    let dir = PathBuf::from("target")
+        .join("mcp-toolkit-gemini-tests")
+        .join(format!(
+            "{}-{}",
+            std::process::id(),
+            TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+    fs::create_dir_all(&dir).expect("create test temp directory");
+    dir
+}
+
 #[cfg(unix)]
-fn make_fake_gemini_script(prefix: &str) -> PathBuf {
+fn make_fake_gemini_script(_prefix: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let script = r#"#!/usr/bin/env bash
@@ -111,15 +120,10 @@ impl GeminiOutputObserver for LastHeartbeatObserver {
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script_with_stdin_fallback(prefix: &str) -> PathBuf {
+fn make_fake_gemini_script_with_stdin_fallback(_prefix: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let script = r#"#!/usr/bin/env bash
@@ -152,15 +156,10 @@ printf '{\"ok\": true}\n'
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script_printing_sandbox_env(prefix: &str) -> PathBuf {
+fn make_fake_gemini_script_printing_sandbox_env(_prefix: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let script = r#"#!/usr/bin/env bash
@@ -181,15 +180,10 @@ printf '%s\n' "$@"
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script_missing_sandbox_runtime(prefix: &str) -> PathBuf {
+fn make_fake_gemini_script_missing_sandbox_runtime(_prefix: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let script = r#"#!/usr/bin/env bash
@@ -217,15 +211,10 @@ printf '%s\n' "$@"
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script_printing_pwd(prefix: &str) -> PathBuf {
+fn make_fake_gemini_script_printing_pwd(_prefix: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let script = r#"#!/usr/bin/env bash
@@ -245,15 +234,10 @@ printf 'cwd=%s\n' "$(pwd)"
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script_retrying_429(prefix: &str, failures_before_success: usize) -> PathBuf {
+fn make_fake_gemini_script_retrying_429(_prefix: &str, failures_before_success: usize) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let counter_path = dir.join("retry-count.txt");
@@ -291,15 +275,10 @@ printf 'ok-after-429-retry\n'
 }
 
 #[cfg(unix)]
-fn make_fake_gemini_script_with_delay(prefix: &str, delay_ms: u64) -> PathBuf {
+fn make_fake_gemini_script_with_delay(_prefix: &str, delay_ms: u64) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "mcp-toolkit-gemini-tests-{}-{}",
-        std::process::id(),
-        prefix
-    ));
-    fs::create_dir_all(&dir).expect("create test temp directory");
+    let dir = make_test_dir();
 
     let script_path = dir.join("fake-gemini.sh");
     let delay_seconds = (delay_ms as f64) / 1000.0;
