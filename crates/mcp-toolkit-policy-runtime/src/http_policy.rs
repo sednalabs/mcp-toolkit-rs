@@ -323,7 +323,8 @@ where
 
         if decision.allow {
             request.extensions_mut().insert(decision);
-            let future = self.inner.call(request);
+            let mut inner = self.inner.clone();
+            let future = inner.call(request);
             return boxed(future);
         }
 
