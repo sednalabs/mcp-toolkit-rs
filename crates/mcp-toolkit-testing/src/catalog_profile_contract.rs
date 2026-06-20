@@ -162,15 +162,18 @@ fn required_string_array_from(
         .unwrap_or_else(|| panic!("catalog profile contract must include array field {field:?}"))
         .iter()
         .map(|value| {
-            value
-                .as_str()
-                .filter(|value| !value.trim().is_empty() && value.trim() == *value)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "catalog profile contract field {field:?} must contain only non-empty trimmed strings"
-                    )
-                })
-                .to_string()
+            let value = value.as_str().unwrap_or_else(|| {
+                panic!(
+                    "catalog profile contract field {field:?} must contain only non-empty trimmed strings"
+                )
+            });
+            let trimmed = value.trim();
+            if trimmed.is_empty() || trimmed != value {
+                panic!(
+                    "catalog profile contract field {field:?} must contain only non-empty trimmed strings"
+                );
+            }
+            value.to_string()
         })
         .collect()
 }
