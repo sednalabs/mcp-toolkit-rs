@@ -1,38 +1,54 @@
 //! # MCP Toolkit Gemini
 //!
-//! Gemini model and CLI integration primitives for MCP servers.
+//! Reusable Gemini CLI integration primitives for Rust MCP servers.
 //!
-//! ## Ownership
-//! This module owns the integration interfaces, execution policies, and tool
-//! contracts for interacting with Gemini models and associated CLI tools.
+//! ## Rationale
+//! Centralize Gemini execution policy and tool contracts in one dedicated
+//! module so multiple servers can share behavior without duplicating wrappers.
 //!
-//! ## Non-ownership
-//! This module does not manage the underlying model runtime or network
-//! connectivity to Gemini APIs.
-//!
-//! ## Policy & Guarantees
-//! * **Safe Execution**: Invokes Gemini CLI via direct subprocess execution to avoid
-//!   shell-injection vulnerabilities.
-//! * **Exposure Policy**: Implements an explicit allowlist for downstream MCP tool
-//!   servers to mitigate accidental exposure of the local tool surface.
-//! * **API-key-only Auth**: Requires `GEMINI_API_KEY` and does not support
-//!   browser, account, or inherited home-directory Gemini CLI authentication.
-//!
-//! ## Caller Responsibility
-//! Callers are responsible for:
-//! * Supplying valid execution configurations with a `GEMINI_API_KEY`.
-//! * Defining and maintaining a secure allowlist of downstream MCP servers.
+//! ## Security Boundaries
+//! * Executes Gemini CLI without invoking a shell.
+//! * Defaults to denying downstream Gemini MCP servers unless explicitly allowed.
 //!
 //! ## References
-//! * `mcp-workspace/servers/gemini-cli-mcp-rs`
+//! * MCP servers that embed Gemini CLI-backed tools behind a transport layer.
 
+// Preserve the promoted runtime surface first so downstream servers can move
+// from local path dependencies to a hosted toolkit revision. Follow-up cleanup
+// can tighten these style lints without changing the public API in the same PR.
+#![allow(
+    clippy::bool_assert_comparison,
+    clippy::collapsible_if,
+    clippy::derivable_impls,
+    clippy::field_reassign_with_default,
+    clippy::large_enum_variant,
+    clippy::manual_pattern_char_comparison,
+    clippy::question_mark,
+    clippy::redundant_locals,
+    clippy::too_many_arguments,
+    clippy::unnecessary_map_or,
+    clippy::unnecessary_min_or_max,
+    clippy::while_let_loop,
+    clippy::while_let_on_iterator
+)]
+
+mod async_registry;
+mod compression_bridge;
 pub mod config;
 pub mod executor;
+pub mod observe;
+mod resume;
 pub mod service;
 
 pub use config::{
-    load_execution_config_from_env_map, load_execution_config_from_process_env, AllowedMcpServers,
-    AskGeminiPolicy, GeminiExecutionConfig, GeminiExecutionRawConfig,
+    AllowedMcpServers, AskGeminiPolicy, GeminiExecutionConfig, GeminiExecutionRawConfig,
+    load_execution_config_from_env_map, load_execution_config_from_process_env,
 };
-pub use executor::{execute_gemini, GeminiExecutionError, GeminiRequest, GeminiResponse};
+pub use executor::{GeminiExecutionError, GeminiRequest, GeminiResponse, execute_gemini};
+pub use observe::{
+    GeminiInvocationEvent, GeminiInvocationEventKind, GeminiInvocationMetadata,
+    GeminiInvocationObserver, GeminiInvocationPhase, GeminiOutputStream, GeminiUsageSnapshot,
+    NoopGeminiInvocationObserver,
+};
+pub use resume::ResumeStrategy;
 pub use service::GeminiMcp;
