@@ -9304,13 +9304,25 @@ mod tests {
             TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).expect("create test temp dir");
-        dir
+        std::fs::canonicalize(dir).expect("canonical test temp dir")
     }
 
     fn test_temp_path(stem: &str, extension: &str) -> PathBuf {
         let root = test_temp_root();
         std::fs::create_dir_all(&root).expect("create test temp root");
-        root.join(format!(
+        std::fs::canonicalize(root)
+            .expect("canonical test temp root")
+            .join(format!(
+                "{}-{}-{}.{}",
+                stem,
+                std::process::id(),
+                TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+                extension
+            ))
+    }
+
+    fn test_artifact_path(stem: &str, extension: &str) -> PathBuf {
+        default_artifact_root().join(format!(
             "{}-{}-{}.{}",
             stem,
             std::process::id(),
@@ -10653,8 +10665,8 @@ sleep 5
         permissions.set_mode(0o755);
         std::fs::set_permissions(&script_path, permissions).expect("chmod fake gemini script");
 
-        let ledger_path = temp_dir.join("usage.jsonl");
-        let snapshot_path = temp_dir.join("session-probe.latest.json");
+        let ledger_path = test_artifact_path("session-probe-fallback-usage", "jsonl");
+        let snapshot_path = test_artifact_path("session-probe-fallback-snapshot", "json");
         let mcp = super::GeminiMcp::new(GeminiExecutionConfig {
             gemini_bin: script_path.to_string_lossy().into_owned(),
             usage_ledger_path: Some(ledger_path.to_string_lossy().into_owned()),
@@ -10858,7 +10870,7 @@ sleep 5
         permissions.set_mode(0o755);
         std::fs::set_permissions(&script_path, permissions).expect("chmod fake gemini script");
 
-        let snapshot_path = temp_dir.join("session-probe.latest.json");
+        let snapshot_path = test_artifact_path("session-probe-stale-snapshot", "json");
         let mcp = super::GeminiMcp::new(GeminiExecutionConfig {
             gemini_bin: script_path.to_string_lossy().into_owned(),
             session_probe_snapshot_path: Some(snapshot_path.to_string_lossy().into_owned()),

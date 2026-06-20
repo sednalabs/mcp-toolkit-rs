@@ -27,7 +27,7 @@ fn make_test_dir() -> PathBuf {
             TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
     fs::create_dir_all(&dir).expect("create test temp directory");
-    dir
+    fs::canonicalize(dir).expect("canonical test temp directory")
 }
 
 #[cfg(unix)]

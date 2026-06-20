@@ -1427,7 +1427,7 @@ mod tests {
                 TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+        std::fs::canonicalize(dir).expect("canonical temp dir")
     }
 
     #[test]
