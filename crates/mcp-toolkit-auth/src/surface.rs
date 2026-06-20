@@ -723,9 +723,8 @@ fn normalize_request_path(path: &str) -> String {
             let lo = chars.next();
             if let (Some(hi), Some(lo)) = (hi, lo) {
                 match decode_hex_pair(hi, lo) {
-                    Some(b'/') | Some(b'\\') => decoded.push('/'),
-                    Some(b'.') => decoded.push('.'),
-                    Some(_) | None => {
+                    Some(byte) => decoded.push(byte as char),
+                    None => {
                         decoded.push('%');
                         decoded.push(hi);
                         decoded.push(lo);
