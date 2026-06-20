@@ -276,7 +276,6 @@ pub fn das_query_decision(input: &DasDecisionInput) -> Decision {
         let code = match query.quorum_state {
             QuorumState::Missing => DecisionCode::QuorumMissing,
             QuorumState::Stale => DecisionCode::QuorumStale,
-            _ => DecisionCode::QuorumMissing,
         };
         return Decision::deny(code, None);
     }
