@@ -236,7 +236,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cargo test --locked \
+          cargo test \
             -p mcp-toolkit-policy-core \
             -p mcp-toolkit-policy-conformance \
             -p mcp-toolkit-policy-kernel-adapters \
