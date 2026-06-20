@@ -13,6 +13,25 @@
 //! ## References
 //! * MCP servers that embed Gemini CLI-backed tools behind a transport layer.
 
+// Preserve the promoted runtime surface first so downstream servers can move
+// from local path dependencies to a hosted toolkit revision. Follow-up cleanup
+// can tighten these style lints without changing the public API in the same PR.
+#![allow(
+    clippy::bool_assert_comparison,
+    clippy::collapsible_if,
+    clippy::derivable_impls,
+    clippy::field_reassign_with_default,
+    clippy::large_enum_variant,
+    clippy::manual_pattern_char_comparison,
+    clippy::question_mark,
+    clippy::redundant_locals,
+    clippy::too_many_arguments,
+    clippy::unnecessary_map_or,
+    clippy::unnecessary_min_or_max,
+    clippy::while_let_loop,
+    clippy::while_let_on_iterator
+)]
+
 mod async_registry;
 mod compression_bridge;
 pub mod config;

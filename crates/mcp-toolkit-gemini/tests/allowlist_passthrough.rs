@@ -353,6 +353,7 @@ async fn default_policy_passes_explicit_none_allowlist() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -409,6 +410,7 @@ async fn named_allowlist_is_forwarded_and_none_not_used() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -465,6 +467,7 @@ async fn codebase_tool_falls_back_to_stdin_when_arg_prompt_is_rejected_by_gemini
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello world".to_string(),
@@ -515,6 +518,7 @@ async fn sandbox_false_forces_child_gemini_sandbox_off() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -564,6 +568,7 @@ async fn sandbox_true_passes_sandbox_flag() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -612,6 +617,7 @@ async fn sandbox_missing_runtime_falls_back_to_host_when_enabled() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -661,6 +667,7 @@ async fn sandbox_missing_runtime_returns_error_when_fallback_disabled() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -719,6 +726,7 @@ async fn working_directory_is_applied_to_gemini_subprocess() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -769,6 +777,7 @@ async fn retries_429_until_success_within_retry_window() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -816,6 +825,7 @@ async fn stops_retrying_429_after_retry_window_expires() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -872,6 +882,7 @@ async fn random_retry_interval_overrides_fixed_interval_for_429_retries() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -927,6 +938,7 @@ async fn heartbeat_toggle_preserves_output_and_retry_behavior() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -998,6 +1010,7 @@ async fn heartbeat_observer_backpressure_does_not_block_execution() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
@@ -1065,6 +1078,7 @@ async fn final_heartbeat_reflects_terminal_stream_bytes() {
         timeout: Duration::from_secs(5),
         stats_timeout: Duration::from_secs(5),
         session_probe_stale_window: Duration::from_secs(900),
+        ..GeminiExecutionConfig::default()
     };
     let request = GeminiRequest {
         prompt: "hello".to_string(),
