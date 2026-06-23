@@ -6,9 +6,16 @@
 //! authorization-server metadata, Apps tool descriptors, and runtime OAuth
 //! challenges.
 
-use mcp_toolkit_core::mcp_apps::{
-    MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE, MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE,
-    MCP_APPS_SECURITY_SCHEMES_META_KEY,
+use mcp_toolkit_core::{
+    mcp_apps::{
+        MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE, MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE,
+        MCP_APPS_SECURITY_SCHEMES_META_KEY,
+    },
+    openai_retrievable::{
+        openai_retrievable_fetch_input_schema, openai_retrievable_fetch_output_schema,
+        openai_retrievable_search_input_schema, openai_retrievable_search_output_schema,
+        OPENAI_RETRIEVABLE_FETCH_TOOL_NAME, OPENAI_RETRIEVABLE_SEARCH_TOOL_NAME,
+    },
 };
 use mcp_toolkit_http::oauth::resource_metadata_hint;
 use serde_json::Value;
@@ -519,6 +526,153 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
         self.assert_tool_descriptors(descriptors);
     }
 
+    /// Asserts that the first `tools/list` page contains required discovery tools.
+    ///
+    /// Use this with large Apps connector tool catalogs where hosts may decide
+    /// routing from the initial page before fetching every `nextCursor` page.
+    ///
+    /// # Panics
+    /// Panics when the page is empty, has duplicate names, omits any required
+    /// tool, or any descriptor fails `assert_tool_descriptor`.
+    ///
+    /// # Security
+    /// This assertion only validates presentation order and metadata. It does
+    /// not prove that omitted later-page tools are inaccessible or unauthorized.
+    pub fn assert_tool_list_first_page_contains_tools(
+        &self,
+        descriptors: &[Value],
+        required_tool_names: &[&str],
+    ) {
+        self.assert_tool_descriptors(descriptors);
+
+        let names = descriptor_names(descriptors);
+        let duplicates = duplicate_descriptor_names(&names);
+        assert!(
+            duplicates.is_empty(),
+            "tools/list first page must not contain duplicate tool names: {duplicates:?}"
+        );
+
+        let missing = required_tool_names
+            .iter()
+            .copied()
+            .filter(|required| !names.iter().any(|name| name == required))
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "tools/list first page is missing required host-visible tools: {missing:?}; got {names:?}"
+        );
+    }
+
+    /// Asserts server-defined discovery metadata on one `tools/list` page.
+    ///
+    /// The metadata is read from `_meta[meta_key]`; for each descriptor it must
+    /// include `coldStart: true` and `priority` equal to its one-based page
+    /// position.
+    ///
+    /// # Panics
+    /// Panics when a descriptor is missing the named metadata object, when
+    /// `coldStart` is not `true`, or when `priority` does not match page order.
+    ///
+    /// # Security
+    /// This checks model/client-facing hints only. Servers must still enforce
+    /// authorization and mutation policy independently at call time.
+    pub fn assert_tool_list_page_discovery_priorities(
+        &self,
+        descriptors: &[Value],
+        meta_key: &str,
+    ) {
+        self.assert_tool_descriptors(descriptors);
+
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            let name = descriptor
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing>");
+            let discovery = descriptor
+                .get("_meta")
+                .and_then(Value::as_object)
+                .and_then(|meta| meta.get(meta_key))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| {
+                    panic!("{name}: _meta[{meta_key:?}] must be a discovery metadata object")
+                });
+            assert_eq!(
+                discovery.get("coldStart").and_then(Value::as_bool),
+                Some(true),
+                "{name}: discovery coldStart should be true for a first-page tool"
+            );
+            assert_eq!(
+                discovery.get("priority").and_then(Value::as_u64),
+                Some((index + 1) as u64),
+                "{name}: discovery priority should match one-based tools/list page order"
+            );
+        }
+    }
+
+    /// Asserts the OpenAI retrievable `search`/`fetch` tool pair.
+    ///
+    /// # Panics
+    /// Panics when the literal tools are missing, when their input or output
+    /// schemas drift from the OpenAI-compatible contract, or when their
+    /// annotations do not mark them as read-only, non-destructive, and
+    /// closed-world.
+    ///
+    /// # Security
+    /// This only validates host-facing descriptors. Servers must still enforce
+    /// caller authorization and corpus scoping before returning any data.
+    pub fn assert_retrievable_tool_descriptors(&self, descriptors: &[Value]) {
+        self.assert_tool_descriptors(descriptors);
+
+        let search = descriptor_by_name(descriptors, OPENAI_RETRIEVABLE_SEARCH_TOOL_NAME);
+        let fetch = descriptor_by_name(descriptors, OPENAI_RETRIEVABLE_FETCH_TOOL_NAME);
+
+        assert_eq!(
+            search.get("inputSchema"),
+            Some(&openai_retrievable_search_input_schema()),
+            "retrievable search inputSchema must be exactly the OpenAI-compatible query shape"
+        );
+        assert_eq!(
+            fetch.get("inputSchema"),
+            Some(&openai_retrievable_fetch_input_schema()),
+            "retrievable fetch inputSchema must be exactly the OpenAI-compatible id shape"
+        );
+        assert_eq!(
+            search.get("outputSchema"),
+            Some(&openai_retrievable_search_output_schema()),
+            "retrievable search outputSchema must match the recommended results shape"
+        );
+        assert_eq!(
+            fetch.get("outputSchema"),
+            Some(&openai_retrievable_fetch_output_schema()),
+            "retrievable fetch outputSchema must match the recommended document shape"
+        );
+
+        for descriptor in [search, fetch] {
+            let name = required_string(descriptor, "name");
+            let annotations = required_object(descriptor, "annotations");
+            assert_eq!(
+                annotations.get("readOnlyHint").and_then(Value::as_bool),
+                Some(true),
+                "{name}: retrievable tools must be read-only"
+            );
+            assert_eq!(
+                annotations.get("destructiveHint").and_then(Value::as_bool),
+                Some(false),
+                "{name}: retrievable tools must be non-destructive"
+            );
+            assert_eq!(
+                annotations.get("idempotentHint").and_then(Value::as_bool),
+                Some(true),
+                "{name}: retrievable tools should be idempotent"
+            );
+            assert_eq!(
+                annotations.get("openWorldHint").and_then(Value::as_bool),
+                Some(false),
+                "{name}: retrievable tools should not publish or reach outside the account"
+            );
+        }
+    }
+
     /// Asserts a runtime `WWW-Authenticate` Bearer challenge.
     ///
     /// # Panics
@@ -679,6 +833,36 @@ fn split_space_delimited(value: &str) -> Vec<&str> {
     values
 }
 
+fn descriptor_names(descriptors: &[Value]) -> Vec<&str> {
+    descriptors
+        .iter()
+        .map(|descriptor| {
+            descriptor
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing>")
+        })
+        .collect()
+}
+
+fn duplicate_descriptor_names<'a>(names: &'a [&'a str]) -> Vec<&'a str> {
+    let mut counts = HashMap::new();
+    for name in names {
+        *counts.entry(*name).or_insert(0usize) += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(name, count)| (count > 1).then_some(name))
+        .collect()
+}
+
+fn descriptor_by_name<'a>(descriptors: &'a [Value], name: &str) -> &'a Value {
+    descriptors
+        .iter()
+        .find(|descriptor| descriptor.get("name").and_then(Value::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("tools/list must include retrievable tool {name:?}"))
+}
+
 fn parse_bearer_challenge(challenge: &str) -> Result<HashMap<String, String>, String> {
     let trimmed = challenge.trim();
     let scheme_end = trimmed
@@ -827,6 +1011,10 @@ mod tests {
     use super::{
         OpenAiAppsClientRegistrationMode, OpenAiAppsConformanceProfile,
         OpenAiAppsToolListPageBudget,
+    };
+    use mcp_toolkit_core::openai_retrievable::{
+        openai_retrievable_fetch_input_schema, openai_retrievable_fetch_output_schema,
+        openai_retrievable_search_input_schema, openai_retrievable_search_output_schema,
     };
     use serde_json::json;
     use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -1024,6 +1212,156 @@ mod tests {
             &[descriptor],
             OpenAiAppsToolListPageBudget::new(2, 4096, 4096),
         );
+    }
+
+    #[test]
+    fn openai_apps_profile_checks_first_page_required_tools_and_discovery_priority() {
+        let profile = profile();
+        let descriptors = vec![
+            json!({
+                "name": "items.search",
+                "description": "Searches items.",
+                "inputSchema": {"type": "object"},
+                "outputSchema": {"type": "object"},
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                },
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                ],
+                "_meta": {
+                    "ui": {"visibility": ["model"]},
+                    "openai/widgetAccessible": false,
+                    "securitySchemes": [
+                        {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                    ],
+                    "example/discovery": {
+                        "coldStart": true,
+                        "priority": 1
+                    }
+                }
+            }),
+            json!({
+                "name": "items.read",
+                "description": "Reads one item.",
+                "inputSchema": {"type": "object"},
+                "outputSchema": {"type": "object"},
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                },
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                ],
+                "_meta": {
+                    "ui": {"visibility": ["model"]},
+                    "openai/widgetAccessible": false,
+                    "securitySchemes": [
+                        {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                    ],
+                    "example/discovery": {
+                        "coldStart": true,
+                        "priority": 2
+                    }
+                }
+            }),
+        ];
+
+        profile.assert_tool_list_first_page_contains_tools(
+            &descriptors,
+            &["items.search", "items.read"],
+        );
+        profile.assert_tool_list_page_discovery_priorities(&descriptors, "example/discovery");
+    }
+
+    #[test]
+    fn openai_apps_profile_rejects_first_page_missing_required_tool() {
+        let profile = profile();
+        let descriptor = json!({
+            "name": "items.search",
+            "description": "Searches items.",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {"type": "object"},
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            },
+            "securitySchemes": [
+                {"type": "oauth2", "scopes": ["items:read"]}
+            ],
+            "_meta": {
+                "ui": {"visibility": ["model"]},
+                "openai/widgetAccessible": false,
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read"]}
+                ]
+            }
+        });
+
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            profile.assert_tool_list_first_page_contains_tools(&[descriptor], &["items.read"]);
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn openai_apps_profile_checks_retrievable_search_fetch_pair() {
+        let profile = profile();
+        let descriptors = vec![
+            json!({
+                "name": "search",
+                "description": "Searches retrievable documents.",
+                "inputSchema": openai_retrievable_search_input_schema(),
+                "outputSchema": openai_retrievable_search_output_schema(),
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                },
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                ],
+                "_meta": {
+                    "ui": {"visibility": ["model"]},
+                    "openai/widgetAccessible": false,
+                    "securitySchemes": [
+                        {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                    ]
+                }
+            }),
+            json!({
+                "name": "fetch",
+                "description": "Fetches one retrievable document.",
+                "inputSchema": openai_retrievable_fetch_input_schema(),
+                "outputSchema": openai_retrievable_fetch_output_schema(),
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                },
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                ],
+                "_meta": {
+                    "ui": {"visibility": ["model"]},
+                    "openai/widgetAccessible": false,
+                    "securitySchemes": [
+                        {"type": "oauth2", "scopes": ["items:read", "items:write"]}
+                    ]
+                }
+            }),
+        ];
+
+        profile.assert_retrievable_tool_descriptors(&descriptors);
     }
 
     #[test]

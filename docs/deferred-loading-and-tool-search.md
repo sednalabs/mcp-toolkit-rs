@@ -73,6 +73,14 @@ OpenAI tool search does not call them automatically. Use a local discovery tool
 when non-hosted clients need a narrow `allowed_tools` list, optional schemas, or
 extra application-owned search results before making a follow-up request.
 
+Do not confuse hosted `tool_search` with OpenAI retrievable apps. A retrievable
+app must expose literal `search` and `fetch` tools for document retrieval, while
+hosted `tool_search` searches deferred MCP tool definitions. The toolkit
+provides `mcp-toolkit-core::openai_retrievable` schema and response builders for
+the retrievable pair, and
+`OpenAiAppsConformanceProfile::assert_retrievable_tool_descriptors` for
+descriptor contract tests.
+
 `mcp-toolkit-core::openai_tool_search` provides generic builders for two
 closely related shapes:
 

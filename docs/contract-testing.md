@@ -113,6 +113,35 @@ profile.assert_tool_descriptor(&apps_tool_descriptor_json);
 profile.assert_tool_result_authenticate_meta(&tool_result_meta_json);
 ```
 
+For large tool catalogs, validate the first paginated `tools/list` page as a
+deliberate host discovery surface. This catches regressions where critical
+tools exist on later pages but a client chooses tools from the initial page or a
+deferred tool index is populated incompletely.
+
+```rust
+profile.assert_tool_list_page(
+    &first_page_tool_descriptors,
+    OpenAiAppsToolListPageBudget::new(40, 180_000, 32_000),
+);
+profile.assert_tool_list_first_page_contains_tools(
+    &first_page_tool_descriptors,
+    &["items.search", "items.read"],
+);
+profile.assert_tool_list_page_discovery_priorities(
+    &first_page_tool_descriptors,
+    "example/discovery",
+);
+```
+
+For OpenAI retrievable apps, assert the canonical `search`/`fetch` pair in
+addition to the normal Apps connector shape. Retrievable tools are a document
+retrieval surface, separate from hosted `tool_search` deferred MCP-tool
+discovery.
+
+```rust
+profile.assert_retrievable_tool_descriptors(&apps_tool_descriptors_json);
+```
+
 ## Adoption Expectation
 
 New toolkit-built servers should include at least:

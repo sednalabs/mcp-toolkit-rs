@@ -30,6 +30,7 @@
 pub mod capability;
 pub mod mcp_apps;
 pub mod notifications;
+pub mod openai_retrievable;
 pub mod openai_tool_search;
 pub mod pagination;
 pub mod rmcp_models;
