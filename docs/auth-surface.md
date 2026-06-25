@@ -181,6 +181,7 @@ This first slice currently covers:
 - reusable assertions for this slice live in `mcp-toolkit-testing::auth_surface_contract`, including:
   - `AuthSurfaceContract` for PRM and missing-token bearer challenges
   - `AuthorizationServerMetadataContract` for issuer metadata, device authorization endpoints, and grant type lists
+  - `AuthSurfaceProbeClient` and `AuthSurfaceProbeResponse` for runtime HTTP probes driven by each server's own test client
   - `assert_forbidden_without_bearer_challenge` for pre-auth guard failures such as host rejection
 
 This first slice does not yet cover invalid-token, insufficient-scope, or auth-server
