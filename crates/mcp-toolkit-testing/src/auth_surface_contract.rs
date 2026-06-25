@@ -496,11 +496,9 @@ impl<'a> AuthorizationServerMetadataContract<'a> {
     where
         C: AuthSurfaceProbeClient,
     {
-        let metadata = client
-            .get_json(metadata_path)
-            .unwrap_or_else(|err| {
-                panic!("auth-surface probe failed for metadata path {metadata_path}: {err}")
-            });
+        let metadata = client.get_json(metadata_path).unwrap_or_else(|err| {
+            panic!("auth-surface probe failed for metadata path {metadata_path}: {err}")
+        });
         self.assert_metadata(&metadata);
     }
 }
