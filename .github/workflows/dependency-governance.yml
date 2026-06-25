@@ -7,6 +7,7 @@ on:
       - "**/Cargo.lock"
       - "deny.toml"
       - "scripts/dependency_governance_check.sh"
+      - "scripts/rmcp_macro_runtime_pin_check.py"
       - "docs/dependency-governance.md"
       - ".github/workflows/dependency-governance.yml"
   push:
@@ -18,6 +19,7 @@ on:
       - "**/Cargo.lock"
       - "deny.toml"
       - "scripts/dependency_governance_check.sh"
+      - "scripts/rmcp_macro_runtime_pin_check.py"
       - "docs/dependency-governance.md"
       - ".github/workflows/dependency-governance.yml"
   workflow_dispatch:

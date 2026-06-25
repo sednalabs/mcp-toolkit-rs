@@ -69,6 +69,7 @@ Run:
 
 The script enforces:
 
+0. `rmcp` macro/runtime pin consistency for crates that enable `rmcp/macros`
 1. advisory/license/source policy via `cargo-deny` (blocking)
 2. RustSec check via `cargo-audit` (blocking)
 3. stale-risk scan on direct dependencies via `cargo-outdated` (report-only by default)
@@ -96,3 +97,15 @@ Exception requirements:
 1. Documented in PR with rationale, owner, and explicit expiry date.
 2. Bounded duration (target <= 30 days).
 3. Follow-up issue/work item created before merge.
+
+## RMCP macro/runtime pinning
+
+Crates that enable the `rmcp` `macros` feature must also declare a direct
+`rmcp-macros` dependency pinned to the same exact runtime version.
+
+For optional `rmcp` dependencies, the feature that enables `dep:rmcp` must also
+enable `dep:rmcp-macros` so downstream crates receive the compatibility
+constraint when they opt into the toolkit feature.
+
+This guards against Cargo selecting a newer `rmcp-macros` release whose
+generated code targets APIs that are not present in the pinned `rmcp` runtime.
