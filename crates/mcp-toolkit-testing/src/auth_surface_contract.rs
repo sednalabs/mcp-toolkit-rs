@@ -4,11 +4,61 @@
 //! PRM discovery and core missing-token bearer-challenge semantics rather than on
 //! service-specific policy or transport wiring.
 
-use mcp_toolkit_http::oauth::{resource_metadata_hint, BEARER_METHOD_HEADER};
+use mcp_toolkit_http::oauth::{
+    authorization_server_metadata_url, resource_metadata_hint, BEARER_METHOD_HEADER,
+};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::error::Error;
 
-use http::{header, HeaderMap, StatusCode};
+use http::{header, HeaderMap, StatusCode, Uri};
+
+/// Result type used by transport-specific auth-surface probe clients.
+pub type AuthSurfaceProbeResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
+/// Minimal HTTP response shape needed by the shared auth-surface probe.
+///
+/// Test suites can construct this from `reqwest`, `axum`, `tower::Service`,
+/// or a process-level client without adding those dependencies to the toolkit.
+#[derive(Debug, Clone)]
+pub struct AuthSurfaceProbeResponse {
+    /// HTTP status returned by the server.
+    pub status: StatusCode,
+    /// HTTP response headers returned by the server.
+    pub headers: HeaderMap,
+}
+
+impl AuthSurfaceProbeResponse {
+    /// Build a response fixture from status and headers.
+    #[must_use]
+    pub fn new(status: StatusCode, headers: HeaderMap) -> Self {
+        Self { status, headers }
+    }
+}
+
+/// Transport adapter for runtime auth-surface conformance tests.
+///
+/// Implement this trait in a server test using the server's preferred client.
+/// The shared assertions deliberately depend only on paths and HTTP-visible
+/// response shapes so they can run against in-process routers, spawned binaries,
+/// or remote test deployments.
+pub trait AuthSurfaceProbeClient {
+    /// Fetch a JSON document from a server-relative path.
+    ///
+    /// # Errors
+    /// Returns an error when the client cannot fetch, decode, or validate the
+    /// JSON response before contract assertions run.
+    fn get_json(&mut self, path: &str) -> AuthSurfaceProbeResult<Value>;
+
+    /// Fetch a response from a server-relative path without credentials.
+    ///
+    /// # Errors
+    /// Returns an error when the client cannot fetch the response.
+    fn get_unauthenticated(
+        &mut self,
+        path: &str,
+    ) -> AuthSurfaceProbeResult<AuthSurfaceProbeResponse>;
+}
 
 /// Contract assertions for a single auth-surface PRM discovery and core missing-token case.
 ///
@@ -70,6 +120,16 @@ impl<'a> AuthSurfaceContract<'a> {
                 self.resource_url
             )
         })
+    }
+
+    /// Return the server-relative PRM path for the configured resource.
+    ///
+    /// # Panics
+    /// Panics if the configured resource URL cannot be converted into a
+    /// server-relative path.
+    #[must_use]
+    pub fn resource_metadata_path(&self) -> String {
+        absolute_url_path(&self.resource_metadata_url())
     }
 
     /// Assert the RFC 9728 JSON payload returned by the PRM endpoint.
@@ -170,6 +230,35 @@ impl<'a> AuthSurfaceContract<'a> {
     pub fn assert_missing_token_response(&self, status: StatusCode, headers: &HeaderMap) {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         self.assert_missing_token_challenge_headers(headers);
+    }
+
+    /// Probe a running auth surface for PRM and missing-token behavior.
+    ///
+    /// The supplied client owns transport details. This helper fetches the
+    /// contract PRM path and the protected resource path, then applies the same
+    /// JSON and bearer-challenge assertions used by direct unit tests.
+    ///
+    /// # Panics
+    /// Panics when the probe client fails or when an observed response differs
+    /// from the configured contract.
+    pub fn assert_http_probe<C>(&self, client: &mut C, protected_path: &str)
+    where
+        C: AuthSurfaceProbeClient,
+    {
+        let resource_metadata_path = self.resource_metadata_path();
+        let resource_metadata = client
+            .get_json(&resource_metadata_path)
+            .unwrap_or_else(|err| {
+                panic!("auth-surface probe failed for PRM path {resource_metadata_path}: {err}")
+            });
+        self.assert_resource_metadata(&resource_metadata);
+
+        let response = client
+            .get_unauthenticated(protected_path)
+            .unwrap_or_else(|err| {
+                panic!("auth-surface probe failed for protected path {protected_path}: {err}")
+            });
+        self.assert_missing_token_response(response.status, &response.headers);
     }
 }
 
@@ -360,6 +449,57 @@ impl<'a> AuthorizationServerMetadataContract<'a> {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    /// Return the expected authorization-server metadata URL for this issuer.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    #[must_use]
+    pub fn metadata_url(&self) -> String {
+        authorization_server_metadata_url(self.issuer)
+    }
+
+    /// Return the server-relative authorization-server metadata path.
+    ///
+    /// # Panics
+    /// Panics if the configured issuer cannot be converted into a
+    /// server-relative path.
+    #[must_use]
+    pub fn metadata_path(&self) -> String {
+        absolute_url_path(&self.metadata_url())
+    }
+
+    /// Probe a running auth surface for authorization-server metadata.
+    ///
+    /// # Panics
+    /// Panics when the probe client fails or when the observed metadata differs
+    /// from the configured contract.
+    pub fn assert_http_probe<C>(&self, client: &mut C)
+    where
+        C: AuthSurfaceProbeClient,
+    {
+        let metadata_path = self.metadata_path();
+        self.assert_http_probe_at(client, &metadata_path);
+    }
+
+    /// Probe a running auth surface at an explicit authorization-server
+    /// metadata path.
+    ///
+    /// Use this when a server intentionally serves one of the RFC 8414
+    /// alternate well-known routes for an issuer with a path component.
+    ///
+    /// # Panics
+    /// Panics when the probe client fails or when the observed metadata differs
+    /// from the configured contract.
+    pub fn assert_http_probe_at<C>(&self, client: &mut C, metadata_path: &str)
+    where
+        C: AuthSurfaceProbeClient,
+    {
+        let metadata = client.get_json(metadata_path).unwrap_or_else(|err| {
+            panic!("auth-surface probe failed for metadata path {metadata_path}: {err}")
+        });
+        self.assert_metadata(&metadata);
     }
 }
 
@@ -575,14 +715,54 @@ fn assert_optional_string(payload: &Value, key: &str, expected: Option<&str>) {
     }
 }
 
+fn absolute_url_path(url: &str) -> String {
+    let uri = url
+        .parse::<Uri>()
+        .unwrap_or_else(|err| panic!("invalid absolute URL for auth-surface probe: {url}: {err}"));
+    uri.path().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         assert_forbidden_without_bearer_challenge, bearer_challenge_params, AuthSurfaceContract,
+        AuthSurfaceProbeClient, AuthSurfaceProbeResponse, AuthSurfaceProbeResult,
         AuthorizationServerMetadataContract,
     };
     use http::{header, HeaderMap, HeaderValue, StatusCode};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::io;
     use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[derive(Default)]
+    struct FakeProbeClient {
+        json: HashMap<String, Value>,
+        unauthenticated: HashMap<String, AuthSurfaceProbeResponse>,
+    }
+
+    impl AuthSurfaceProbeClient for FakeProbeClient {
+        fn get_json(&mut self, path: &str) -> AuthSurfaceProbeResult<Value> {
+            self.json.get(path).cloned().ok_or_else(|| {
+                Box::new(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("missing JSON fixture for {path}"),
+                )) as Box<dyn std::error::Error + Send + Sync>
+            })
+        }
+
+        fn get_unauthenticated(
+            &mut self,
+            path: &str,
+        ) -> AuthSurfaceProbeResult<AuthSurfaceProbeResponse> {
+            self.unauthenticated.get(path).cloned().ok_or_else(|| {
+                Box::new(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("missing response fixture for {path}"),
+                )) as Box<dyn std::error::Error + Send + Sync>
+            })
+        }
+    }
 
     #[test]
     fn missing_token_challenge_requires_configured_scope_hint_to_match_toolkit_behavior() {
@@ -615,6 +795,44 @@ mod tests {
         );
 
         contract.assert_missing_token_response(StatusCode::UNAUTHORIZED, &headers);
+    }
+
+    #[test]
+    fn auth_surface_http_probe_checks_prm_and_missing_token_response() {
+        let contract = AuthSurfaceContract::new(
+            "https://example.test/mcp",
+            &["https://issuer.example"],
+            &["tool:read"],
+            "toolkit-test",
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static(
+                "Bearer realm=\"toolkit-test\", resource_metadata=\"https://example.test/.well-known/oauth-protected-resource/mcp\", scope=\"tool:read\"",
+            ),
+        );
+
+        let mut client = FakeProbeClient::default();
+        client.json.insert(
+            "/.well-known/oauth-protected-resource/mcp".to_string(),
+            serde_json::json!({
+                "resource": "https://example.test/mcp",
+                "authorization_servers": ["https://issuer.example"],
+                "scopes_supported": ["tool:read"],
+                "bearer_methods_supported": ["header"]
+            }),
+        );
+        client.unauthenticated.insert(
+            "/mcp".to_string(),
+            AuthSurfaceProbeResponse::new(StatusCode::UNAUTHORIZED, headers),
+        );
+
+        assert_eq!(
+            contract.resource_metadata_path(),
+            "/.well-known/oauth-protected-resource/mcp"
+        );
+        contract.assert_http_probe(&mut client, "/mcp");
     }
 
     #[test]
@@ -667,6 +885,41 @@ mod tests {
         .with_token_endpoint_auth_methods_supported(&["none", "private_key_jwt"])
         .with_code_challenge_methods_supported(&["S256"])
         .assert_metadata(&payload);
+    }
+
+    #[test]
+    fn authorization_server_http_probe_checks_metadata_path() {
+        let contract = AuthorizationServerMetadataContract::new(
+            "https://issuer.example",
+            "https://issuer.example/oauth/authorize",
+            "https://issuer.example/oauth/token",
+        )
+        .with_device_authorization_endpoint("https://issuer.example/oauth/device")
+        .with_grant_types_supported(&[
+            "authorization_code",
+            "urn:ietf:params:oauth:grant-type:device_code",
+        ]);
+
+        let mut client = FakeProbeClient::default();
+        client.json.insert(
+            "/.well-known/oauth-authorization-server".to_string(),
+            serde_json::json!({
+                "issuer": "https://issuer.example",
+                "authorization_endpoint": "https://issuer.example/oauth/authorize",
+                "token_endpoint": "https://issuer.example/oauth/token",
+                "device_authorization_endpoint": "https://issuer.example/oauth/device",
+                "grant_types_supported": [
+                    "authorization_code",
+                    "urn:ietf:params:oauth:grant-type:device_code"
+                ]
+            }),
+        );
+
+        assert_eq!(
+            contract.metadata_path(),
+            "/.well-known/oauth-authorization-server"
+        );
+        contract.assert_http_probe(&mut client);
     }
 
     #[test]
