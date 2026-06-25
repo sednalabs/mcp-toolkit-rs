@@ -719,9 +719,7 @@ fn absolute_url_path(url: &str) -> String {
     let uri = url
         .parse::<Uri>()
         .unwrap_or_else(|err| panic!("invalid absolute URL for auth-surface probe: {url}: {err}"));
-    uri.path_and_query()
-        .map(|path| path.as_str().to_string())
-        .unwrap_or_else(|| "/".to_string())
+    uri.path().to_string()
 }
 
 #[cfg(test)]
