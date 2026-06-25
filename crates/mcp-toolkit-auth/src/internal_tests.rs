@@ -3,13 +3,14 @@ pub(crate) use crate::auth_context_ref_from_parts;
 pub(crate) use crate::claims::extract_scopes;
 pub(crate) use crate::{
     AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext, AuthSecurityProfile,
-    Authenticator, ClientAuthMethod,
+    Authenticator, ClientAuthMethod, InMemoryJtiReplayStore,
 };
 
 mod tests {
     use super::{
         auth_context_from_parts, auth_context_ref_from_parts, AuthConfig, AuthContext, AuthError,
         AuthMode, AuthRequestContext, AuthSecurityProfile, Authenticator, ClientAuthMethod,
+        InMemoryJtiReplayStore,
     };
     use axum::extract::State;
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode};
@@ -19,7 +20,7 @@ mod tests {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde_json::{json, Value};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::sync::{oneshot, Mutex};
 
     /// Executes auth_context_extracts_from_parts.
@@ -542,6 +543,64 @@ mod tests {
             .expect_err("second use should be rejected");
 
         assert!(matches!(replay, AuthError::ReplayDetected));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shared_jti_replay_store_rejects_replay_across_authenticators() {
+        let config = AuthConfig {
+            mode: AuthMode::Delegation,
+            delegation_secret: Some("test-secret".to_string()),
+            delegation_issuer: "issuer".to_string(),
+            delegation_audience: "audience".to_string(),
+            jti_enforce_bearer: true,
+            jti_cache_size: 0,
+            ..Default::default()
+        };
+        let store = InMemoryJtiReplayStore::shared(Duration::from_secs(300), 128);
+        let first_auth =
+            Authenticator::new_with_jti_replay_store(config.clone(), store.clone()).expect("auth");
+        let second_auth = Authenticator::new_with_jti_replay_store(config, store).expect("auth");
+        let token = token_with_jti("shared-replay-1");
+
+        first_auth
+            .authenticate_token_with_context(
+                &HeaderMap::new(),
+                &token,
+                AuthRequestContext::bearer_only(),
+            )
+            .await
+            .expect("first authenticator should accept first use");
+        let replay = second_auth
+            .authenticate_token_with_context(
+                &HeaderMap::new(),
+                &token,
+                AuthRequestContext::bearer_only(),
+            )
+            .await
+            .expect_err("second authenticator should reject shared replay");
+
+        assert!(matches!(replay, AuthError::ReplayDetected));
+    }
+
+    #[test]
+    fn custom_jti_replay_store_requires_positive_ttl() {
+        let store = InMemoryJtiReplayStore::shared(Duration::from_secs(300), 128);
+        let err = Authenticator::new_with_jti_replay_store(
+            AuthConfig {
+                mode: AuthMode::Delegation,
+                delegation_secret: Some("test-secret".to_string()),
+                delegation_issuer: "issuer".to_string(),
+                delegation_audience: "audience".to_string(),
+                jti_enforce_bearer: true,
+                jti_ttl_s: 0.0,
+                jti_cache_size: 0,
+                ..Default::default()
+            },
+            store,
+        )
+        .expect_err("disabled replay ttl should reject custom store");
+
+        assert!(matches!(err, AuthError::ConfigError(_)));
     }
 
     /// Executes strict_bearer_rejects_extra_space.
