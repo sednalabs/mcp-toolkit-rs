@@ -46,7 +46,7 @@ pub use config::{
     ClientAuthMethod, OidcDiscovery,
 };
 pub use context::{auth_context_from_parts, auth_context_ref_from_parts, AuthContext};
-pub use error::AuthError;
+pub use error::{AuthError, AuthErrorContract};
 pub use mcp_toolkit_http::oauth::AuthorizationServerMetadata;
 pub use replay::JtiCache;
 
