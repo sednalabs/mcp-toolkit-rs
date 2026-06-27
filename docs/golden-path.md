@@ -42,6 +42,12 @@ first-class intent tools that answer the primary operator questions. The
 delivery-lane checklist in `docs/new-server-delivery-lane.md` records the
 required evidence for that tool-design gate.
 
+For legacy systems with partial APIs, admin HTML, scheduled pages, or private
+exports, first apply `docs/legacy-system-adapter-pattern.md`. That pattern keeps
+the source-authority map, blocked operation list, preview/apply boundary, and
+private artifact lane in the service design before any generic backend access is
+considered.
+
 ## 3. Pick Crates By Boundary
 
 Add only the crates that match the server shape:

@@ -41,7 +41,10 @@ For the complete server creation, validation, review, and release route, start
 with `docs/golden-path.md`. For a copyable checklist that turns that route into
 a repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
 the operator-facing details that make a server easy to try and debug, use
-`docs/easy-server-ergonomics.md`. For auth failure handling, use
+`docs/easy-server-ergonomics.md`. For legacy systems with partial APIs, admin
+HTML, scheduled jobs, or private exports, use
+`docs/legacy-system-adapter-pattern.md` before exposing any generic HTTP, SQL,
+or browser-style tool. For auth failure handling, use
 `docs/auth-error-contracts.md`.
 
 Add the specific crates you need from Git:
@@ -115,6 +118,11 @@ stable public surface:
    payloads.
 9. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
+
+For a legacy backend, first map source authority and blocked operations using
+`docs/legacy-system-adapter-pattern.md`. A narrow adapter with explicit
+operator-intent tools is safer than a generic HTTP, SQL, API, or browser MCP
+surface.
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for
 stdio intent tools and `templates/hosted-http-auth-server` for hosted HTTP with
@@ -195,6 +203,9 @@ Security reporting guidance is documented in `SECURITY.md`.
   reviewing, releasing, and adopting toolkit-built MCP servers.
 - `docs/instant-server-generation.md` records the direction for generating
   secure MCP server scaffolds from OpenAPI, JSON Schema, docs, and examples.
+- `docs/legacy-system-adapter-pattern.md` explains how to wrap older systems
+  with split APIs, admin HTML, scheduled jobs, and private artifacts without
+  exposing generic backend access.
 - `docs/new-server-delivery-lane.md` defines the seven-gate lane for rapid,
   reviewable MCP server creation from toolkit templates through proven
   promotion.
