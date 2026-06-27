@@ -76,6 +76,11 @@ at call time, it should normally hide that mutation from discovery too.
 Do not hide setup behind README-only instructions. If the server can explain
 what is missing through a safe tool response, add that tool.
 
+For legacy systems, ergonomics must not become a generic admin escape hatch.
+Use `docs/legacy-system-adapter-pattern.md` to turn partial APIs, admin HTML,
+scheduled-job pages, and private exports into named intent tools with explicit
+blocked operations.
+
 ## Errors And Empty States
 
 The easiest server is usually the one that fails well. Common errors should
