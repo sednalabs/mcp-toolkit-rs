@@ -25,11 +25,23 @@
 //! ## References
 //! * Policy Kernel: `mcp-policy-kernel` (upstream policy authority)
 
+#[cfg(feature = "http")]
+pub mod auth_control_plane;
 pub mod capability_guard;
 #[cfg(feature = "http")]
 pub mod http_policy;
 pub mod policy_authority;
 
+#[cfg(feature = "http")]
+pub use auth_control_plane::{
+    auth_control_plane_policy_authority, AuthControlPlaneClient, AuthControlPlaneDelegation,
+    AuthControlPlaneExchange, AuthControlPlaneHealthStatusExposure, AuthControlPlaneHttpMapper,
+    AuthControlPlaneInput, AuthControlPlaneIntrospection, AuthControlPlaneObservation,
+    AuthControlPlanePolicyAuthority, AuthControlPlanePolicyAuthorityBuilder,
+    AuthControlPlanePrincipal, AuthControlPlaneProof, AuthControlPlaneRequest,
+    AuthControlPlaneResource, AuthControlPlaneRisk, AuthControlPlaneSession, AuthControlPlaneToken,
+    AuthControlPlaneTokenMode, AUTH_CONTROL_PLANE_POLICY_CONTRACT_VERSION,
+};
 pub use capability_guard::{CapabilityGuard, CapabilityGuardError, CapabilityRefreshState};
 #[cfg(feature = "http")]
 pub use http_policy::{
