@@ -18,7 +18,7 @@ traits:
 - admin pages that are the only source for some state;
 - form submissions with hidden fields, selected options, or brittle query
   shapes;
-- scheduled jobs that should be inspected or cancelled without exposing send or
+- scheduled jobs that should be inspected or canceled without exposing send or
   trigger controls;
 - exports that may contain sensitive rows and must stay outside the public
   repository;
@@ -116,7 +116,7 @@ Before exposing a tool, answer these questions:
 
 ## What Belongs In The Toolkit
 
-`mcp-toolkit-rs` should provide reusable substrate for this pattern:
+`mcp-toolkit-rs` should provide a reusable substrate for this pattern:
 
 - tool inventory and profile filtering;
 - schema snapshot and transport contract tests;
@@ -138,6 +138,6 @@ Keep service-specific details out of the toolkit:
 
 [`sednalabs/interspire-6-mcp`](https://github.com/sednalabs/interspire-6-mcp)
 is a concrete reference implementation of this pattern for a legacy newsletter
-system. It uses toolkit substrate for MCP server shape and contract discipline
+system. It uses the toolkit substrate for MCP server shape and contract discipline
 while keeping product-specific XML semantics, admin HTML parsing, route
 allowlists, and operator safety wording in the service repository.
