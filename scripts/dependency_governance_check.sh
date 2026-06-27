@@ -15,6 +15,7 @@ usage() {
 Usage: ./scripts/dependency_governance_check.sh [--bootstrap-tools]
 
 Checks (per configured workspace):
+  0) rmcp macro/runtime pinning -> direct macro pins match rmcp runtime pins
   1) cargo deny   -> advisory/license/source policy (blocking)
   2) cargo audit  -> RustSec vulnerabilities (blocking)
   3) cargo outdated (direct deps) -> stale-risk report (non-blocking by default)
@@ -128,6 +129,7 @@ run_workspace_checks() {
 }
 
 ensure_command cargo
+ensure_command python3
 
 missing_tools=0
 ensure_cargo_subcommand_binary cargo-deny cargo-deny || missing_tools=1
@@ -139,6 +141,9 @@ if [[ "${missing_tools}" -ne 0 ]]; then
   echo "tip: rerun with --bootstrap-tools" >&2
   exit 2
 fi
+
+echo "[repo] [0/4] rmcp macro/runtime pin check"
+run_cmd python3 "${ROOT_DIR}/scripts/rmcp_macro_runtime_pin_check.py"
 
 for workspace_dir in "${WORKSPACES[@]}"; do
   run_workspace_checks "${workspace_dir}"
