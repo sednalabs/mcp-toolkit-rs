@@ -41,7 +41,8 @@ For the complete server creation, validation, review, and release route, start
 with `docs/golden-path.md`. For a copyable checklist that turns that route into
 a repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
 the operator-facing details that make a server easy to try and debug, use
-`docs/easy-server-ergonomics.md`.
+`docs/easy-server-ergonomics.md`. For auth failure handling, use
+`docs/auth-error-contracts.md`.
 
 Add the specific crates you need from Git:
 
