@@ -15,10 +15,11 @@ usage() {
 Usage: ./scripts/dependency_governance_check.sh [--bootstrap-tools]
 
 Checks (per configured workspace):
-  0) rmcp macro/runtime pinning -> direct macro pins match rmcp runtime pins
-  1) cargo deny   -> advisory/license/source policy (blocking)
-  2) cargo audit  -> RustSec vulnerabilities (blocking)
-  3) cargo outdated (direct deps) -> stale-risk report (non-blocking by default)
+  0) auth dependency posture -> token mechanics stay crate-backed or reviewed glue
+  1) rmcp macro/runtime pinning -> direct macro pins match rmcp runtime pins
+  2) cargo deny   -> advisory/license/source policy (blocking)
+  3) cargo audit  -> RustSec vulnerabilities (blocking)
+  4) cargo outdated (direct deps) -> stale-risk report (non-blocking by default)
 
 Env:
   STRICT_OUTDATED=0  Report outdated dependencies without failing (default)
@@ -102,19 +103,19 @@ run_workspace_checks() {
     return 2
   fi
 
-  echo "[workspace: ${workspace_dir}] [1/3] cargo deny (advisories + licenses + bans + sources)"
+  echo "[workspace: ${workspace_dir}] [2/5] cargo deny (advisories + licenses + bans + sources)"
   (
     cd "${workspace_path}"
     run_cmd cargo deny check advisories licenses bans sources
   )
 
-  echo "[workspace: ${workspace_dir}] [2/3] cargo audit (RustSec)"
+  echo "[workspace: ${workspace_dir}] [3/5] cargo audit (RustSec)"
   (
     cd "${workspace_path}"
     run_cmd cargo audit --deny warnings
   )
 
-  echo "[workspace: ${workspace_dir}] [3/3] cargo outdated (direct dependency stale-risk)"
+  echo "[workspace: ${workspace_dir}] [4/5] cargo outdated (direct dependency stale-risk)"
   if [[ "${STRICT_OUTDATED}" == "1" ]]; then
     (
       cd "${workspace_path}"
@@ -142,7 +143,10 @@ if [[ "${missing_tools}" -ne 0 ]]; then
   exit 2
 fi
 
-echo "[repo] [0/4] rmcp macro/runtime pin check"
+echo "[repo] [0/5] auth dependency posture check"
+run_cmd python3 "${ROOT_DIR}/scripts/auth_dependency_posture_check.py"
+
+echo "[repo] [1/5] rmcp macro/runtime pin check"
 run_cmd python3 "${ROOT_DIR}/scripts/rmcp_macro_runtime_pin_check.py"
 
 for workspace_dir in "${WORKSPACES[@]}"; do
