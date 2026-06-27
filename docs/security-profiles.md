@@ -111,6 +111,11 @@ Use `mcp-toolkit-auth` for consistent primitives:
   needs bearer replay state outside one authenticator process.
 - Strict OAuth resource URL checks for protected resource metadata.
 
+Auth/token mechanics must also follow
+`docs/auth-token-dependency-posture.md`: JWT/JWK/OAuth/DPoP/introspection/token
+exchange plumbing should be crate-backed, while local code stays limited to
+reviewed glue, canonicalization, and policy-input projection.
+
 ### Profile presets (Rust)
 
 `mcp-toolkit-auth` exposes `AuthSecurityProfile` with `L1ReadOnly`, `L2Strong`, and

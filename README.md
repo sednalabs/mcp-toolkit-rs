@@ -176,6 +176,8 @@ Security reporting guidance is documented in `SECURITY.md`.
 
 - `docs/auth-surface.md` explains the OAuth, Protected Resource Metadata, and
   bearer-enforcement contract.
+- `docs/auth-token-dependency-posture.md` defines the crate-backed posture for
+  auth/token mechanics and the guardrail against bespoke token parsing.
 - `docs/contract-testing.md` covers reusable hard-path test helpers for stdio,
   auth metadata, bearer challenges, host guards, and snapshots.
 - `docs/cargo-package-release.md` covers the public Git dependency contract,
