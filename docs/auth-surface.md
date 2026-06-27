@@ -89,6 +89,7 @@ Servers can configure each issuer entry from either:
 
 This keeps inline metadata publication generic across public MCP servers while avoiding
 provider-specific assumptions in consumer services.
+
 ### PRM Endpoints
 PRM metadata is served per RFC 9728 using a canonical resource URL plus `authorization_servers`.
 Root aliases are only served if there is a single resource entry (or the resource itself is `/`).
@@ -97,6 +98,25 @@ The `resource` value should normally be the externally reachable MCP URL, not an
 loopback origin. For example, if a server listens on `127.0.0.1:8000` behind Cloudflare Tunnel but
 is published at `https://example-mcp.example.com/mcp`, the PRM `resource` should be
 `https://example-mcp.example.com/mcp`.
+
+### Resource URL Audience Migration
+
+Moving a server from localhost to a public URL changes the concrete resource
+audience clients should request and servers should validate.
+
+Migration checklist:
+
+- replace the concrete resource/audience mapper from the loopback URL to the
+  public MCP URL, such as `https://example-mcp.example.com/mcp`
+- keep any stable logical audience unchanged only if the deployment already
+  uses one separately from the concrete resource URL
+- update PRM so `resource` and `authorization_servers` describe the public
+  endpoint clients actually call
+- expect existing linked clients or cached tokens to re-authenticate because
+  tokens minted for the old concrete audience should not authorize the new
+  public resource
+- keep the old audience accepted only during a deliberate, time-bounded
+  migration window with explicit logging and rollback notes
 
 ### Auth Enforcement
 Protected resource paths require valid bearer tokens. Failures return:
@@ -163,11 +183,17 @@ auth-surface contract.
 
 For ChatGPT Web App and similar remote MCP consumers:
 
-- publish a stable remote MCP URL
+- publish a stable remote HTTPS MCP URL
 - advertise a public issuer and PRM resource that match that URL
+- declare per-tool OAuth policy with `securitySchemes` so consent and linking
+  match the tool surface
+- return runtime auth challenges that include `_meta["mcp/www_authenticate"]`
+  when a tool needs the user to link or refresh OAuth
 - support refresh-token capable OAuth, typically via `offline_access`
 - prefer a static confidential client for the first rollout before adding dynamic client
   registration policy complexity
+- use a dedicated OAuth client and, where practical, a dedicated user/persona
+  for attribution and policy separation
 
 ## Conformance
 Auth surface behavior must be tested using a shared contract test.
