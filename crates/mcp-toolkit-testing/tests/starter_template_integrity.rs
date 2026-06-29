@@ -142,10 +142,10 @@ fn manifest_declares_dependency(manifest: &str, dependency_name: &str) -> bool {
             continue;
         }
 
-        if let Some((declared_name, _)) = trimmed.split_once('=')
-            && declared_name.trim() == dependency_name
-        {
-            return true;
+        if let Some((declared_name, _)) = trimmed.split_once('=') {
+            if declared_name.trim() == dependency_name {
+                return true;
+            }
         }
     }
 
