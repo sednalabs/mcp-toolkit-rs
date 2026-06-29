@@ -1,12 +1,13 @@
 //! # Guarded Actions
 //!
-//! Small generic primitives for preview/apply, sensitive-read, and read-only
-//! runtime gating.
+//! Small generic primitives for preview/apply, sensitive-read, no-mutation
+//! proof, and read-only runtime gating.
 //!
 //! ## Ownership
 //! This module owns repository-neutral metadata and helper types for services
 //! that need to expose safe previews, fail-closed apply gates, sensitive
-//! non-mutating output, or explicit read-only runtime modes.
+//! non-mutating output, no-mutation proof boundaries, or explicit read-only
+//! runtime modes.
 //!
 //! ## Non-ownership
 //! This module does not parse provider-specific routes, submit mutations, or
@@ -34,6 +35,9 @@ pub enum GuardedActionOperationClass {
     Read,
     /// Non-mutating read path that may return unredacted sensitive output.
     SensitiveRead,
+    /// Non-mutating proof path that may approach a hazardous boundary but must
+    /// not submit the final mutation, send, publish, trigger, or schedule step.
+    NoMutationProof,
     /// Safe preview that prepares a plan without mutating upstream state.
     Preview,
     /// Apply path bound to a reviewed preview plan.
@@ -52,6 +56,7 @@ impl GuardedActionOperationClass {
         match self {
             Self::Read => "read",
             Self::SensitiveRead => "sensitive_read",
+            Self::NoMutationProof => "no_mutation_proof",
             Self::Preview => "preview",
             Self::GuardedApply => "guarded_apply",
             Self::Mutating => "mutating",
@@ -130,6 +135,22 @@ impl GuardedActionPosture {
         }
     }
 
+    /// Create posture for a no-mutation proof path.
+    ///
+    /// Services use this for tools that intentionally approach a hazardous
+    /// boundary to gather proof, such as rendering the final confirmation form,
+    /// while prohibiting the final mutation, send, publish, trigger, or
+    /// schedule action. Service crates still own the domain allowlist and
+    /// before/after invariant readback.
+    pub const fn no_mutation_proof() -> Self {
+        Self {
+            operation_class: GuardedActionOperationClass::NoMutationProof,
+            requires_runtime_enablement: false,
+            writes_enabled_by_default: false,
+            post_apply_readback_required: false,
+        }
+    }
+
     /// Create posture for a guarded apply path.
     pub const fn guarded_apply() -> Self {
         Self {
@@ -198,7 +219,9 @@ impl GuardedActionPosture {
     pub const fn is_read_only(self) -> bool {
         matches!(
             self.operation_class,
-            GuardedActionOperationClass::Read | GuardedActionOperationClass::SensitiveRead
+            GuardedActionOperationClass::Read
+                | GuardedActionOperationClass::SensitiveRead
+                | GuardedActionOperationClass::NoMutationProof
         )
     }
 
@@ -388,6 +411,35 @@ impl<TApplied, TEvidence> GuardedActionApply<TApplied, TEvidence> {
     }
 }
 
+/// No-mutation proof response envelope for hazardous-boundary readback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardedActionNoMutationProof<TProof, TEvidence> {
+    pub runtime_mode: GuardedActionRuntimeMode,
+    pub posture: GuardedActionPosture,
+    pub proof: TProof,
+    pub evidence: TEvidence,
+    pub mutation_performed: bool,
+    pub production_action_authorized: bool,
+}
+
+impl<TProof, TEvidence> GuardedActionNoMutationProof<TProof, TEvidence> {
+    /// Create a no-mutation proof envelope.
+    ///
+    /// The mutation and production-authorization flags are always initialized
+    /// to `false`; callers that performed a mutation should not use this
+    /// envelope.
+    pub fn new(runtime_mode: GuardedActionRuntimeMode, proof: TProof, evidence: TEvidence) -> Self {
+        Self {
+            runtime_mode,
+            posture: GuardedActionPosture::no_mutation_proof(),
+            proof,
+            evidence,
+            mutation_performed: false,
+            production_action_authorized: false,
+        }
+    }
+}
+
 /// Error returned while building or checking guarded actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardedActionError {
@@ -453,8 +505,9 @@ fn normalize_segment(field: &'static str, value: &str) -> Result<String, Guarded
 #[cfg(test)]
 mod tests {
     use super::{
-        GuardedActionApply, GuardedActionOperationClass, GuardedActionPlanSeed,
-        GuardedActionPosture, GuardedActionPreview, GuardedActionRuntimeMode,
+        GuardedActionApply, GuardedActionNoMutationProof, GuardedActionOperationClass,
+        GuardedActionPlanSeed, GuardedActionPosture, GuardedActionPreview,
+        GuardedActionRuntimeMode,
     };
     use serde_json::json;
 
@@ -552,5 +605,36 @@ mod tests {
         GuardedActionRuntimeMode::Enabled
             .assert_allowed("sensitive_field_query", posture)
             .expect("enabled runtime mode should allow sensitive reads");
+    }
+
+    #[test]
+    fn no_mutation_proof_is_read_only_and_not_write_like() {
+        let posture = GuardedActionPosture::no_mutation_proof();
+
+        assert!(posture.is_read_only());
+        assert!(!posture.operation_class.is_write_like());
+        assert!(!posture.requires_runtime_enablement);
+        assert!(!posture.writes_enabled_by_default);
+
+        GuardedActionRuntimeMode::ReadOnly
+            .assert_allowed("send_wizard_readback", posture)
+            .expect("read-only mode should allow no-mutation proof tools");
+    }
+
+    #[test]
+    fn no_mutation_proof_envelope_serializes_false_action_flags() {
+        let proof = GuardedActionNoMutationProof::new(
+            GuardedActionRuntimeMode::ReadOnly,
+            json!({"final_form_rendered": true}),
+            json!({"queue_unchanged": true}),
+        );
+        let value = serde_json::to_value(proof).expect("serialize proof");
+
+        assert_eq!(
+            value["posture"]["operation_class"],
+            json!(GuardedActionOperationClass::NoMutationProof.as_str())
+        );
+        assert_eq!(value["mutation_performed"], json!(false));
+        assert_eq!(value["production_action_authorized"], json!(false));
     }
 }

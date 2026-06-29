@@ -36,6 +36,31 @@ sends `notifications/initialized`, calls `tools/list`, and compares the
 exported tool names. It is intended to catch runtime wiring mistakes that a
 direct `ToolRouter` unit test cannot see.
 
+## Response Safety Contracts
+
+Use `response_safety_contract` helpers for proof-only and sensitive-adjacent
+tools where the serialized response contract matters more than an internal Rust
+struct. These assertions are useful for no-mutation proof tools built with
+`GuardedActionPosture::no_mutation_proof()`.
+
+```rust
+use mcp_toolkit_testing::response_safety_contract::{
+    assert_no_mutation_proof_flags,
+    assert_payload_excludes_substrings,
+};
+
+let report = build_send_wizard_readback_fixture();
+
+assert_no_mutation_proof_flags(&report);
+assert_payload_excludes_substrings(
+    &report,
+    &["person@example.invalid", "smtp-password"],
+);
+```
+
+For service-specific flag names, use `assert_json_bool_field_false(&report,
+"production_send_authorized")` alongside the standard proof assertions.
+
 ## Auth Surface Contracts
 
 Use `auth_surface_contract::AuthSurfaceContract` for Protected Resource
@@ -183,6 +208,8 @@ New toolkit-built servers should include at least:
 
 - one strict tool-schema snapshot;
 - one stdio or HTTP runtime smoke test, matching the served transport;
+- response-safety assertions for proof-only tools, sensitive reads, and
+  redacted administrative readbacks;
 - auth metadata and bearer-challenge contract tests for hosted HTTP servers;
 - OpenAI Apps conformance tests for hosted HTTP servers intended for ChatGPT;
 - pre-auth host rejection tests for hosted HTTP servers with host allowlists;
