@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 jobs:
-  cargo-package-readiness:
-    name: First-wave Cargo package readiness
+  cargo-package-readiness-metadata:
+    name: Cargo package readiness / metadata
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -44,6 +44,47 @@ jobs:
             echo "- Publication posture: \`no publish\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Validate package metadata
+        run: python3 scripts/cargo_package_readiness.py --manifest-only
+
+  cargo-package-readiness-package:
+    name: Cargo package readiness / ${{ matrix.package.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - name: mcp-toolkit-core
+            verify_cmd: |
+              cargo package --package mcp-toolkit-core --list
+              cargo package --package mcp-toolkit-core
+          - name: mcp-toolkit-observability
+            verify_cmd: |
+              cargo package --package mcp-toolkit-observability --list
+              cargo package --package mcp-toolkit-observability
+          - name: mcp-toolkit-policy-core
+            verify_cmd: |
+              cargo package --package mcp-toolkit-policy-core --list
+              cargo package --package mcp-toolkit-policy-core
+          - name: mcp-toolkit-http
+            verify_cmd: |
+              cargo package --package mcp-toolkit-http --list
+              cargo package --package mcp-toolkit-http
+          - name: mcp-toolkit-testing
+            verify_cmd: cargo package --package mcp-toolkit-testing --list
+          - name: mcp-toolkit-policy-conformance
+            verify_cmd: cargo package --package mcp-toolkit-policy-conformance --list
+          - name: mcp-toolkit-auth
+            verify_cmd: cargo package --package mcp-toolkit-auth --list
+    steps:
+      - name: Checkout
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -62,5 +103,29 @@ jobs:
           cache-all-crates: "true"
           cache-workspace-crates: "true"
 
-      - name: Check first-wave package readiness
-        run: python3 scripts/cargo_package_readiness.py
+      - name: Verify package readiness lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ matrix.package.verify_cmd }}
+
+  cargo-package-readiness:
+    name: First-wave Cargo package readiness
+    runs-on: ubuntu-24.04
+    needs:
+      - cargo-package-readiness-metadata
+      - cargo-package-readiness-package
+    if: ${{ always() }}
+    steps:
+      - name: Require metadata and package lanes to pass
+        shell: bash
+        run: |
+          if [[ "${{ needs.cargo-package-readiness-metadata.result }}" != "success" ]]; then
+            echo "Cargo package metadata validation failed." >&2
+            exit 1
+          fi
+          if [[ "${{ needs.cargo-package-readiness-package.result }}" != "success" ]]; then
+            echo "One or more Cargo package readiness lanes failed." >&2
+            exit 1
+          fi
+          echo "All Cargo package readiness lanes passed."

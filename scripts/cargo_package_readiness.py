@@ -183,6 +183,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print cargo commands without executing them.",
     )
+    parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help="Validate manifest metadata only and skip cargo package commands.",
+    )
     return parser.parse_args()
 
 
@@ -230,6 +235,10 @@ def main() -> int:
     github_summary("- Manifest metadata: passed\n")
     github_summary("- Routine publication guard: `publish = false` remains set\n")
     github_summary("- Internal toolkit dependencies: version+path metadata present\n")
+
+    if args.manifest_only:
+        github_summary("- Package command execution: skipped (`--manifest-only`)\n")
+        return 0
 
     for package in FIRST_WAVE:
         run(
