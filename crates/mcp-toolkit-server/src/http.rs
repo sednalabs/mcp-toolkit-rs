@@ -792,7 +792,6 @@ where
         has_session_header,
         phase,
         status = response.status().as_u16(),
-        close_reason = "rmcp_transport_completed",
         "streamable HTTP route-bundle request forwarded"
     );
     response
