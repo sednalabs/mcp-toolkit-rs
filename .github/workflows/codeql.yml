@@ -113,6 +113,7 @@ jobs:
           cargo fetch --manifest-path Cargo.toml
           cargo fetch --manifest-path templates/curated-stdio-intent-server/Cargo.toml
           cargo fetch --manifest-path templates/hosted-http-auth-server/Cargo.toml
+          cargo fetch --manifest-path templates/single-crate-public-stdio-server/Cargo.toml
 
       - name: Prepare Actions CodeQL query pack config
         if: ${{ matrix.language == 'actions' }}

@@ -1,3 +1,4 @@
+use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
     ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
 };
@@ -55,6 +56,7 @@ impl IntentServer {
                 ToolCapability::new("brief_target")
                     .with_group("read")
                     .with_read_only(true)
+                    .with_risk_posture(GuardedActionPosture::read_only())
                     .with_discovery(ToolDiscoveryMetadata::new(
                         "Summarize the current state for a named target.",
                         ["brief", "intent", "summary"],
@@ -62,6 +64,7 @@ impl IntentServer {
                 ToolCapability::new("detail_by_tracking_id")
                     .with_group("read")
                     .with_read_only(true)
+                    .with_risk_posture(GuardedActionPosture::read_only())
                     .with_discovery(ToolDiscoveryMetadata::new(
                         "Fetch a focused detail view by tracking id.",
                         ["detail", "tracking", "intent"],

@@ -6,6 +6,9 @@ on:
       - ".github/codeql/actions-workflow-security/**"
       - ".github/workflows/codeql.yml"
       - ".github/workflows/codeql-query-tests.yml"
+      - "templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/**"
+      - "templates/single-crate-public-stdio-server/.github/workflows/codeql.yml"
+      - "templates/single-crate-public-stdio-server/.github/workflows/codeql-query-tests.yml"
   push:
     branches:
       - main
@@ -13,6 +16,9 @@ on:
       - ".github/codeql/actions-workflow-security/**"
       - ".github/workflows/codeql.yml"
       - ".github/workflows/codeql-query-tests.yml"
+      - "templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/**"
+      - "templates/single-crate-public-stdio-server/.github/workflows/codeql.yml"
+      - "templates/single-crate-public-stdio-server/.github/workflows/codeql-query-tests.yml"
   workflow_dispatch:
 
 permissions:
@@ -61,3 +67,25 @@ jobs:
           "${{ steps.setup-codeql.outputs.codeql-path }}" query compile \
             --search-path .github/codeql \
             .github/codeql/actions-workflow-security/*.ql
+
+      - name: Install standalone public template query pack dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" pack install templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security
+
+      - name: Resolve standalone public template workflow security suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" resolve queries \
+            --search-path templates/single-crate-public-stdio-server/.github/codeql \
+            templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/suites/actions-workflow-security.qls
+
+      - name: Compile standalone public template workflow security queries
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" query compile \
+            --search-path templates/single-crate-public-stdio-server/.github/codeql \
+            templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/*.ql

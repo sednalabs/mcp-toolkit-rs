@@ -59,3 +59,4 @@ jobs:
         run: |
           cargo check --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
           cargo check --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
+          cargo check --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features

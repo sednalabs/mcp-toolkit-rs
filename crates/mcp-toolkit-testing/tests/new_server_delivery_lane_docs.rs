@@ -52,6 +52,7 @@ fn new_server_delivery_lane_records_reviewable_evidence_block() {
 fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
     for surface in [
         "templates/curated-stdio-intent-server",
+        "templates/single-crate-public-stdio-server",
         "templates/hosted-http-auth-server",
         "mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list",
         "Protected Resource Metadata",

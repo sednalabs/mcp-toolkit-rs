@@ -9,6 +9,7 @@ use mcp_toolkit::server::{
 };
 use mcp_toolkit_auth::surface::AuthorizationServerMetadataSource;
 use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerMetadata};
+use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
     ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
 };
@@ -111,6 +112,7 @@ impl HostedHttpServer {
             inventory: ToolInventory::from_capabilities([ToolCapability::new("read_status")
                 .with_group("read")
                 .with_read_only(true)
+                .with_risk_posture(GuardedActionPosture::read_only())
                 .with_discovery(ToolDiscoveryMetadata::new(
                     "Read a status summary for one component.",
                     ["status", "health", "read"],

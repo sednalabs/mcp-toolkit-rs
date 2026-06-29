@@ -24,18 +24,27 @@ If a helper needs product-specific inputs, backend-specific payloads, or one
 deployment's trust model, keep that logic in the service repository and document
 the pattern as an adopter note instead of moving it into the toolkit.
 
+The toolkit intentionally does not ship a monolithic `ToolkitMcpServer`
+abstraction. Prefer composing `serve_stdio`, HTTP route builders, auth-surface
+helpers, and `ToolInventory` until repeated evidence shows a higher-level
+wrapper would remove real duplication without hiding trust boundaries.
+
 ## 2. Start From A Maintained Template
 
 Use one of the maintained templates when creating a new server:
 
 - `templates/curated-stdio-intent-server` for a stdio intent server.
+- `templates/single-crate-public-stdio-server` for a standalone public stdio
+  server repository with GitHub CI and security scaffolding included.
 - `templates/hosted-http-auth-server` for hosted Streamable HTTP with OAuth
   metadata, bearer challenges, host guarding, and session support.
 
 Copy the template into the service repository, rename the package, then replace
 only the example tool handlers and config with service-specific code. Keep the
 template's validation tests unless the service has a documented reason to use a
-stronger local equivalent.
+stronger local equivalent. For a new public repository, start from the
+standalone public stdio template unless the hosted HTTP/auth template is a
+better fit.
 
 Before adding generic API, SQL, or HTTP escape hatches, define three to seven
 first-class intent tools that answer the primary operator questions. The
@@ -113,6 +122,9 @@ cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml --al
 cargo fmt --manifest-path templates/hosted-http-auth-server/Cargo.toml --all --check
 cargo clippy --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
+cargo fmt --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all --check
+cargo clippy --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
 ```
 
 The `rust-baseline` workflow runs those checks on pull requests, pushes to the
@@ -123,6 +135,12 @@ Snapshot updates are exceptional. To intentionally rebaseline a snapshot:
 
 ```bash
 MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS=1 cargo test <snapshot-test-name>
+```
+
+If the repository carries the helper wrapper, you can use:
+
+```bash
+./scripts/rebaseline_tool_schema_snapshot.sh <manifest-path>
 ```
 
 Review the JSON diff and explain why the public contract changed.
@@ -165,6 +183,12 @@ Before publishing or promoting a toolkit-built server:
    out as stale until restart.
 8. Rollback is a normal revert, prior binary, or previous deployment pointer.
 9. The review gate is approved and closed.
+10. Public repository README, license, and Cargo metadata match the intended
+    service shape.
+11. Hosted CodeQL, code coverage upload, and dependency governance are present
+    when the server is expected to be publicly maintained.
+12. Public wording has been scrubbed for secrets, hostnames, and internal-only
+    terminology.
 
 For service repositories, also verify that service-specific policy, secrets,
 hostnames, backend schemas, and deployment-specific wording remain out of this
