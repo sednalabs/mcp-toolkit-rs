@@ -29,6 +29,7 @@
 pub mod bearer;
 pub mod challenge;
 pub mod surface;
+pub mod upstream_oauth;
 
 mod authenticator;
 mod claims;

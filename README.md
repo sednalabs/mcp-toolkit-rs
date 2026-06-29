@@ -223,6 +223,8 @@ Security reporting guidance is documented in `SECURITY.md`.
 - `docs/tool-inventory-migration.md` and `docs/tool-schema-snapshots.md` cover
   exported tool-surface management.
 - `docs/toolkit-boundary.md` defines what belongs in this public toolkit.
+- `docs/upstream-oauth.md` covers browser-based upstream OAuth helpers for
+  servers that call provider APIs such as Google.
 
 ## Status
 

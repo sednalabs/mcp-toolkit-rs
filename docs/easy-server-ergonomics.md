@@ -40,6 +40,14 @@ A low-friction server normally supports these sources, in this order:
 - local application-default or CLI-backed user credentials;
 - metadata-service credentials for cloud runtimes.
 
+When a provider's lowest-friction trial path is browser OAuth, use
+`mcp_toolkit_auth::upstream_oauth` rather than hand-rolling client-file
+parsing, PKCE, callback listeners, refresh-token caches, and redaction. Keep
+browser login as an explicit setup or CLI action; ordinary data tools should
+reuse cached credentials and must not open a browser as a side effect.
+Servers should not accept or configure raw token-exchange HTTP clients for this
+flow; the toolkit owns the no-redirect exchange client internally.
+
 Diagnostic tools may report whether an environment variable is present, a file
 path is configured, or a token request succeeded. They must not return access
 tokens, refresh tokens, private keys, raw client secrets, bearer headers, or
@@ -54,6 +62,10 @@ If a provider offers both personal OAuth and service accounts, support both
 when the dependency already makes that cheap. Personal OAuth is usually the
 lowest-friction trial path; service accounts are usually the lowest-friction
 unattended path.
+
+Do not conflate upstream OAuth with MCP Auth. MCP device authorization helps a
+client log in to the MCP server. Upstream OAuth helps the MCP server call the
+provider API. A server may need both, but they are different trust boundaries.
 
 ## Tool Surface
 
