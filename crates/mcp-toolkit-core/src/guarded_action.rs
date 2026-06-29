@@ -1,11 +1,12 @@
 //! # Guarded Actions
 //!
-//! Small generic primitives for preview/apply and read-only runtime gating.
+//! Small generic primitives for preview/apply, sensitive-read, and read-only
+//! runtime gating.
 //!
 //! ## Ownership
 //! This module owns repository-neutral metadata and helper types for services
-//! that need to expose safe previews, fail-closed apply gates, or explicit
-//! read-only runtime modes.
+//! that need to expose safe previews, fail-closed apply gates, sensitive
+//! non-mutating output, or explicit read-only runtime modes.
 //!
 //! ## Non-ownership
 //! This module does not parse provider-specific routes, submit mutations, or
@@ -31,6 +32,8 @@ use serde::{Deserialize, Serialize};
 pub enum GuardedActionOperationClass {
     /// Non-mutating read or inspection path.
     Read,
+    /// Non-mutating read path that may return unredacted sensitive output.
+    SensitiveRead,
     /// Safe preview that prepares a plan without mutating upstream state.
     Preview,
     /// Apply path bound to a reviewed preview plan.
@@ -48,6 +51,7 @@ impl GuardedActionOperationClass {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::SensitiveRead => "sensitive_read",
             Self::Preview => "preview",
             Self::GuardedApply => "guarded_apply",
             Self::Mutating => "mutating",
@@ -106,6 +110,21 @@ impl GuardedActionPosture {
         Self {
             operation_class: GuardedActionOperationClass::Preview,
             requires_runtime_enablement: false,
+            writes_enabled_by_default: false,
+            post_apply_readback_required: false,
+        }
+    }
+
+    /// Create posture for a non-mutating read that can reveal sensitive output.
+    ///
+    /// Services still own exact field/resource allowlists and any
+    /// environment-specific runtime gate. This posture records the shared
+    /// contract: the action is read-only, but must not be exposed as an
+    /// ordinary ambient read because returned values may be unredacted.
+    pub const fn sensitive_read() -> Self {
+        Self {
+            operation_class: GuardedActionOperationClass::SensitiveRead,
+            requires_runtime_enablement: true,
             writes_enabled_by_default: false,
             post_apply_readback_required: false,
         }
@@ -177,7 +196,10 @@ impl GuardedActionPosture {
 
     /// Return true when this posture is a read-only action.
     pub const fn is_read_only(self) -> bool {
-        matches!(self.operation_class, GuardedActionOperationClass::Read)
+        matches!(
+            self.operation_class,
+            GuardedActionOperationClass::Read | GuardedActionOperationClass::SensitiveRead
+        )
     }
 
     /// Return true when this posture is destructive.
@@ -512,5 +534,23 @@ mod tests {
             apply_value["posture"]["post_apply_readback_required"],
             json!(true)
         );
+    }
+
+    #[test]
+    fn sensitive_read_is_read_only_but_runtime_gated() {
+        let posture = GuardedActionPosture::sensitive_read();
+
+        assert!(posture.is_read_only());
+        assert!(!posture.operation_class.is_write_like());
+        assert!(posture.requires_runtime_enablement);
+
+        let err = GuardedActionRuntimeMode::ReadOnly
+            .assert_allowed("sensitive_field_query", posture)
+            .expect_err("sensitive reads require explicit runtime enablement");
+        assert!(err.to_string().contains("read_only"));
+
+        GuardedActionRuntimeMode::Enabled
+            .assert_allowed("sensitive_field_query", posture)
+            .expect("enabled runtime mode should allow sensitive reads");
     }
 }

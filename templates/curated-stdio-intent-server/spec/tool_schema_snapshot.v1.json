@@ -13,7 +13,6 @@
         "required": [
           "target"
         ],
-        "title": "BriefRequest",
         "type": "object"
       },
       "name": "brief_target"
@@ -30,7 +29,6 @@
         "required": [
           "tracking_id"
         ],
-        "title": "DetailRequest",
         "type": "object"
       },
       "name": "detail_by_tracking_id"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure rmcp macro crates stay pinned to the rmcp runtime version."""
+"""Ensure any direct rmcp macro pins stay aligned with the rmcp runtime."""
 
 from __future__ import annotations
 
@@ -73,23 +73,11 @@ def check_manifest(path: Path) -> list[str]:
             errors.append(f"{rel}: {section_name}.rmcp enables macros without a concrete version")
             continue
 
-        if actual != expected:
+        if macros is not None and actual != expected:
             errors.append(
                 f"{rel}: {section_name}.rmcp enables macros at {expected}, "
-                f"but {section_name}.rmcp-macros is {actual or 'missing'}"
+                f"but {section_name}.rmcp-macros version is {actual or 'unspecified'}"
             )
-
-        if dependency_optional(rmcp):
-            features = manifest.get("features", {})
-            if isinstance(features, dict):
-                for feature_name, members in features.items():
-                    if not isinstance(members, list) or "dep:rmcp" not in members:
-                        continue
-                    if "dep:rmcp-macros" not in members:
-                        errors.append(
-                            f"{rel}: feature '{feature_name}' enables dep:rmcp with macros "
-                            "without also enabling dep:rmcp-macros"
-                        )
 
     return errors
 

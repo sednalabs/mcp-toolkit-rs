@@ -110,7 +110,9 @@ stable public surface:
    device-authorization metadata for headless MCP client login.
 6. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
-   the default MCP route bundle.
+   the default MCP route bundle. Server authors can import the underlying
+   `rmcp` authoring surface through `mcp_toolkit::rmcp` or
+   `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
 7. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
 8. Use `mcp-toolkit-core::query_evidence` when a tool response should expose

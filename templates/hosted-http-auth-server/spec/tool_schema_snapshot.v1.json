@@ -13,7 +13,6 @@
             ]
           }
         },
-        "title": "StatusRequest",
         "type": "object"
       },
       "name": "read_status"

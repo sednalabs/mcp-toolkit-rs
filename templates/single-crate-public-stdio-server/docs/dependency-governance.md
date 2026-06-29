@@ -7,8 +7,9 @@ server can begin with the same basic posture as `mcp-toolkit-rs`:
 - `cargo-audit` is blocking for RustSec advisories.
 - `cargo-outdated` is advisory by default and blocking only when
   `STRICT_OUTDATED=1`.
-- `scripts/rmcp_macro_runtime_pin_check.py` ensures `rmcp` and `rmcp-macros`
-  stay pinned together when macros are enabled.
+- `scripts/rmcp_macro_runtime_pin_check.py` ensures any direct `rmcp-macros`
+  dependency stays aligned with the pinned `rmcp` runtime, while allowing the
+  recommended `rmcp`-with-`macros` setup.
 
 Install the local tooling with:
 

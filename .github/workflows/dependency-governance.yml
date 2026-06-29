@@ -49,6 +49,16 @@ jobs:
       - name: Cache cargo artifacts
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: dependency-governance-${{ runner.os }}
+          workspaces: |
+            . -> target
+            templates/curated-stdio-intent-server -> target
+            templates/hosted-http-auth-server -> target
+            templates/single-crate-public-stdio-server -> target
+          cache-on-failure: "true"
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
 
       - name: Install governance tools
         # taiki-e/install-action v2

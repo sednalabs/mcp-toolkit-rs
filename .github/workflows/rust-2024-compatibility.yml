@@ -28,10 +28,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-2024-compatibility:
-    name: Rust 2024 compatibility guard
+  rust-2024-compatibility-lane:
+    name: Rust 2024 compatibility / ${{ matrix.target.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        target:
+          - name: workspace
+            cache_key: workspace
+            workspaces: |
+              . -> target
+            check_cmd: cargo check --workspace --all-targets --all-features
+          - name: curated-stdio-intent-server
+            cache_key: template-curated-stdio-intent-server
+            workspaces: |
+              templates/curated-stdio-intent-server -> target
+            check_cmd: cargo check --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
+          - name: hosted-http-auth-server
+            cache_key: template-hosted-http-auth-server
+            workspaces: |
+              templates/hosted-http-auth-server -> target
+            check_cmd: cargo check --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
+          - name: single-crate-public-stdio-server
+            cache_key: template-single-crate-public-stdio-server
+            workspaces: |
+              templates/single-crate-public-stdio-server -> target
+            check_cmd: cargo check --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
     steps:
       - name: Checkout repository
         # actions/checkout v6
@@ -47,16 +72,29 @@ jobs:
       - name: Cache cargo artifacts
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: rust-2024-compatibility-${{ runner.os }}-${{ matrix.target.cache_key }}
+          workspaces: ${{ matrix.target.workspaces }}
+          cache-on-failure: "true"
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
 
-      - name: Check workspace Rust 2024 compatibility
+      - name: Check Rust 2024 compatibility
         env:
           RUSTFLAGS: "-Wrust-2024-compatibility -Dwarnings"
-        run: cargo check --workspace --all-targets --all-features
+        run: ${{ matrix.target.check_cmd }}
 
-      - name: Check template Rust 2024 compatibility
-        env:
-          RUSTFLAGS: "-Wrust-2024-compatibility -Dwarnings"
+  rust-2024-compatibility:
+    name: Rust 2024 compatibility guard
+    runs-on: ubuntu-24.04
+    needs: [rust-2024-compatibility-lane]
+    if: ${{ always() }}
+    steps:
+      - name: Require every compatibility lane to pass
+        shell: bash
         run: |
-          cargo check --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
-          cargo check --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
-          cargo check --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
+          if [[ "${{ needs.rust-2024-compatibility-lane.result }}" != "success" ]]; then
+            echo "One or more Rust 2024 compatibility lanes failed." >&2
+            exit 1
+          fi
+          echo "All Rust 2024 compatibility lanes passed."

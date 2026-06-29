@@ -122,12 +122,12 @@ For those mechanics:
 
 ## RMCP macro/runtime pinning
 
-Crates that enable the `rmcp` `macros` feature must also declare a direct
-`rmcp-macros` dependency pinned to the same exact runtime version.
+Prefer the `rmcp` crate with its `macros` feature over a separate direct
+`rmcp-macros` dependency.
 
-For optional `rmcp` dependencies, the feature that enables `dep:rmcp` must also
-enable `dep:rmcp-macros` so downstream crates receive the compatibility
-constraint when they opt into the toolkit feature.
+When a crate still declares `rmcp-macros` directly, pin it to the same exact
+version as the `rmcp` runtime.
 
-This guards against Cargo selecting a newer `rmcp-macros` release whose
-generated code targets APIs that are not present in the pinned `rmcp` runtime.
+The repo-level checker enforces that direct pin alignment while allowing crates
+that rely on `rmcp`'s built-in macro surface and carry no separate
+`rmcp-macros` entry.

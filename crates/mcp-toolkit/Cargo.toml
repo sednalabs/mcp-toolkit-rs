@@ -21,6 +21,7 @@ mcp-toolkit-policy-runtime = { version = "0.1.0", path = "../mcp-toolkit-policy-
 mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", optional = true }
 mcp-toolkit-gemini = { version = "0.1.0", path = "../mcp-toolkit-gemini", optional = true }
 mcp-toolkit-server = { version = "0.1.0", path = "../mcp-toolkit-server", optional = true }
+rmcp = { version = "=1.8.0", default-features = false, optional = true }
 
 [features]
 default = []
@@ -31,7 +32,42 @@ policy = ["mcp-toolkit-policy-core", "mcp-toolkit-policy-runtime"]
 policy-ffi = ["mcp-toolkit-policy-ffi"]
 process = ["mcp-toolkit-process"]
 gemini = ["mcp-toolkit-gemini"]
-server = ["mcp-toolkit-server", "mcp-toolkit-server/full"]
-server-stdio = ["mcp-toolkit-server", "mcp-toolkit-server/stdio"]
-server-http = ["mcp-toolkit-server", "mcp-toolkit-server/http"]
-server-auth = ["mcp-toolkit-server", "mcp-toolkit-server/auth"]
+server = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/full",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-io",
+  "rmcp/transport-streamable-http-server",
+  "rmcp/transport-streamable-http-server-session",
+]
+server-stdio = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/stdio",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-io",
+]
+server-http = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/http",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-streamable-http-server",
+]
+server-auth = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/auth",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-streamable-http-server",
+  "rmcp/transport-streamable-http-server-session",
+]

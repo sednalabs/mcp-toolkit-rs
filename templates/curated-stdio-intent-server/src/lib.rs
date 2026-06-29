@@ -1,11 +1,12 @@
-use mcp_toolkit_core::guarded_action::GuardedActionPosture;
-use mcp_toolkit_core::tool_inventory::{
-    ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
-};
-use rmcp::{
+use mcp_toolkit::rmcp::{
+    self,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo, Tool},
     schemars, tool, tool_handler, tool_router, ServerHandler,
+};
+use mcp_toolkit_core::guarded_action::GuardedActionPosture;
+use mcp_toolkit_core::tool_inventory::{
+    ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
