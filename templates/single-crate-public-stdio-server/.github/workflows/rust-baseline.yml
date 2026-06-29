@@ -27,6 +27,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Enforce standard GitHub-hosted runner labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/workflow_runner_policy_check.py --self-test
+
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8

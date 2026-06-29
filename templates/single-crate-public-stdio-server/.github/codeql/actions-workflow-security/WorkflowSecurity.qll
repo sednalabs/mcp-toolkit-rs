@@ -17,6 +17,32 @@ predicate repoOfficialReleaseJob(Job job) {
   job.getId() = "publish-release"
 }
 
+predicate repoApprovedPublicRunnerLabel(string label) {
+  label =
+    [
+      "ubuntu-slim",
+      "ubuntu-latest",
+      "ubuntu-24.04",
+      "ubuntu-22.04",
+      "ubuntu-26.04",
+      "ubuntu-24.04-arm",
+      "ubuntu-22.04-arm",
+      "ubuntu-26.04-arm",
+      "windows-latest",
+      "windows-2025",
+      "windows-2025-vs2026",
+      "windows-2022",
+      "windows-11-arm",
+      "windows-11-vs2026-arm",
+      "macos-latest",
+      "macos-14",
+      "macos-15",
+      "macos-26",
+      "macos-15-intel",
+      "macos-26-intel"
+    ]
+}
+
 predicate untrustedTrigger(Event event) {
   event.getName() = "pull_request_target"
   or
