@@ -1394,9 +1394,9 @@ mod tests {
             .with_risk_posture(GuardedActionPosture::mutating());
         assert!(!mutating.read_only());
 
-        let preview = ToolCapability::new("queue_control_preview")
+        let read_only = ToolCapability::new("queue_control_read")
             .with_read_only(false)
-            .with_risk_posture(GuardedActionPosture::preview());
-        assert!(preview.read_only());
+            .with_risk_posture(GuardedActionPosture::read_only());
+        assert!(read_only.read_only());
     }
 }
