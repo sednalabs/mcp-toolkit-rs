@@ -62,6 +62,9 @@ jobs:
           cargo llvm-cov --manifest-path templates/hosted-http-auth-server/Cargo.toml \
             --all-targets --all-features \
             --cobertura --output-path coverage/hosted-http-auth-server.xml
+          cargo llvm-cov --manifest-path templates/single-crate-public-stdio-server/Cargo.toml \
+            --all-targets --all-features \
+            --cobertura --output-path coverage/single-crate-public-stdio-server.xml
 
       - name: Upload workspace coverage to GitHub Code Quality
         # actions/upload-code-coverage v1
@@ -86,6 +89,14 @@ jobs:
           file: coverage/hosted-http-auth-server.xml
           language: Rust
           label: code-coverage/template-hosted-http-auth-server
+
+      - name: Upload standalone public template coverage to GitHub Code Quality
+        # actions/upload-code-coverage v1
+        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        with:
+          file: coverage/single-crate-public-stdio-server.xml
+          language: Rust
+          label: code-coverage/template-single-crate-public-stdio-server
 
       - name: Upload Cobertura reports
         # actions/upload-artifact v7

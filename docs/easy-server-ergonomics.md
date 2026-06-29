@@ -93,6 +93,22 @@ Use `docs/legacy-system-adapter-pattern.md` to turn partial APIs, admin HTML,
 scheduled-job pages, and private exports into named intent tools with explicit
 blocked operations.
 
+## Guarded Preview/Apply
+
+When a service genuinely needs a narrow administrative action, keep the runtime
+shape explicit:
+
+- classify the action with `GuardedActionPosture`;
+- attach that posture to tool inventory metadata with
+  `ToolCapability::with_risk_posture(...)`;
+- gate the live action with `GuardedActionRuntimeMode::assert_allowed(...)`;
+- bind preview and apply through a deterministic non-secret plan id;
+- return fresh redacted readback evidence after apply.
+
+Use `docs/guarded-action-pattern.md` for the generic toolkit shape. The service
+repository still owns provider-specific allowlists, backend reads, and the
+exact approval boundary.
+
 ## Errors And Empty States
 
 The easiest server is usually the one that fails well. Common errors should
@@ -107,6 +123,53 @@ name the next action:
 Empty successful responses should still be useful. Include the upstream empty
 object or list, plus compact metadata such as the queried resource, time window,
 or filter.
+
+## Redacted Structured Output
+
+Do not force operators to choose between useful output and safe output. Prefer
+structured shapes that keep identifiers, counts, and state transitions while
+dropping secrets and raw payloads.
+
+Read-oriented example:
+
+```json
+{
+  "resource": "queue/jobs",
+  "status": "paused",
+  "items": 14,
+  "checked_at": "2026-06-29T05:00:00Z",
+  "evidence": {
+    "source": "admin_status_page",
+    "operator_visible_fields": ["resource", "status", "items"]
+  }
+}
+```
+
+Guarded apply example:
+
+```json
+{
+  "plan_id": "gap.queue-control.tenant-42.jobs-pause",
+  "posture": {
+    "operation_class": "guarded_apply",
+    "requires_runtime_enablement": true,
+    "writes_enabled_by_default": false,
+    "post_apply_readback_required": true
+  },
+  "applied": {
+    "requested_state": "paused"
+  },
+  "evidence": {
+    "before": "running",
+    "after": "paused",
+    "checked_at": "2026-06-29T05:02:00Z"
+  }
+}
+```
+
+The important property is not the exact field names. It is that the service
+returns evidence a human or agent can act on without exposing tokens, raw
+session cookies, hidden form fields, or whole upstream payload dumps.
 
 ## Validation
 
@@ -130,6 +193,7 @@ does not encode a provider's product semantics.
 Good toolkit candidates:
 
 - tool inventory and deferred-loading helpers;
+- guarded read-only and preview/apply posture helpers;
 - schema snapshot and transport contract tests;
 - auth-surface metadata, bearer challenges, and safe diagnostic shapes;
 - redaction and bounded logging helpers;

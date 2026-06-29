@@ -32,6 +32,7 @@ use std::fmt::{Display, Formatter};
 
 use serde_json::{json, Value};
 
+use crate::guarded_action::GuardedActionPosture;
 use crate::openai_tool_search::OpenAiDeferredLoadingMetadata;
 
 /// MCP tool operation used for method-aware exposure checks.
@@ -77,6 +78,7 @@ pub struct ToolCapability {
     feature_flag: Option<String>,
     exposure: ToolExposure,
     discovery: Option<ToolDiscoveryMetadata>,
+    risk_posture: Option<GuardedActionPosture>,
 }
 
 impl ToolCapability {
@@ -89,6 +91,7 @@ impl ToolCapability {
             feature_flag: None,
             exposure: ToolExposure::All,
             discovery: None,
+            risk_posture: None,
         }
     }
 
@@ -122,6 +125,15 @@ impl ToolCapability {
         self
     }
 
+    /// Attach risk posture metadata for guarded preview/apply or admin tools.
+    pub fn with_risk_posture(mut self, risk_posture: GuardedActionPosture) -> Self {
+        if risk_posture.is_read_only() {
+            self.read_only = true;
+        }
+        self.risk_posture = Some(risk_posture);
+        self
+    }
+
     /// Return the tool name.
     pub fn name(&self) -> &str {
         self.name.as_str()
@@ -150,6 +162,11 @@ impl ToolCapability {
     /// Return optional discovery metadata for tool-search/deferred-loading clients.
     pub fn discovery(&self) -> Option<&ToolDiscoveryMetadata> {
         self.discovery.as_ref()
+    }
+
+    /// Return optional guarded-action posture metadata.
+    pub fn risk_posture(&self) -> Option<&GuardedActionPosture> {
+        self.risk_posture.as_ref()
     }
 }
 
@@ -211,6 +228,7 @@ pub struct ToolSearchResult {
     pub read_only: bool,
     pub description: Option<String>,
     pub keywords: Vec<String>,
+    pub risk_posture: Option<GuardedActionPosture>,
 }
 
 /// Standard JSON envelope for tool-search/deferred-loading responses.
@@ -311,6 +329,7 @@ impl ToolSearchResponse {
 ///         read_only: true,
 ///         description: Some("Read metrics".to_string()),
 ///         keywords: vec!["metrics".to_string()],
+///         risk_posture: None,
 ///     }],
 /// )
 /// .into_openai_response()
@@ -410,6 +429,7 @@ fn tool_search_result_value(result: &ToolSearchResult) -> Value {
         "read_only": result.read_only,
         "description": result.description,
         "keywords": result.keywords,
+        "risk_posture": result.risk_posture,
     })
 }
 
@@ -751,6 +771,7 @@ impl ToolInventory {
                 feature_flag,
                 exposure: capability.exposure,
                 discovery: capability.discovery,
+                risk_posture: capability.risk_posture,
             },
         );
         Ok(())
@@ -920,6 +941,7 @@ impl ToolInventory {
                     .as_ref()
                     .map(|discovery| discovery.keywords.clone())
                     .unwrap_or_default(),
+                risk_posture: capability.risk_posture,
             })
             .collect::<Vec<_>>();
 
@@ -1030,6 +1052,7 @@ mod tests {
         ToolOperation,
     };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse};
+    use crate::guarded_action::{GuardedActionOperationClass, GuardedActionPosture};
     use serde_json::json;
 
     #[test]
@@ -1153,6 +1176,7 @@ mod tests {
                 read_only: true,
                 description: Some("List cache settings".to_string()),
                 keywords: vec!["cache".to_string(), "read".to_string()],
+                risk_posture: None,
             }],
         )
         .with_schemas(Some(json!({"cache.list": {"name": "cache.list"}})))
@@ -1184,6 +1208,7 @@ mod tests {
                 read_only: true,
                 description: Some("Get queue details".to_string()),
                 keywords: vec!["queue".to_string()],
+                risk_posture: None,
             }],
         )
         .into_openai_response()
@@ -1323,6 +1348,44 @@ mod tests {
         assert_eq!(
             contract.to_value()["requirements"]["satisfied"],
             json!(false)
+        );
+    }
+
+    #[test]
+    fn risk_posture_metadata_flows_into_search_results() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("queue_control_preview")
+                .with_group("admin")
+                .with_risk_posture(GuardedActionPosture::preview()),
+            ToolCapability::new("queue_control_apply")
+                .with_group("admin")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+        ])
+        .expect("inventory");
+
+        let results = inventory.search(
+            &ToolSearchFilter {
+                query: Some("queue".to_string()),
+                group: Some("admin".to_string()),
+                read_only: None,
+                limit: None,
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        let value = ToolSearchResponse::find_tools(None, None, None, results).to_value();
+        assert_eq!(
+            value["results"][0]["risk_posture"]["operation_class"],
+            json!(GuardedActionOperationClass::GuardedApply.as_str())
+        );
+        assert_eq!(
+            value["results"][0]["risk_posture"]["post_apply_readback_required"],
+            json!(true)
+        );
+        assert_eq!(
+            value["results"][1]["risk_posture"]["operation_class"],
+            json!(GuardedActionOperationClass::Preview.as_str())
         );
     }
 }

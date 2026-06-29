@@ -1,0 +1,63 @@
+const STARTER_TEMPLATES_DOC: &str = include_str!("../../../docs/starter-templates.md");
+const EASY_SERVER_ERGONOMICS_DOC: &str = include_str!("../../../docs/easy-server-ergonomics.md");
+const GUARDED_ACTION_DOC: &str = include_str!("../../../docs/guarded-action-pattern.md");
+const CODEQL_REUSE_DOC: &str = include_str!("../../../docs/codeql-query-pack-reuse.md");
+
+#[test]
+fn starter_templates_doc_mentions_standalone_public_template() {
+    for needle in [
+        "templates/single-crate-public-stdio-server",
+        "standalone public stdio",
+        "CodeQL workflow-security queries",
+        "dependency governance",
+    ] {
+        assert!(
+            STARTER_TEMPLATES_DOC.contains(needle),
+            "starter template doc is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn ergonomics_docs_cover_guarded_actions_and_redacted_outputs() {
+    for needle in [
+        "GuardedActionPosture",
+        "GuardedActionRuntimeMode",
+        "Redacted Structured Output",
+    ] {
+        assert!(
+            EASY_SERVER_ERGONOMICS_DOC.contains(needle),
+            "easy server ergonomics doc is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn guarded_action_pattern_doc_names_core_types() {
+    for needle in [
+        "GuardedActionPlanSeed",
+        "GuardedActionPreview",
+        "GuardedActionApply",
+        "ToolCapability::with_risk_posture",
+    ] {
+        assert!(
+            GUARDED_ACTION_DOC.contains(needle),
+            "guarded action pattern doc is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn codeql_reuse_doc_mentions_template_and_query_tests() {
+    for needle in [
+        "templates/single-crate-public-stdio-server",
+        "codeql-query-tests",
+        "qlpack.yml",
+        "fork-safe",
+    ] {
+        assert!(
+            CODEQL_REUSE_DOC.contains(needle),
+            "CodeQL reuse doc is missing `{needle}`"
+        );
+    }
+}

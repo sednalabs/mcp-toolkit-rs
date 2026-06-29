@@ -174,7 +174,7 @@ fn assert_canonical_snapshot(
 
     let expected_raw = std::fs::read_to_string(snapshot_path).unwrap_or_else(|err| {
         panic!(
-            "missing {snapshot_label} at {} ({err}). Re-run with {update_env}=1 to create.",
+            "missing {snapshot_label} at {} ({err}). Re-run with {update_env}=1 to create, or use your repository's snapshot rebaseline helper if it provides one.",
             snapshot_path.display()
         )
     });
@@ -193,7 +193,7 @@ fn assert_canonical_snapshot(
             .unwrap_or_else(|err| panic!("failed to format actual: {err}"));
         panic!(
             "{snapshot_label} drift at {}.\n\
-             Re-run with {update_env}=1 to update.\n\n\
+             Re-run with {update_env}=1 to update, or use your repository's snapshot rebaseline helper if it provides one.\n\n\
              Expected:\n{}\n\n\
              Actual:\n{}",
             snapshot_path.display(),

@@ -37,6 +37,10 @@ Choose the server shape before writing domain code.
 Use `templates/curated-stdio-intent-server` when the MCP server is
 process-local and should expose a compact curated tool surface over stdio.
 
+Use `templates/single-crate-public-stdio-server` when you are starting a new
+public stdio MCP repository and want GitHub-hosted CI, CodeQL, coverage, query-
+pack tests, and dependency governance included from the first commit.
+
 Use `templates/hosted-http-auth-server` when the server exposes Streamable HTTP,
 publishes OAuth Protected Resource Metadata, and needs bearer challenges, host
 guarding, or session behavior.
@@ -187,6 +191,21 @@ After promotion, verify the installed thing, not only the pointer:
 - stale-session notes for stdio MCP clients that keep old inodes until restart.
 
 Untracked local builds are not promotion sources for this lane.
+
+## Public Repository Addendum
+
+When the server lives in a public repository, the lane also requires:
+
+- a repository README that explains the operator value and first-run path;
+- a committed license file and Cargo metadata aligned with that license;
+- hosted CodeQL, dependency-governance, and code-coverage workflows when the
+  server is expected to be publicly maintained;
+- secret scanning, code scanning, and Dependabot enabled where GitHub supports
+  them for the repository;
+- public-output hygiene review for docs, examples, branch names, and workflow
+  summaries;
+- final evidence that records the public repository URL, commit SHA, workflow
+  run URLs, and code-scanning posture.
 
 ## Completion Checklist
 

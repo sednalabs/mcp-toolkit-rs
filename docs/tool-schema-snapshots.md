@@ -97,6 +97,13 @@ MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS=1 \
 cargo test -p your-server-crate tool_schema_snapshot_matches_exported_tools
 ```
 
+If the repository provides a helper wrapper, prefer using that so the update
+mode stays discoverable for new contributors. In `mcp-toolkit-rs` the helper is:
+
+```bash
+./scripts/rebaseline_tool_schema_snapshot.sh templates/curated-stdio-intent-server/Cargo.toml
+```
+
 Toolkit harness self-tests run through the workspace test suite:
 
 ```bash

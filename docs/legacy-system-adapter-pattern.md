@@ -121,7 +121,7 @@ Before exposing a tool, answer these questions:
 - tool inventory and profile filtering;
 - schema snapshot and transport contract tests;
 - redaction, bounded labels, and sanitized diagnostics;
-- generic capability guards and runtime policy helpers;
+- guarded preview/apply posture and runtime policy helpers;
 - local server composition and ergonomic discovery;
 - documentation templates and checklists.
 
