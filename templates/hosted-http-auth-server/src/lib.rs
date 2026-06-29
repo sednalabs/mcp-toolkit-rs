@@ -3,6 +3,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use mcp_toolkit::rmcp::{
+    self,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{ServerCapabilities, ServerInfo, Tool},
+    schemars, tool, tool_handler, tool_router, ServerHandler,
+};
 use mcp_toolkit::server::{
     auth::{AuthSurfaceBuilder, IssuerEntry},
     http::{HttpBindSafety, LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder},
@@ -12,11 +18,6 @@ use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerM
 use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
     ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
-};
-use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo, Tool},
-    schemars, tool, tool_handler, tool_router, ServerHandler,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]

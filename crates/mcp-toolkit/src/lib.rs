@@ -54,3 +54,11 @@ pub use mcp_toolkit_gemini as gemini;
     feature = "server-auth"
 ))]
 pub use mcp_toolkit_server as server;
+
+#[cfg(any(
+    feature = "server",
+    feature = "server-stdio",
+    feature = "server-http",
+    feature = "server-auth"
+))]
+pub use rmcp;
