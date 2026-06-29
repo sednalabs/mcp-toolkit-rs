@@ -1388,11 +1388,16 @@ mod tests {
     }
 
     #[test]
-    fn risk_posture_overrides_previous_read_only_flag() {
+    fn risk_posture_aligns_the_read_only_flag_with_posture_semantics() {
         let mutating = ToolCapability::new("queue_control_apply")
             .with_read_only(true)
             .with_risk_posture(GuardedActionPosture::mutating());
         assert!(!mutating.read_only());
+
+        let preview = ToolCapability::new("queue_control_preview")
+            .with_read_only(true)
+            .with_risk_posture(GuardedActionPosture::preview());
+        assert!(!preview.read_only());
 
         let read_only = ToolCapability::new("queue_control_read")
             .with_read_only(false)
