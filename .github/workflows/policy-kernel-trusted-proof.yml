@@ -230,6 +230,9 @@ jobs:
         with:
           shared-key: policy-kernel-trusted-proof-${{ runner.os }}
           cache-targets: true
+          cache-on-failure: "true"
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
 
       - name: Run policy crate tests against checked-out kernel
         shell: bash

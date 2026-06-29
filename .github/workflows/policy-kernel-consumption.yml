@@ -241,6 +241,9 @@ jobs:
         with:
           shared-key: policy-kernel-consumption-${{ runner.os }}
           cache-targets: true
+          cache-on-failure: "true"
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
 
       - name: Run policy crate tests against checked-out kernel
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
