@@ -1219,60 +1219,19 @@ pub fn auth_error_response(
 }
 
 fn status_for_error(err: &AuthError) -> u16 {
-    match err {
-        AuthError::Generic { status_code, .. } => *status_code,
-        AuthError::MissingToken => StatusCode::UNAUTHORIZED.as_u16(),
-        AuthError::InvalidToken => StatusCode::UNAUTHORIZED.as_u16(),
-        AuthError::TokenExpired => StatusCode::UNAUTHORIZED.as_u16(),
-        AuthError::ReplayDetected => StatusCode::UNAUTHORIZED.as_u16(),
-        AuthError::MissingScopes => StatusCode::FORBIDDEN.as_u16(),
-        AuthError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-    }
+    err.status_code()
 }
 
 fn error_code_for_error(err: &AuthError) -> Option<&'static str> {
-    match err {
-        AuthError::MissingToken => Some("invalid_request"),
-        AuthError::InvalidToken | AuthError::TokenExpired | AuthError::ReplayDetected => {
-            Some("invalid_token")
-        }
-        AuthError::MissingScopes => Some("insufficient_scope"),
-        AuthError::Generic {
-            status_code,
-            reason,
-            ..
-        } => match (status_code, reason) {
-            (_, Some("invalid_request")) => Some("invalid_request"),
-            (_, Some("invalid_token")) => Some("invalid_token"),
-            (_, Some("insufficient_scope")) => Some("insufficient_scope"),
-            (401, Some(_)) | (401, None) => Some("invalid_token"),
-            _ => None,
-        },
-        _ => None,
-    }
+    err.bearer_error()
 }
 
 fn error_description_for_error(err: &AuthError) -> Option<&'static str> {
-    match err {
-        AuthError::MissingToken => Some("missing token"),
-        AuthError::TokenExpired => Some("token expired"),
-        AuthError::ReplayDetected => Some("token replay detected"),
-        AuthError::MissingScopes => Some("missing scopes"),
-        AuthError::Generic { .. } => None,
-        _ => None,
-    }
+    err.bearer_error_description()
 }
 
 fn error_body(err: &AuthError) -> String {
-    match err {
-        AuthError::Generic { message, .. } => message.clone(),
-        AuthError::MissingToken => "missing token".to_string(),
-        AuthError::InvalidToken => "invalid token".to_string(),
-        AuthError::TokenExpired => "token expired".to_string(),
-        AuthError::ReplayDetected => "token replay detected".to_string(),
-        AuthError::MissingScopes => "missing scopes".to_string(),
-        AuthError::ConfigError(message) => message.clone(),
-    }
+    err.public_message().into_owned()
 }
 
 #[cfg(test)]
@@ -1307,7 +1266,7 @@ mod tests {
                 path: event.path.to_string(),
                 resource_path: event.resource_path.to_string(),
                 resource_url: event.resource_url.to_string(),
-                reason: error_code_for_error(event.error),
+                reason: Some(event.error.decision_code()),
                 has_authorization,
             });
         }
@@ -1352,7 +1311,7 @@ mod tests {
         let config = AuthSurfaceConfig {
             public_base_url: "https://example.com".to_string(),
             entries: vec![IssuerEntry {
-                issuer: "http://issuer.test".to_string(),
+                issuer: "http://issuer.test".to_string(), // DevSkim: ignore DS137138 insecure URL detection fixture
                 ..test_entry("/mcp", Some("https://example.com/mcp"))
             }],
             root_alias_policy: RootAliasPolicy::Automatic,
@@ -1771,7 +1730,10 @@ mod tests {
         let generic_forbidden = AuthError::new("forbidden")
             .with_status(StatusCode::FORBIDDEN.as_u16())
             .with_reason("other");
-        assert_eq!(error_code_for_error(&generic_forbidden), None);
+        assert_eq!(
+            error_code_for_error(&generic_forbidden),
+            Some("insufficient_scope")
+        );
     }
 
     #[tokio::test]
@@ -1963,7 +1925,7 @@ mod tests {
                 path: "/mcp".to_string(),
                 resource_path: "/mcp".to_string(),
                 resource_url: "https://example.com/mcp".to_string(),
-                reason: Some("invalid_request"),
+                reason: Some("MISSING_BEARER_TOKEN"),
                 has_authorization: false,
             }]
         );

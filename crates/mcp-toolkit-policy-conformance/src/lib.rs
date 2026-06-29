@@ -424,7 +424,10 @@ fn adapter_for_op<'a>(
     adapter: Option<&'a dyn PolicyOperationAdapter>,
     op: &str,
 ) -> Result<&'a dyn PolicyOperationAdapter, String> {
-    adapter.ok_or_else(|| format!("{op}: no adapter supplied for non-SQL operation"))
+    match adapter {
+        Some(adapter) => Ok(adapter),
+        None => Err(format!("{}: no adapter supplied for non-SQL operation", op)),
+    }
 }
 
 /// Execute vectors and enforce exact decision parity.

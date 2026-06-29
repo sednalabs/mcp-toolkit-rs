@@ -25,11 +25,35 @@
 //! ## References
 //! * Policy Kernel: `mcp-policy-kernel` (upstream policy authority)
 
+#[cfg(feature = "http")]
+pub mod auth_control_plane;
 pub mod capability_guard;
+#[cfg(feature = "http")]
+pub mod http_policy;
 pub mod policy_authority;
 
+#[cfg(feature = "http")]
+pub use auth_control_plane::{
+    auth_control_plane_policy_authority, AuthControlPlaneClient, AuthControlPlaneDelegation,
+    AuthControlPlaneExchange, AuthControlPlaneHealthStatusExposure, AuthControlPlaneHttpMapper,
+    AuthControlPlaneInput, AuthControlPlaneIntrospection, AuthControlPlaneObservation,
+    AuthControlPlanePolicyAuthority, AuthControlPlanePolicyAuthorityBuilder,
+    AuthControlPlanePrincipal, AuthControlPlaneProof, AuthControlPlaneRequest,
+    AuthControlPlaneResource, AuthControlPlaneRisk, AuthControlPlaneSession, AuthControlPlaneToken,
+    AuthControlPlaneTokenMode, AUTH_CONTROL_PLANE_POLICY_CONTRACT_VERSION,
+};
 pub use capability_guard::{CapabilityGuard, CapabilityGuardError, CapabilityRefreshState};
+#[cfg(feature = "http")]
+pub use http_policy::{
+    policy_authority_decision_ref_from_parts, JsonPolicyDenyHandler, PolicyAuthorityLayer,
+    PolicyAuthorityService, PolicyHttpAuthContext, PolicyHttpDenyHandler, PolicyHttpRequestContext,
+    PolicyHttpSurfaceContext, PolicyRequestMapper,
+};
 pub use policy_authority::{
-    hello_server_policy_authority, ClosurePolicyAuthority, HelloPolicyRequest, HelloServerProfile,
-    PolicyAuthority, PolicyAuthorityDecision, PolicyRuntimeMode, SharedPolicyAuthority,
+    configured_das_observability_policy_authority, configured_das_query_policy_authority,
+    configured_gateway_policy_authority, configured_sql_restricted_policy_authority,
+    das_observability_policy_authority, das_query_policy_authority, gateway_policy_authority,
+    hello_server_policy_authority, sql_restricted_policy_authority, ClosurePolicyAuthority,
+    HelloPolicyRequest, HelloServerProfile, PolicyAuthority, PolicyAuthorityDecision,
+    PolicyRuntimeMode, SharedPolicyAuthority,
 };

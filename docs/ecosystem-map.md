@@ -26,6 +26,8 @@ deployment shape. Examples might include:
 - an MCP server paired with a credential-bearing gateway;
 - an HTTP MCP service with OAuth discovery and protected-resource metadata;
 - a stdio-first MCP service with a narrow policy guard.
+- a legacy-system adapter that wraps split APIs, admin HTML, scheduled pages,
+  and private artifacts behind operator-intent tools.
 
 These examples are valuable because they show integration choices, but they are
 not automatically part of the toolkit API surface.

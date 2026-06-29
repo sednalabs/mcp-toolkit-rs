@@ -89,6 +89,7 @@ Servers can configure each issuer entry from either:
 
 This keeps inline metadata publication generic across public MCP servers while avoiding
 provider-specific assumptions in consumer services.
+
 ### PRM Endpoints
 PRM metadata is served per RFC 9728 using a canonical resource URL plus `authorization_servers`.
 Root aliases are only served if there is a single resource entry (or the resource itself is `/`).
@@ -98,11 +99,36 @@ loopback origin. For example, if a server listens on `127.0.0.1:8000` behind Clo
 is published at `https://example-mcp.example.com/mcp`, the PRM `resource` should be
 `https://example-mcp.example.com/mcp`.
 
+### Resource URL Audience Migration
+
+Moving a server from localhost to a public URL changes the concrete resource
+audience clients should request and servers should validate.
+
+Migration checklist:
+
+- replace the concrete resource/audience mapper from the loopback URL to the
+  public MCP URL, such as `https://example-mcp.example.com/mcp`
+- keep any stable logical audience unchanged only if the deployment already
+  uses one separately from the concrete resource URL
+- update PRM so `resource` and `authorization_servers` describe the public
+  endpoint clients actually call
+- expect existing linked clients or cached tokens to re-authenticate because
+  tokens minted for the old concrete audience should not authorize the new
+  public resource
+- keep the old audience accepted only during a deliberate, time-bounded
+  migration window with explicit logging and rollback notes
+
 ### Auth Enforcement
 Protected resource paths require valid bearer tokens. Failures return:
 - `401` or `403` as appropriate
 - `WWW-Authenticate: Bearer` with `resource_metadata=...`
 - RFC 6750 error codes only (`invalid_request`, `invalid_token`, `insufficient_scope`)
+
+Services that need to extract bearer tokens before handing them to an auth
+backend should use `mcp_toolkit_auth::parse_strict_bearer_authorization`. The
+helper enforces the toolkit strict-mode shape: one `Authorization` header,
+case-insensitive `Bearer`, exactly one ASCII space, no control characters, and
+a non-empty token.
 
 ### Public Paths
 Some endpoints (health checks, metrics) can bypass auth enforcement by configuring:
@@ -157,11 +183,17 @@ auth-surface contract.
 
 For ChatGPT Web App and similar remote MCP consumers:
 
-- publish a stable remote MCP URL
+- publish a stable remote HTTPS MCP URL
 - advertise a public issuer and PRM resource that match that URL
+- declare per-tool OAuth policy with `securitySchemes` so consent and linking
+  match the tool surface
+- return runtime auth challenges that include `_meta["mcp/www_authenticate"]`
+  when a tool needs the user to link or refresh OAuth
 - support refresh-token capable OAuth, typically via `offline_access`
 - prefer a static confidential client for the first rollout before adding dynamic client
   registration policy complexity
+- use a dedicated OAuth client and, where practical, a dedicated user/persona
+  for attribution and policy separation
 
 ## Conformance
 Auth surface behavior must be tested using a shared contract test.
@@ -175,10 +207,18 @@ This first slice currently covers:
 - reusable assertions for this slice live in `mcp-toolkit-testing::auth_surface_contract`, including:
   - `AuthSurfaceContract` for PRM and missing-token bearer challenges
   - `AuthorizationServerMetadataContract` for issuer metadata, device authorization endpoints, and grant type lists
+  - `AuthSurfaceProbeClient` and `AuthSurfaceProbeResponse` for runtime HTTP probes driven by each server's own test client
   - `assert_forbidden_without_bearer_challenge` for pre-auth guard failures such as host rejection
 
 This first slice does not yet cover invalid-token, insufficient-scope, or auth-server
 discovery variants.
+
+OpenAI Apps connectors should additionally use
+`mcp-toolkit-testing::openai_apps_contract::OpenAiAppsConformanceProfile`. That
+profile composes the generic auth-surface expectations with Apps-specific
+checks for descriptor-level and `_meta["securitySchemes"]` parity, PKCE `S256`,
+declared client registration mode, compatible token endpoint auth methods, and
+runtime `_meta["mcp/www_authenticate"]` challenge details.
 
 The contract test is required for every new HTTP MCP server.
 
@@ -188,7 +228,9 @@ The contract test is required for every new HTTP MCP server.
 2. Create one `IssuerEntry` per protected resource path (single issuer by default),
    preferably via the generic authorization-server metadata source model.
 3. Wrap the HTTP service/router with `AuthSurfaceLayer`.
-4. Configure any `public_paths` or `public_prefixes` for unauthenticated endpoints.
-5. Keep the default unmatched-route behavior unless unrelated routes should
+4. Add `PolicyAuthorityLayer` with `AuthControlPlaneHttpMapper` for reusable
+   post-auth route, tool, resource, session, project, and scope decisions.
+5. Configure any `public_paths` or `public_prefixes` for unauthenticated endpoints.
+6. Keep the default unmatched-route behavior unless unrelated routes should
    intentionally pass through the auth surface.
-6. Add the shared auth-surface contract test to CI.
+7. Add the shared auth-surface contract test to CI.

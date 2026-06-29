@@ -134,7 +134,10 @@ fn run_worker(
     let mut conn = Connection::open(path).map_err(|err| EventStoreError::new(err.to_string()))?;
     configure_db(&mut conn).map_err(|err| EventStoreError::new(err.to_string()))?;
 
-    while let Some(command) = receiver.blocking_recv() {
+    loop {
+        let Some(command) = receiver.blocking_recv() else {
+            break;
+        };
         match command {
             SqliteCommand::Store {
                 stream_id,

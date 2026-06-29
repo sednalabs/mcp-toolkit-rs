@@ -20,6 +20,8 @@ tool capability composition without changing your auth authority model.
 1. Register your tool inventory in server construction:
    - create `ToolInventory` from `ToolCapability` entries
    - set `ToolInventoryPolicy` (`strict()` recommended once registrations are complete)
+   - use `ToolInventoryPolicy::strict_read_only()` for the default profile when
+     mutations require an explicit operator or admin mode
 2. Filter `list_tools` with:
    - `inventory.filter_tools(..., ToolOperation::List, ...)`
 3. Gate `call_tool` with:

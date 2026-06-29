@@ -1,0 +1,56 @@
+name: cargo-package-readiness
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: cargo-package-readiness::${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-package-readiness:
+    name: First-wave Cargo package readiness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve target metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_sha="$(git rev-parse HEAD)"
+          {
+            echo "### Cargo package readiness"
+            echo
+            echo "- Validation posture: \`first-wave package readiness\`"
+            echo "- Target ref: \`${GITHUB_REF_NAME}\`"
+            echo "- Target SHA: \`${target_sha}\`"
+            echo "- Publication posture: \`no publish\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Cache cargo artifacts
+        # swatinem/rust-cache v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+
+      - name: Check first-wave package readiness
+        run: python3 scripts/cargo_package_readiness.py

@@ -55,6 +55,45 @@ contract.assert_resource_metadata(&resource_metadata_json);
 contract.assert_missing_token_response(response.status(), response.headers());
 ```
 
+For runtime HTTP conformance tests, implement
+`auth_surface_contract::AuthSurfaceProbeClient` over the server's existing test
+client. The toolkit owns only the common assertions; each server still owns how
+it starts an in-process router, spawned binary, or hosted test deployment.
+
+```rust
+use mcp_toolkit_testing::auth_surface_contract::{
+    AuthSurfaceContract, AuthSurfaceProbeClient, AuthSurfaceProbeResponse,
+    AuthSurfaceProbeResult,
+};
+
+struct ProbeClient {
+    base_url: String,
+}
+
+impl AuthSurfaceProbeClient for ProbeClient {
+    fn get_json(&mut self, path: &str) -> AuthSurfaceProbeResult<serde_json::Value> {
+        let response = reqwest::blocking::get(format!("{}{}", self.base_url.trim_end_matches('/'), path))?;
+        Ok(response.json()?)
+    }
+
+    fn get_unauthenticated(&mut self, path: &str) -> AuthSurfaceProbeResult<AuthSurfaceProbeResponse> {
+        let response = reqwest::blocking::get(format!("{}{}", self.base_url.trim_end_matches('/'), path))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        Ok(AuthSurfaceProbeResponse::new(status, headers))
+    }
+}
+
+let contract = AuthSurfaceContract::new(
+    "https://example.test/mcp",
+    &["https://issuer.example"],
+    &["example.read"],
+    "example",
+);
+
+contract.assert_http_probe(&mut ProbeClient { base_url }, "/mcp");
+```
+
 Use `AuthorizationServerMetadataContract` to pin authorization-server metadata,
 including device authorization endpoints and grant type lists:
 
@@ -74,6 +113,11 @@ AuthorizationServerMetadataContract::new(
 .assert_metadata(&authorization_server_metadata_json);
 ```
 
+`AuthorizationServerMetadataContract::assert_http_probe` can be used with the
+same probe client when the server publishes inline authorization-server
+metadata. Use `assert_http_probe_at` when the server intentionally exposes a
+specific RFC 8414 alternate well-known path.
+
 Use `assert_forbidden_without_bearer_challenge` for pre-auth guard failures.
 For example, a bad-host `/mcp` request should be rejected by the host guard
 before the auth layer emits a bearer challenge:
@@ -84,6 +128,55 @@ use mcp_toolkit_testing::auth_surface_contract::assert_forbidden_without_bearer_
 assert_forbidden_without_bearer_challenge(response.status(), response.headers());
 ```
 
+## OpenAI Apps Contracts
+
+Use `openai_apps_contract::OpenAiAppsConformanceProfile` when a hosted HTTP
+server is exposed as an OpenAI Apps connector. This profile is stricter than the
+generic auth-surface contract: it checks protected-resource metadata,
+authorization-code + PKCE metadata, declared client registration mode, Apps tool
+descriptor `securitySchemes` parity, and runtime `mcp/www_authenticate`
+challenges.
+
+```rust
+use mcp_toolkit_testing::openai_apps_contract::{
+    OpenAiAppsClientRegistrationMode, OpenAiAppsConformanceProfile,
+};
+
+let authorization_servers = ["https://issuer.example"];
+let required_scopes = ["example.read"];
+let profile = OpenAiAppsConformanceProfile::new(
+    "https://example.test/mcp",
+    &authorization_servers,
+)
+.with_required_scopes(&required_scopes)
+.with_client_registration(OpenAiAppsClientRegistrationMode::ClientIdMetadataDocument);
+
+profile.assert_resource_metadata(&resource_metadata_json);
+profile.assert_authorization_server_metadata(&authorization_server_metadata_json);
+profile.assert_tool_descriptor(&apps_tool_descriptor_json);
+profile.assert_tool_result_authenticate_meta(&tool_result_meta_json);
+```
+
+For large tool catalogs, validate the first paginated `tools/list` page as a
+deliberate host discovery surface. This catches regressions where critical
+tools exist on later pages but a client chooses tools from the initial page or a
+deferred tool index is populated incompletely.
+
+```rust
+profile.assert_tool_list_page(
+    &first_page_tool_descriptors,
+    OpenAiAppsToolListPageBudget::new(40, 180_000, 32_000),
+);
+profile.assert_tool_list_first_page_contains_tools(
+    &first_page_tool_descriptors,
+    &["items.search", "items.read"],
+);
+profile.assert_tool_list_page_discovery_priorities(
+    &first_page_tool_descriptors,
+    "example/discovery",
+);
+```
+
 ## Adoption Expectation
 
 New toolkit-built servers should include at least:
@@ -91,6 +184,7 @@ New toolkit-built servers should include at least:
 - one strict tool-schema snapshot;
 - one stdio or HTTP runtime smoke test, matching the served transport;
 - auth metadata and bearer-challenge contract tests for hosted HTTP servers;
+- OpenAI Apps conformance tests for hosted HTTP servers intended for ChatGPT;
 - pre-auth host rejection tests for hosted HTTP servers with host allowlists;
 - GitHub-hosted CI that runs the strict contract tests without update-mode
   environment variables.

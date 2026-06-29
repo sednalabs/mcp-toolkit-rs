@@ -5,8 +5,12 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Conformance helpers for validating Rust MCP policy contracts."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+documentation = "https://docs.rs/mcp-toolkit-policy-conformance"
 readme = "../../README.md"
 publish = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 path = "src/lib.rs"

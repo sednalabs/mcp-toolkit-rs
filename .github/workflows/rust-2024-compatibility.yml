@@ -1,0 +1,61 @@
+name: rust-2024-compatibility
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/*.rs"
+      - "rust-toolchain*"
+      - ".github/workflows/rust-2024-compatibility.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/*.rs"
+      - "rust-toolchain*"
+      - ".github/workflows/rust-2024-compatibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-2024-compatibility::${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-2024-compatibility:
+    name: Rust 2024 compatibility guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Cache cargo artifacts
+        # swatinem/rust-cache v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+
+      - name: Check workspace Rust 2024 compatibility
+        env:
+          RUSTFLAGS: "-Wrust-2024-compatibility -Dwarnings"
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: Check template Rust 2024 compatibility
+        env:
+          RUSTFLAGS: "-Wrust-2024-compatibility -Dwarnings"
+        run: |
+          cargo check --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
+          cargo check --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features

@@ -29,6 +29,8 @@ use serde_json::{Map, Value};
 use std::path::Path;
 
 pub mod auth_surface_contract;
+pub mod catalog_profile_contract;
+pub mod openai_apps_contract;
 pub mod stdio_contract;
 pub use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 
@@ -375,7 +377,7 @@ mod tests {
         )
         .expect("seed snapshot");
         let previous = std::env::var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV).ok();
-        std::env::remove_var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV);
+        remove_test_env_var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV);
         assert_json_contract_snapshot(
             &path,
             "mcp_resource_snapshot",
@@ -392,7 +394,7 @@ mod tests {
         let path = unique_test_path("json_missing_snapshot_message_mentions_update_env");
         let _ = std::fs::remove_file(&path);
         let previous = std::env::var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV).ok();
-        std::env::remove_var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV);
+        remove_test_env_var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV);
         let result = std::panic::catch_unwind(|| {
             assert_json_contract_snapshot(
                 &path,
@@ -413,7 +415,7 @@ mod tests {
         let path = unique_test_path("json_public_wrapper_update_mode_writes_snapshot_file");
         let _ = std::fs::remove_file(&path);
         let previous = std::env::var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV).ok();
-        std::env::set_var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV, "1");
+        set_test_env_var(UPDATE_JSON_CONTRACT_SNAPSHOTS_ENV, "1");
         assert_json_contract_snapshot(
             &path,
             "mcp_resource_snapshot",
@@ -465,9 +467,21 @@ mod tests {
 
     fn restore_env_var(key: &str, value: Option<String>) {
         if let Some(value) = value {
-            std::env::set_var(key, value);
+            set_test_env_var(key, value);
         } else {
-            std::env::remove_var(key);
+            remove_test_env_var(key);
         }
+    }
+
+    fn set_test_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+        // SAFETY: callers hold `env_lock()` while mutating and reading the
+        // snapshot update environment variable in these tests.
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn remove_test_env_var(key: &str) {
+        // SAFETY: callers hold `env_lock()` while mutating and reading the
+        // snapshot update environment variable in these tests.
+        unsafe { std::env::remove_var(key) };
     }
 }

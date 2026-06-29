@@ -6,7 +6,7 @@ clients.
 `mcp-toolkit-rs` is an early public workspace for the shared substrate that
 keeps Rust MCP services consistent: auth discovery, HTTP/session support,
 policy primitives, tool inventory helpers, observability, process utilities,
-and test harnesses. It is pre-1.0 and the crates are not published to
+and test harnesses. It is pre-1.0 and the Rust crates are not published to
 crates.io yet, so adopters should consume it from Git for now.
 
 ## What Is Included
@@ -14,7 +14,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | Crate | Purpose |
 | --- | --- |
 | `mcp-toolkit` | Umbrella crate with optional feature groups. |
-| `mcp-toolkit-core` | Protocol-facing helpers, notifications, and tool inventory types. |
+| `mcp-toolkit-core` | Protocol-facing helpers, notifications, query-evidence helpers, and tool inventory types. |
 | `mcp-toolkit-auth` | Bearer auth, token validation, replay protection, and auth-surface helpers. |
 | `mcp-toolkit-http` | OAuth/PRM metadata helpers, device-authorization metadata, and optional streamable HTTP session support. |
 | `mcp-toolkit-observability` | Redaction, sanitization, tracing bridge, metrics facade, and optional OTel helpers. |
@@ -39,7 +39,13 @@ Gemini CLI authentication.
 
 For the complete server creation, validation, review, and release route, start
 with `docs/golden-path.md`. For a copyable checklist that turns that route into
-a repeatable implementation lane, use `docs/new-server-delivery-lane.md`.
+a repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
+the operator-facing details that make a server easy to try and debug, use
+`docs/easy-server-ergonomics.md`. For legacy systems with partial APIs, admin
+HTML, scheduled jobs, or private exports, use
+`docs/legacy-system-adapter-pattern.md` before exposing any generic HTTP, SQL,
+or browser-style tool. For auth failure handling, use
+`docs/auth-error-contracts.md`.
 
 Add the specific crates you need from Git:
 
@@ -66,8 +72,12 @@ mcp-toolkit = {
 
 Commit the consumer `Cargo.lock` after resolution. The lockfile records the
 exact toolkit SHA; manifest `rev` pins are only needed for special cases where a
-consumer intentionally wants a long-lived frozen toolkit ref. See
-`docs/cargo-package-release.md` for the package release and migration path.
+consumer intentionally wants a long-lived frozen toolkit ref.
+
+See `docs/cargo-package-release.md` for the Rust package release and migration
+path. The planned crates.io package names use the concise `mcp-toolkit-*` crate
+prefix; npm and PyPI companion packages have separate naming constraints and must
+not be inferred from the Rust crate names.
 
 Run the baseline checks from the repository root:
 
@@ -84,22 +94,35 @@ stable public surface:
 
 1. Use `mcp-toolkit-core::tool_inventory` to register the tools your server can
    expose.
-2. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
+2. Define native catalog profiles with `ToolCatalogProfile` when a server has
+   large or role-shaped tool surfaces. Emit `ToolCatalogContract` artifacts from
+   the same inventory and validate them with
+   `mcp_toolkit_testing::catalog_profile_contract` so required tools and groups
+   are probe-visible without adding production `find_tools` workarounds.
+3. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
    `tools/list` contract.
-3. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
+4. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
    catalogs should publish a reusable `defer_loading` plus `tool_search`
    request fragment, a richer documentation/resource template, and a local
    `allowed_tools` discovery envelope.
-4. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
+5. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery, Protected Resource Metadata, and
    device-authorization metadata for headless MCP client login.
-5. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+6. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle.
-6. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+7. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-7. Add policy crates only when the service has an authorization, SQL
+8. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+   provider query-cost and read-only evidence without returning raw provider
+   payloads.
+9. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
+
+For a legacy backend, first map source authority and blocked operations using
+`docs/legacy-system-adapter-pattern.md`. A narrow adapter with explicit
+operator-intent tools is safer than a generic HTTP, SQL, API, or browser MCP
+surface.
 
 For a copyable starting point, see `templates/curated-stdio-intent-server` for
 stdio intent tools and `templates/hosted-http-auth-server` for hosted HTTP with
@@ -161,6 +184,8 @@ Security reporting guidance is documented in `SECURITY.md`.
 
 - `docs/auth-surface.md` explains the OAuth, Protected Resource Metadata, and
   bearer-enforcement contract.
+- `docs/auth-token-dependency-posture.md` defines the crate-backed posture for
+  auth/token mechanics and the guardrail against bespoke token parsing.
 - `docs/contract-testing.md` covers reusable hard-path test helpers for stdio,
   auth metadata, bearer challenges, host guards, and snapshots.
 - `docs/cargo-package-release.md` covers the public Git dependency contract,
@@ -169,10 +194,18 @@ Security reporting guidance is documented in `SECURITY.md`.
   and deferred loading.
 - `docs/dependency-governance.md` defines dependency selection and update
   gates.
+- `docs/easy-server-ergonomics.md` lists the first-run, auth-status,
+  discovery-tool, and diagnostic patterns that make toolkit-built servers easy
+  to try.
 - `docs/ecosystem-map.md` explains where toolkit, reference architecture, and
   service-specific code should live.
 - `docs/golden-path.md` is the end-to-end path for creating, validating,
   reviewing, releasing, and adopting toolkit-built MCP servers.
+- `docs/instant-server-generation.md` records the direction for generating
+  secure MCP server scaffolds from OpenAPI, JSON Schema, docs, and examples.
+- `docs/legacy-system-adapter-pattern.md` explains how to wrap older systems
+  with split APIs, admin HTML, scheduled jobs, and private artifacts without
+  exposing generic backend access.
 - `docs/new-server-delivery-lane.md` defines the seven-gate lane for rapid,
   reviewable MCP server creation from toolkit templates through proven
   promotion.
@@ -195,7 +228,7 @@ Security reporting guidance is documented in `SECURITY.md`.
 
 The workspace is useful today, but it is still pre-1.0. Expect APIs to tighten
 as the public surface settles. Crates are marked `publish = false` until the
-crate-level release process is ready; consumers should use public Git
+crate-level release process is approved; consumers should use public Git
 dependencies plus committed lockfiles until crates are published.
 
 ## License

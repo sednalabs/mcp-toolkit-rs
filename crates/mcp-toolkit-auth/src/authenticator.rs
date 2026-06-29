@@ -1,20 +1,21 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use http::HeaderMap;
 use reqwest::Client;
 use serde_json::json;
 
+use crate::bearer::parse_strict_bearer_authorization;
 use crate::claims::{extract_roles, extract_scopes, merge_claims, validate_issuer_audience};
 use crate::providers::{IntrospectionCache, JwksCache};
-use crate::replay::JtiCache;
+use crate::replay::{InMemoryJtiReplayStore, SharedJtiReplayStore};
 use crate::util::{auth_debug_event, hash_identifier, token_ref};
 use crate::{AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext};
 
 #[derive(Debug, Clone)]
 pub struct Authenticator {
     pub(crate) config: Arc<AuthConfig>,
-    pub(crate) jti_cache: Option<Arc<Mutex<JtiCache>>>,
+    pub(crate) jti_replay_store: Option<SharedJtiReplayStore>,
     pub(crate) introspection_cache: Option<Arc<RwLock<IntrospectionCache>>>,
     pub(crate) jwks_cache: Option<Arc<JwksCache>>,
     pub(crate) client: Client,
@@ -22,6 +23,36 @@ pub struct Authenticator {
 
 impl Authenticator {
     pub fn new(config: AuthConfig) -> Result<Self, AuthError> {
+        Self::new_with_optional_jti_replay_store(config, None)
+    }
+
+    /// Builds an authenticator with a caller-owned JTI replay store.
+    ///
+    /// The supplied store is used for bearer JTI checks when
+    /// `AuthConfig::jti_enforce_bearer` is enabled and the request context is
+    /// bearer-only. `AuthConfig::jti_ttl_s` must remain positive; the
+    /// `jti_cache_size` setting only controls the default in-memory store. Use
+    /// this for service-owned shared backends such as a DAS SQLite/Redis replay
+    /// table.
+    ///
+    /// # Errors
+    /// Returns [`AuthError`] when the auth configuration is invalid.
+    ///
+    /// # Security
+    /// The replay store must perform atomic check-and-record operations. A
+    /// shared store only closes cross-worker replay gaps when every worker uses
+    /// the same backend and TTL semantics.
+    pub fn new_with_jti_replay_store(
+        config: AuthConfig,
+        jti_replay_store: SharedJtiReplayStore,
+    ) -> Result<Self, AuthError> {
+        Self::new_with_optional_jti_replay_store(config, Some(jti_replay_store))
+    }
+
+    fn new_with_optional_jti_replay_store(
+        config: AuthConfig,
+        jti_replay_store: Option<SharedJtiReplayStore>,
+    ) -> Result<Self, AuthError> {
         if matches!(config.mode, AuthMode::Jwks) {
             if config.jwks_url.is_none() || config.issuer.is_none() || config.audience.is_none() {
                 return Err(AuthError::ConfigError(
@@ -48,14 +79,29 @@ impl Authenticator {
             ));
         }
 
-        let enforce_replay = config.jti_ttl_s > 0.0 && config.jti_cache_size > 0;
-        let jti_cache = if enforce_replay {
-            Some(Arc::new(Mutex::new(JtiCache::new(
+        let custom_jti_replay_store = jti_replay_store.is_some();
+        if custom_jti_replay_store && config.jti_ttl_s <= 0.0 {
+            return Err(AuthError::ConfigError(
+                "Custom JTI replay store requires positive jti_ttl_s.".to_string(),
+            ));
+        }
+        if config.jti_enforce_bearer
+            && !custom_jti_replay_store
+            && (config.jti_ttl_s <= 0.0 || config.jti_cache_size <= 0)
+        {
+            return Err(AuthError::ConfigError(
+                "Bearer JTI replay enforcement requires positive jti_ttl_s and jti_cache_size."
+                    .to_string(),
+            ));
+        }
+
+        let jti_replay_store = match (jti_replay_store, config.jti_ttl_s > 0.0) {
+            (Some(store), true) => Some(store),
+            (None, true) if config.jti_cache_size > 0 => Some(InMemoryJtiReplayStore::shared(
                 Duration::from_secs_f64(config.jti_ttl_s),
                 config.jti_cache_size as usize,
-            ))))
-        } else {
-            None
+            )),
+            _ => None,
         };
 
         let introspection_cache = if config.introspection_cache_ttl_s > 0.0 {
@@ -95,7 +141,7 @@ impl Authenticator {
 
         Ok(Self {
             config: Arc::new(config),
-            jti_cache,
+            jti_replay_store,
             introspection_cache,
             jwks_cache,
             client: Client::new(),
@@ -240,41 +286,12 @@ impl Authenticator {
             }
         }
 
-        if let Some(cache_lock) = &self.jti_cache {
-            let enforce_jti = context.bearer_only && self.config.jti_enforce_bearer;
-            if !enforce_jti {
-                scopes.sort();
-                scopes.dedup();
-
-                let subject = claims
-                    .get("sub")
-                    .and_then(|value| value.as_str())
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty());
-
-                auth_debug_event(
-                    "auth.success",
-                    json!({
-                        "actor_hash": hash_identifier(&actor),
-                        "azp": azp,
-                        "scopes_count": scopes.len(),
-                        "roles_count": roles.len(),
-                        "subject_hash": subject.as_ref().map(|value| hash_identifier(value)),
-                        "token_ref": token_ref(token),
-                    }),
-                );
-                return Ok(AuthContext {
-                    actor,
-                    scopes,
-                    roles,
-                    claims,
-                    azp,
-                    subject,
-                    token_ref: token_ref(token),
-                    raw_token: token.to_string(),
-                });
-            }
-
+        if context.bearer_only && self.config.jti_enforce_bearer {
+            let jti_replay_store = self.jti_replay_store.as_ref().ok_or_else(|| {
+                AuthError::ConfigError(
+                    "Bearer JTI replay enforcement requires an enabled replay store.".to_string(),
+                )
+            })?;
             let jti = claims
                 .get("jti")
                 .and_then(|value| value.as_str())
@@ -282,14 +299,14 @@ impl Authenticator {
                 .filter(|value| !value.is_empty())
                 .ok_or(AuthError::InvalidToken)?;
 
-            let mut cache = cache_lock.lock().map_err(|_| AuthError::Generic {
-                message: "JTI cache lock poisoned".to_string(),
-                status_code: 500,
-                code: None,
-                reason: None,
+            let replay_seen = jti_replay_store.seen(&jti).map_err(|error| {
+                AuthError::new(format!("JTI replay store failed: {error}"))
+                    .with_status(500)
+                    .with_code("AUTH_REPLAY_STORE_ERROR")
+                    .with_reason("replay_store_error")
             })?;
 
-            if cache.seen(&jti) {
+            if replay_seen {
                 auth_debug_event(
                     "auth.replay_detected",
                     json!({
@@ -335,32 +352,18 @@ impl Authenticator {
 }
 
 fn bearer_token(headers: &HeaderMap, strict: bool) -> Option<String> {
+    if strict {
+        return parse_strict_bearer_authorization(headers)
+            .ok()
+            .map(|token| token.as_str().to_owned());
+    }
+
     let mut values = headers.get_all(http::header::AUTHORIZATION).iter();
     let value = values.next()?;
     if values.next().is_some() {
         return None;
     }
     let raw = value.to_str().ok()?;
-    if strict {
-        if raw.trim() != raw {
-            return None;
-        }
-        if raw.chars().any(|ch| ch.is_control()) {
-            return None;
-        }
-        if raw.matches(' ').count() != 1 {
-            return None;
-        }
-        let (scheme, token) = raw.split_once(' ')?;
-        if !scheme.eq_ignore_ascii_case("bearer") {
-            return None;
-        }
-        if token.is_empty() {
-            return None;
-        }
-        return Some(token.to_string());
-    }
-
     let raw: String = raw.chars().filter(|c| !c.is_control()).collect();
     let raw = raw.trim();
     let (scheme, token) = raw.split_once(' ')?;

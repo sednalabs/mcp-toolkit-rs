@@ -7,6 +7,7 @@ on:
       - "**/Cargo.lock"
       - "deny.toml"
       - "scripts/dependency_governance_check.sh"
+      - "scripts/rmcp_macro_runtime_pin_check.py"
       - "docs/dependency-governance.md"
       - ".github/workflows/dependency-governance.yml"
   push:
@@ -18,6 +19,7 @@ on:
       - "**/Cargo.lock"
       - "deny.toml"
       - "scripts/dependency_governance_check.sh"
+      - "scripts/rmcp_macro_runtime_pin_check.py"
       - "docs/dependency-governance.md"
       - ".github/workflows/dependency-governance.yml"
   workflow_dispatch:
@@ -50,7 +52,7 @@ jobs:
 
       - name: Install governance tools
         # taiki-e/install-action v2
-        uses: taiki-e/install-action@15413b256f995d819248ea62704771a959284285
+        uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5
         with:
           tool: cargo-deny,cargo-audit,cargo-outdated
 

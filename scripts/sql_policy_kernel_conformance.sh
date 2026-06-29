@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KERNEL_ROOT="${KERNEL_ROOT:-${ROOT_DIR}/../../mcp-policy-kernel}"
+KERNEL_ROOT="${KERNEL_ROOT:-${PK_POLICY_KERNEL_ROOT:-${ROOT_DIR}/../../policy-kernel}}"
 DEFAULT_VECTORS="${KERNEL_ROOT}/vectors/sql_restricted_policy.json"
 DEFAULT_REPORT="${ROOT_DIR}/.tmp/sql_policy_conformance/sql_policy_core_vs_kernel_report.json"
 
@@ -20,6 +20,11 @@ for ((i = 0; i < ${#args[@]}; i++)); do
 done
 
 if [[ "$has_vectors" -eq 0 ]]; then
+  if [[ ! -f "$DEFAULT_VECTORS" ]]; then
+    echo "default policy-kernel vectors not found: $DEFAULT_VECTORS" >&2
+    echo "set PK_POLICY_KERNEL_ROOT, KERNEL_ROOT, or pass --vectors explicitly" >&2
+    exit 2
+  fi
   args=(--vectors "$DEFAULT_VECTORS" "${args[@]}")
 fi
 

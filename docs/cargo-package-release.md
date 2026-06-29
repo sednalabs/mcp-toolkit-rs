@@ -44,28 +44,51 @@ The release owner must record:
 5. the hosted validation run URL for that commit;
 6. the rollback plan for consumers.
 
-## First Package Set
+## Public Package Names
+
+The Rust crates should keep the concise `mcp-toolkit-*` names for crates.io
+unless the release owner records a different decision before publication.
+These names are the public Rust package names, not a claim of vendor
+endorsement or official MCP/OpenAI status. Repository metadata, README text,
+release notes, and docs should make the Sedna Labs maintenance boundary clear.
+
+Other ecosystems have different naming constraints:
+
+- npm packages should use the scoped `@sednalabs/*` names because npm supports
+  organization scopes and the unscoped `mcp-toolkit` name is already occupied.
+- PyPI names should be decided per package when a Python companion is actually
+  ready. In particular, do not assume `mcp-probe` or `mcp-forge`; those names
+  are occupied by unrelated packages.
+
+Recheck every registry name immediately before publication. Availability checks
+in planning notes are evidence, not a reservation.
+
+## First Rust Package Set
 
 The first package set should be as small as the adopting services need. Start
-with the stable helper crates already used by downstream MCP services:
+with the Rust crates that define the reusable public surface and the proof
+helpers needed by downstream MCP services:
 
 - `mcp-toolkit-core`
-- `mcp-toolkit-http`
-- `mcp-toolkit-observability`
-- `mcp-toolkit-postgres`
 - `mcp-toolkit-testing`
+- `mcp-toolkit-observability`
 - `mcp-toolkit-auth`
+- `mcp-toolkit-http`
+- `mcp-toolkit-policy-core`
+- `mcp-toolkit-policy-conformance`
 
-Add the umbrella, server, policy, process, docs, and Gemini crates only when
-their public API and dependency graph are ready for the same semver promise.
+Hold back the umbrella, server, policy-runtime, policy-ffi,
+policy-kernel-adapters, process, docs, Gemini, Postgres, and other
+service-specific or convenience crates until their public API, dependency
+graph, and adopting-service evidence are ready for the same semver promise.
 
 ## Readiness Checklist
 
 Before a crate can move from Git-only consumption to crates.io publication:
 
 1. Remove `publish = false` only for crates in the approved package set.
-2. Confirm each package has `description`, `license`, `repository`, and
-   `readme` metadata.
+2. Confirm each package has `description`, `license`, `repository`,
+   `documentation`, and `readme` metadata.
 3. Confirm internal dependencies include both `version` and `path`, so local
    workspace development remains ergonomic and registry publication resolves by
    version.
@@ -75,17 +98,47 @@ Before a crate can move from Git-only consumption to crates.io publication:
 6. Record the validation run, package names, versions, and consumer migration
    notes in the release work item or PR.
 
+Routine pull requests keep publication disabled, but they should still prove
+the first-wave package shape. The `cargo-package-readiness` workflow runs
+`scripts/cargo_package_readiness.py`, which checks required manifest metadata,
+keeps the routine `publish = false` guard in place, verifies internal toolkit
+dependencies have both `version` and `path`, runs `cargo package --list` for
+the first-wave crates, runs full `cargo package` verification for first-wave
+crates without unpublished toolkit dependencies, and explicitly marks registry
+package verification as deferred for crates whose verification requires
+predecessor toolkit crates to be published or available in an approved staging
+registry first.
+
+## Docs.rs and Version Notes
+
+First-wave crates should set `documentation = "https://docs.rs/<crate-name>"`
+and `[package.metadata.docs.rs] all-features = true` before publication. This
+keeps crates.io and docs.rs aligned and makes optional feature documentation
+visible unless a crate has a documented reason to build docs with a smaller
+feature set.
+
+The first public package versions are currently `0.1.0`. Treat all pre-1.0
+versions as semver-minor-compatible at the crate level but not as a 1.0 API
+stability promise. Any publication approval should include a changelog entry
+for the exact crate set and should call out consumer-facing breaking changes
+before increasing any published version.
+
 The likely first-wave order is:
 
-1. `mcp-toolkit-core`, `mcp-toolkit-http`, `mcp-toolkit-observability`,
-   `mcp-toolkit-postgres`
-2. `mcp-toolkit-testing`
-3. `mcp-toolkit-auth`
+1. `mcp-toolkit-core`, `mcp-toolkit-observability`,
+   `mcp-toolkit-policy-core`
+2. `mcp-toolkit-http`
+3. `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`
+4. `mcp-toolkit-auth`
 
 `mcp-toolkit-testing` currently depends on `mcp-toolkit-core` and
-`mcp-toolkit-http`, while `mcp-toolkit-auth` uses `mcp-toolkit-testing` as a
-dev-dependency for contract tests. Adjust the order if the approved package set
-or dependency graph changes.
+`mcp-toolkit-http`; `mcp-toolkit-policy-conformance` depends on
+`mcp-toolkit-policy-core`; and `mcp-toolkit-auth` uses `mcp-toolkit-testing` as
+a dev-dependency for contract tests. Adjust the order if the approved package
+set or dependency graph changes.
+
+Do not include server-generation or scaffold tooling in the required first Rust
+release path until that product shape and name are explicitly approved.
 
 ## Consumer Migration After Publication
 

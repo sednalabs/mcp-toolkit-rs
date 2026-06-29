@@ -107,7 +107,14 @@ Use `mcp-toolkit-auth` for consistent primitives:
 - Required scopes enforced centrally.
 - Optional JTI replay guard for services that explicitly require one-time
   bearer-token semantics.
+- Shared JTI replay stores via `JtiReplayStore` when a multi-worker deployment
+  needs bearer replay state outside one authenticator process.
 - Strict OAuth resource URL checks for protected resource metadata.
+
+Auth/token mechanics must also follow
+`docs/auth-token-dependency-posture.md`: JWT/JWK/OAuth/DPoP/introspection/token
+exchange plumbing should be crate-backed, while local code stays limited to
+reviewed glue, canonicalization, and policy-input projection.
 
 ### Profile presets (Rust)
 

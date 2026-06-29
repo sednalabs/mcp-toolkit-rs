@@ -360,7 +360,9 @@ mod tests {
     #[test]
     fn validate_request_authority_falls_back_to_uri_authority_when_host_absent() {
         let headers = HeaderMap::new();
-        let uri = "http://example.com:8080/mcp".parse().expect("absolute URI");
+        let uri = "http://example.com:8080/mcp" // DevSkim: ignore DS137138 absolute URI fixture
+            .parse()
+            .expect("absolute URI");
         let allowed = ["example.com:8080".to_string()];
         let parsed =
             super::validate_request_authority(Some(&uri), &headers, &allowed).expect("authority");
@@ -372,7 +374,9 @@ mod tests {
     fn validate_request_authority_prefers_invalid_host_over_uri_fallback() {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, "example.com:80:90".parse().expect("header"));
-        let uri = "http://example.com:8080/mcp".parse().expect("absolute URI");
+        let uri = "http://example.com:8080/mcp" // DevSkim: ignore DS137138 absolute URI fixture
+            .parse()
+            .expect("absolute URI");
         let allowed = ["example.com:8080".to_string()];
         let err = super::validate_request_authority(Some(&uri), &headers, &allowed)
             .expect_err("invalid host wins");

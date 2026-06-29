@@ -339,6 +339,175 @@ pub fn das_observability_decision(input: &DasObservabilityInput) -> Decision {
     Decision::deny(DecisionCode::MissingRoles, None)
 }
 
+/// Canonical toolkit bridge for gateway and DAS conformance vectors.
+///
+/// # Security
+/// * Delegates to the same gateway and DAS adapter functions used by runtime
+///   policy authorities.
+/// * Preserves exact decision codes, reasons, and required scopes for parity
+///   checks instead of translating them through a lossy test-only shape.
+#[cfg(feature = "conformance")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ToolkitPolicyOperationAdapter;
+
+#[cfg(feature = "conformance")]
+impl mcp_toolkit_policy_conformance::PolicyOperationAdapter for ToolkitPolicyOperationAdapter {
+    fn required_scopes(
+        &self,
+        input: &mcp_toolkit_policy_conformance::RequiredScopesInput,
+    ) -> Result<Vec<String>, String> {
+        Ok(required_scopes(&input.method, &input.path))
+    }
+
+    fn gateway_decision(
+        &self,
+        input: &mcp_toolkit_policy_conformance::GatewayDecisionInput,
+    ) -> Result<mcp_toolkit_policy_conformance::ConformanceDecision, String> {
+        Ok(conformance_from_decision(gateway_decision(
+            &gateway_input_from_conformance(input),
+        )))
+    }
+
+    fn das_query_decision(
+        &self,
+        input: &mcp_toolkit_policy_conformance::DasDecisionInput,
+    ) -> Result<mcp_toolkit_policy_conformance::ConformanceDecision, String> {
+        Ok(conformance_from_decision(das_query_decision(
+            &das_decision_input_from_conformance(input),
+        )))
+    }
+
+    fn das_observability_decision(
+        &self,
+        input: &mcp_toolkit_policy_conformance::DasObservabilityInput,
+    ) -> Result<mcp_toolkit_policy_conformance::ConformanceDecision, String> {
+        Ok(conformance_from_decision(das_observability_decision(
+            &das_observability_input_from_conformance(input),
+        )))
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn conformance_from_decision(
+    decision: Decision,
+) -> mcp_toolkit_policy_conformance::ConformanceDecision {
+    mcp_toolkit_policy_conformance::ConformanceDecision {
+        allow: decision.allow,
+        code: decision.code,
+        reason: decision.reason,
+        required_scopes: decision.required_scopes,
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn gateway_input_from_conformance(
+    input: &mcp_toolkit_policy_conformance::GatewayDecisionInput,
+) -> GatewayDecisionInput {
+    GatewayDecisionInput {
+        method: input.method.clone(),
+        path: input.path.clone(),
+        token_scopes: input.token_scopes.clone(),
+        claims: input.claims.clone(),
+        cfg: ClaimsCfg {
+            expected_issuer: input.cfg.expected_issuer.clone(),
+            expected_audience: input.cfg.expected_audience.clone(),
+            allowed_azp: input.cfg.allowed_azp.clone(),
+        },
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn das_auth_input_from_conformance(
+    input: &mcp_toolkit_policy_conformance::DasAuthInput,
+) -> DasAuthInput {
+    DasAuthInput {
+        scopes: input.scopes.clone(),
+        roles: input.roles.clone(),
+        azp: input.azp.clone(),
+        is_system: input.is_system,
+        claims: input.claims.clone(),
+        project_id: input.project_id,
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn das_cfg_input_from_conformance(
+    input: &mcp_toolkit_policy_conformance::DasCfgInput,
+) -> DasCfgInput {
+    DasCfgInput {
+        write_implies_read: input.write_implies_read,
+        system_allow_endpoints: input.system_allow_endpoints.clone(),
+        system_allow_sql_keys: input.system_allow_sql_keys.clone(),
+        devtools_roles: input.devtools_roles.clone(),
+        delegation_mode: input.delegation_mode,
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn sql_access_from_conformance(input: &mcp_toolkit_policy_conformance::SqlAccess) -> SqlAccess {
+    match input {
+        mcp_toolkit_policy_conformance::SqlAccess::Read => SqlAccess::Read,
+        mcp_toolkit_policy_conformance::SqlAccess::Write => SqlAccess::Write,
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn sql_risk_from_conformance(input: &mcp_toolkit_policy_conformance::SqlRisk) -> SqlRisk {
+    match input {
+        mcp_toolkit_policy_conformance::SqlRisk::Low => SqlRisk::Low,
+        mcp_toolkit_policy_conformance::SqlRisk::High => SqlRisk::High,
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn quorum_state_from_conformance(
+    input: &mcp_toolkit_policy_conformance::QuorumState,
+) -> QuorumState {
+    match input {
+        mcp_toolkit_policy_conformance::QuorumState::Ok => QuorumState::Ok,
+        mcp_toolkit_policy_conformance::QuorumState::Missing => QuorumState::Missing,
+        mcp_toolkit_policy_conformance::QuorumState::Stale => QuorumState::Stale,
+        mcp_toolkit_policy_conformance::QuorumState::Disabled => QuorumState::Disabled,
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn das_query_input_from_conformance(
+    input: &mcp_toolkit_policy_conformance::DasQueryInput,
+) -> DasQueryInput {
+    DasQueryInput {
+        endpoint: input.endpoint.clone(),
+        sql_key: input.sql_key.clone(),
+        params_hash: input.params_hash.clone(),
+        access: sql_access_from_conformance(&input.access),
+        risk: sql_risk_from_conformance(&input.risk),
+        quorum_state: quorum_state_from_conformance(&input.quorum_state),
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn das_decision_input_from_conformance(
+    input: &mcp_toolkit_policy_conformance::DasDecisionInput,
+) -> DasDecisionInput {
+    DasDecisionInput {
+        auth: das_auth_input_from_conformance(&input.auth),
+        cfg: das_cfg_input_from_conformance(&input.cfg),
+        query: das_query_input_from_conformance(&input.query),
+        allowlist: input.allowlist.clone(),
+    }
+}
+
+#[cfg(feature = "conformance")]
+fn das_observability_input_from_conformance(
+    input: &mcp_toolkit_policy_conformance::DasObservabilityInput,
+) -> DasObservabilityInput {
+    DasObservabilityInput {
+        auth: das_auth_input_from_conformance(&input.auth),
+        cfg: das_cfg_input_from_conformance(&input.cfg),
+        endpoint: input.endpoint.clone(),
+    }
+}
+
 fn normalized_claim_string_within_limits(
     claims: &serde_json::Map<String, Value>,
     key: &str,
@@ -547,6 +716,9 @@ mod tests {
         DasQueryInput, GatewayDecisionInput, QuorumState, SqlAccess, SqlRisk,
     };
     use serde_json::{json, Value};
+
+    #[cfg(feature = "conformance")]
+    use super::ToolkitPolicyOperationAdapter;
 
     #[test]
     fn gateway_scope_mapping_matches_realm_default() {
@@ -775,5 +947,125 @@ mod tests {
         assert!(!decision.allow);
         assert_eq!(decision.code.as_deref(), Some("INVALID_INPUT"));
         assert_eq!(decision.reason.as_deref(), Some("boundary_limits"));
+    }
+
+    #[cfg(feature = "conformance")]
+    #[test]
+    fn toolkit_conformance_adapter_runs_gateway_and_das_vectors() {
+        use mcp_toolkit_policy_conformance::{
+            run_vectors, validate_vectors, DecisionExpect, VectorCase,
+            OP_DAS_OBSERVABILITY_DECISION, OP_DAS_QUERY_DECISION, OP_GATEWAY_DECISION,
+            OP_REQUIRED_SCOPES,
+        };
+
+        let cases = vec![
+            VectorCase {
+                op: OP_REQUIRED_SCOPES.to_string(),
+                case: "gateway_required_scopes_users_read".to_string(),
+                input: json!({
+                    "method": "GET",
+                    "path": "/admin/realms/demo/users"
+                }),
+                expect: DecisionExpect {
+                    allow: true,
+                    code: None,
+                    reason: None,
+                    required_scopes: Some(vec!["keycloak-admin:users:read".to_string()]),
+                },
+            },
+            VectorCase {
+                op: OP_GATEWAY_DECISION.to_string(),
+                case: "gateway_users_read_allow".to_string(),
+                input: json!({
+                    "method": "GET",
+                    "path": "/admin/realms/demo/users",
+                    "token_scopes": ["keycloak-admin:users:read"],
+                    "claims": {
+                        "iss": "https://issuer.example",
+                        "aud": ["mcp"],
+                        "azp": "client-a"
+                    },
+                    "cfg": {
+                        "expected_issuer": "https://issuer.example",
+                        "expected_audience": "mcp",
+                        "allowed_azp": ["client-a"]
+                    }
+                }),
+                expect: DecisionExpect {
+                    allow: true,
+                    code: None,
+                    reason: None,
+                    required_scopes: Some(vec!["keycloak-admin:users:read".to_string()]),
+                },
+            },
+            VectorCase {
+                op: OP_DAS_QUERY_DECISION.to_string(),
+                case: "das_query_stale_quorum_denies_high_risk_write".to_string(),
+                input: json!({
+                    "auth": {
+                        "scopes": ["ops:write"],
+                        "roles": [],
+                        "azp": null,
+                        "is_system": false,
+                        "claims": {},
+                        "project_id": 7
+                    },
+                    "cfg": {
+                        "write_implies_read": true,
+                        "system_allow_endpoints": [],
+                        "system_allow_sql_keys": [],
+                        "devtools_roles": ["devtools"],
+                        "delegation_mode": false
+                    },
+                    "query": {
+                        "endpoint": "query",
+                        "sql_key": "ledger",
+                        "params_hash": "abc",
+                        "access": "write",
+                        "risk": "high",
+                        "quorum_state": "stale"
+                    },
+                    "allowlist": ["ledger"]
+                }),
+                expect: DecisionExpect {
+                    allow: false,
+                    code: Some("QUORUM_STALE".to_string()),
+                    reason: None,
+                    required_scopes: None,
+                },
+            },
+            VectorCase {
+                op: OP_DAS_OBSERVABILITY_DECISION.to_string(),
+                case: "das_observability_system_allowed_endpoint".to_string(),
+                input: json!({
+                    "auth": {
+                        "scopes": [],
+                        "roles": [],
+                        "azp": null,
+                        "is_system": true,
+                        "claims": {},
+                        "project_id": 7
+                    },
+                    "cfg": {
+                        "write_implies_read": true,
+                        "system_allow_endpoints": ["metrics"],
+                        "system_allow_sql_keys": [],
+                        "devtools_roles": ["devtools"],
+                        "delegation_mode": false
+                    },
+                    "endpoint": "metrics"
+                }),
+                expect: DecisionExpect {
+                    allow: true,
+                    code: None,
+                    reason: None,
+                    required_scopes: None,
+                },
+            },
+        ];
+
+        validate_vectors(&cases).expect("canonical gateway/DAS vectors should validate");
+        run_vectors(&cases, Some(&ToolkitPolicyOperationAdapter))
+            .expect("canonical gateway/DAS vectors should pass");
     }
 }

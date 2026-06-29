@@ -11,6 +11,8 @@ Keep Rust components secure, maintainable, and release-friendly by preferring we
 - Direct dependencies declared in Cargo manifests for the governed Rust workspaces
 - Tooling dependencies used in release checks
 - New crates and major/minor dependency upgrades
+- Auth/token mechanics that validate, parse, introspect, exchange, or project
+  credentials into canonical policy inputs
 
 ## Go/No-Go Criteria
 
@@ -69,9 +71,12 @@ Run:
 
 The script enforces:
 
-1. advisory/license/source policy via `cargo-deny` (blocking)
-2. RustSec check via `cargo-audit` (blocking)
-3. stale-risk scan on direct dependencies via `cargo-outdated` (report-only by default)
+0. auth/token dependency posture via `scripts/auth_dependency_posture_check.py`
+   (blocking)
+1. `rmcp` macro/runtime pin consistency for crates that enable `rmcp/macros`
+2. advisory/license/source policy via `cargo-deny` (blocking)
+3. RustSec check via `cargo-audit` (blocking)
+4. stale-risk scan on direct dependencies via `cargo-outdated` (report-only by default)
 
 Phase-2 tightening option:
 
@@ -96,3 +101,33 @@ Exception requirements:
 1. Documented in PR with rationale, owner, and explicit expiry date.
 2. Bounded duration (target <= 30 days).
 3. Follow-up issue/work item created before merge.
+
+## Auth/token mechanics
+
+Auth, OAuth/OIDC, JWT/JWS/JWK/JWKS, token introspection, sender constraints,
+and token-exchange mechanics have an additional posture documented in
+`docs/auth-token-dependency-posture.md`.
+
+For those mechanics:
+
+- prefer public, maintained crates for cryptography, JOSE/JWT, OAuth/OIDC,
+  DPoP/mTLS, introspection, and token-exchange protocol handling;
+- keep local code limited to reviewed glue such as header-shape parsing,
+  canonicalization, bounded caching, typed configuration, error mapping, and
+  policy-input projection;
+- add or update the posture inventory when introducing a new auth/token
+  mechanic;
+- create a follow-up work item for any temporary bespoke token logic that
+  cannot be removed before merge.
+
+## RMCP macro/runtime pinning
+
+Crates that enable the `rmcp` `macros` feature must also declare a direct
+`rmcp-macros` dependency pinned to the same exact runtime version.
+
+For optional `rmcp` dependencies, the feature that enables `dep:rmcp` must also
+enable `dep:rmcp-macros` so downstream crates receive the compatibility
+constraint when they opt into the toolkit feature.
+
+This guards against Cargo selecting a newer `rmcp-macros` release whose
+generated code targets APIs that are not present in the pinned `rmcp` runtime.

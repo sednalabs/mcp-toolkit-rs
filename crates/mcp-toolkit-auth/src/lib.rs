@@ -26,6 +26,7 @@
 //! * RFC 6749: OAuth 2.0 Authorization Framework.
 //! * [OpenID Connect Core 1.0].
 
+pub mod bearer;
 pub mod challenge;
 pub mod surface;
 
@@ -39,14 +40,17 @@ mod replay;
 mod util;
 
 pub use authenticator::Authenticator;
+pub use bearer::{parse_strict_bearer_authorization, BearerParseError, BearerToken};
 pub use config::{
     discover_oidc_metadata, AuthConfig, AuthMode, AuthRequestContext, AuthSecurityProfile,
     ClientAuthMethod, OidcDiscovery,
 };
 pub use context::{auth_context_from_parts, auth_context_ref_from_parts, AuthContext};
-pub use error::AuthError;
+pub use error::{AuthError, AuthErrorContract};
 pub use mcp_toolkit_http::oauth::AuthorizationServerMetadata;
-pub use replay::JtiCache;
+pub use replay::{
+    InMemoryJtiReplayStore, JtiCache, JtiReplayStore, JtiReplayStoreError, SharedJtiReplayStore,
+};
 
 #[cfg(test)]
 mod internal_tests;
