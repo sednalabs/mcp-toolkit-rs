@@ -127,9 +127,7 @@ impl ToolCapability {
 
     /// Attach risk posture metadata for guarded preview/apply or admin tools.
     pub fn with_risk_posture(mut self, risk_posture: GuardedActionPosture) -> Self {
-        if risk_posture.is_read_only() {
-            self.read_only = true;
-        }
+        self.read_only = risk_posture.is_read_only();
         self.risk_posture = Some(risk_posture);
         self
     }
@@ -1387,5 +1385,18 @@ mod tests {
             value["results"][1]["risk_posture"]["operation_class"],
             json!(GuardedActionOperationClass::Preview.as_str())
         );
+    }
+
+    #[test]
+    fn risk_posture_overrides_previous_read_only_flag() {
+        let mutating = ToolCapability::new("queue_control_apply")
+            .with_read_only(true)
+            .with_risk_posture(GuardedActionPosture::mutating());
+        assert!(!mutating.read_only());
+
+        let preview = ToolCapability::new("queue_control_preview")
+            .with_read_only(false)
+            .with_risk_posture(GuardedActionPosture::preview());
+        assert!(preview.read_only());
     }
 }

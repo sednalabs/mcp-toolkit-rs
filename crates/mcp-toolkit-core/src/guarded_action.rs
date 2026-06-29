@@ -220,6 +220,14 @@ impl GuardedActionRuntimeMode {
         action_name: &str,
         posture: GuardedActionPosture,
     ) -> Result<(), GuardedActionError> {
+        if posture.requires_runtime_enablement && self != Self::Enabled {
+            return Err(GuardedActionError::ActionDisabled {
+                action_name: action_name.trim().to_string(),
+                operation_class: posture.operation_class,
+                runtime_mode: self,
+            });
+        }
+
         let allowed = match self {
             Self::ReadOnly => posture.is_read_only(),
             Self::PreviewOnly => {
@@ -455,6 +463,20 @@ mod tests {
             .assert_allowed("broadcast_now", GuardedActionPosture::send_adjacent())
             .expect_err("send-adjacent action should be denied");
         assert!(err.to_string().contains("preview_only"));
+    }
+
+    #[test]
+    fn runtime_enablement_requirement_denies_preview_until_enabled() {
+        let guarded_preview = GuardedActionPosture::preview().with_runtime_enablement(true);
+
+        let err = GuardedActionRuntimeMode::PreviewOnly
+            .assert_allowed("queue_control_preview", guarded_preview)
+            .expect_err("preview should require enabled runtime mode");
+        assert!(err.to_string().contains("preview_only"));
+
+        GuardedActionRuntimeMode::Enabled
+            .assert_allowed("queue_control_preview", guarded_preview)
+            .expect("enabled runtime mode should allow guarded preview");
     }
 
     #[test]
