@@ -39,8 +39,8 @@ directory or standalone release scaffolding.
 ## Single-Crate Public Stdio Server
 
 Use `templates/single-crate-public-stdio-server` when you are starting a new
-public repository for a stdio MCP server and want the public CI and security
-posture included from the start.
+public repository for a stdio MCP server and want the standalone public stdio
+starter to carry the public CI and security posture from the start.
 
 It demonstrates:
 
