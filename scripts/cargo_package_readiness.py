@@ -237,6 +237,7 @@ def main() -> int:
     github_summary("- Internal toolkit dependencies: version+path metadata present\n")
 
     if args.manifest_only:
+        print("Manifest validation passed. Skipping cargo package commands (--manifest-only).")
         github_summary("- Package command execution: skipped (`--manifest-only`)\n")
         return 0
 
