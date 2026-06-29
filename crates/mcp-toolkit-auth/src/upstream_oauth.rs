@@ -854,7 +854,8 @@ pub async fn refresh_access_token_with_timeout(
     timeout: Duration,
 ) -> Result<OAuthTokenSet, UpstreamOAuthError> {
     let http = token_http_client(timeout)?;
-    refresh_access_token_with_token(&http, config, &config.refresh_token).await
+    let token_set = refresh_access_token_with_token(&http, config, &config.refresh_token).await;
+    token_set
 }
 
 async fn refresh_access_token_with_token(
@@ -3529,7 +3530,8 @@ mod tests {
         let handle = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_millis(250);
             while Instant::now() < deadline {
-                match listener.accept() {
+                let accept_result = listener.accept();
+                match accept_result {
                     Ok((mut stream, _)) => {
                         request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         let mut buffer = [0_u8; 4096];
@@ -3547,7 +3549,7 @@ mod tests {
                         thread::sleep(Duration::from_millis(10));
                     }
                     Err(_) => return,
-                }
+                };
             }
         });
         (format!("http://{addr}/redirect-target"), requests, handle)
