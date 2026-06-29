@@ -17,42 +17,85 @@ permissions:
 
 jobs:
   rust-baseline-lane:
-    name: Rust baseline / ${{ matrix.target.name }}
+    name: Rust baseline / ${{ matrix.lane.target_name }} / ${{ matrix.lane.phase_name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 4
       matrix:
-        target:
-          - name: workspace
+        lane:
+          - target_name: workspace
+            phase_name: fmt
             cache_key: workspace
             workspaces: |
               . -> target
-            fmt_cmd: cargo fmt --all --check
-            clippy_cmd: cargo clippy --workspace --all-targets --all-features -- -D warnings
-            test_cmd: cargo test --workspace --all-targets --all-features
-          - name: curated-stdio-intent-server
+            command: cargo fmt --all --check
+          - target_name: workspace
+            phase_name: clippy
+            cache_key: workspace
+            workspaces: |
+              . -> target
+            command: cargo clippy --workspace --all-targets --all-features -- -D warnings
+          - target_name: workspace
+            phase_name: tests
+            cache_key: workspace
+            workspaces: |
+              . -> target
+            command: cargo test --workspace --all-targets --all-features
+          - target_name: curated-stdio-intent-server
+            phase_name: fmt
             cache_key: template-curated-stdio-intent-server
             workspaces: |
               templates/curated-stdio-intent-server -> target
-            fmt_cmd: cargo fmt --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all --check
-            clippy_cmd: cargo clippy --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features -- -D warnings
-            test_cmd: cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
-          - name: hosted-http-auth-server
+            command: cargo fmt --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all --check
+          - target_name: curated-stdio-intent-server
+            phase_name: clippy
+            cache_key: template-curated-stdio-intent-server
+            workspaces: |
+              templates/curated-stdio-intent-server -> target
+            command: cargo clippy --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features -- -D warnings
+          - target_name: curated-stdio-intent-server
+            phase_name: tests
+            cache_key: template-curated-stdio-intent-server
+            workspaces: |
+              templates/curated-stdio-intent-server -> target
+            command: cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
+          - target_name: hosted-http-auth-server
+            phase_name: fmt
             cache_key: template-hosted-http-auth-server
             workspaces: |
               templates/hosted-http-auth-server -> target
-            fmt_cmd: cargo fmt --manifest-path templates/hosted-http-auth-server/Cargo.toml --all --check
-            clippy_cmd: cargo clippy --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features -- -D warnings
-            test_cmd: cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
-          - name: single-crate-public-stdio-server
+            command: cargo fmt --manifest-path templates/hosted-http-auth-server/Cargo.toml --all --check
+          - target_name: hosted-http-auth-server
+            phase_name: clippy
+            cache_key: template-hosted-http-auth-server
+            workspaces: |
+              templates/hosted-http-auth-server -> target
+            command: cargo clippy --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features -- -D warnings
+          - target_name: hosted-http-auth-server
+            phase_name: tests
+            cache_key: template-hosted-http-auth-server
+            workspaces: |
+              templates/hosted-http-auth-server -> target
+            command: cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
+          - target_name: single-crate-public-stdio-server
+            phase_name: fmt
             cache_key: template-single-crate-public-stdio-server
             workspaces: |
               templates/single-crate-public-stdio-server -> target
-            fmt_cmd: cargo fmt --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all --check
-            clippy_cmd: cargo clippy --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features -- -D warnings
-            test_cmd: cargo test --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
+            command: cargo fmt --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all --check
+          - target_name: single-crate-public-stdio-server
+            phase_name: clippy
+            cache_key: template-single-crate-public-stdio-server
+            workspaces: |
+              templates/single-crate-public-stdio-server -> target
+            command: cargo clippy --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features -- -D warnings
+          - target_name: single-crate-public-stdio-server
+            phase_name: tests
+            cache_key: template-single-crate-public-stdio-server
+            workspaces: |
+              templates/single-crate-public-stdio-server -> target
+            command: cargo test --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
     steps:
       - name: Checkout
         # actions/checkout v6
@@ -70,7 +113,8 @@ jobs:
           {
             echo "### Targeted Rust baseline"
             echo
-            echo "- Lane: \`${{ matrix.target.name }}\`"
+            echo "- Target: \`${{ matrix.lane.target_name }}\`"
+            echo "- Phase: \`${{ matrix.lane.phase_name }}\`"
             echo "- Validation posture: \`targeted baseline\`"
             echo "- Target ref: \`${GITHUB_REF_NAME}\`"
             echo "- Target SHA: \`${target_sha}\`"
@@ -87,20 +131,14 @@ jobs:
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: rust-baseline-${{ runner.os }}-${{ matrix.target.cache_key }}
-          workspaces: ${{ matrix.target.workspaces }}
+          shared-key: rust-baseline-${{ runner.os }}-${{ matrix.lane.cache_key }}
+          workspaces: ${{ matrix.lane.workspaces }}
           cache-on-failure: "true"
           cache-all-crates: "true"
           cache-workspace-crates: "true"
 
-      - name: Check formatting
-        run: ${{ matrix.target.fmt_cmd }}
-
-      - name: Run clippy
-        run: ${{ matrix.target.clippy_cmd }}
-
-      - name: Run tests
-        run: ${{ matrix.target.test_cmd }}
+      - name: Run baseline lane
+        run: ${{ matrix.lane.command }}
 
   rust-baseline:
     name: Run targeted Rust baseline

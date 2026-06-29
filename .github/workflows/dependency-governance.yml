@@ -32,9 +32,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-governance:
+  dependency-governance-lane:
+    name: Dependency governance / ${{ matrix.lane.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: repo-policy
+            tool: ""
+            command: |
+              python3 scripts/auth_dependency_posture_check.py
+              python3 scripts/rmcp_macro_runtime_pin_check.py
+          - name: cargo-deny
+            tool: cargo-deny
+            command: cargo deny check advisories licenses bans sources
+          - name: cargo-audit
+            tool: cargo-audit
+            command: cargo audit --deny warnings
+          - name: cargo-outdated
+            tool: cargo-outdated
+            command: cargo outdated --root-deps-only --depth 1
     steps:
       - name: Checkout
         # actions/checkout v6
@@ -43,10 +62,12 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
+        if: ${{ matrix.lane.tool != '' }}
         # dtolnay/rust-toolchain stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Cache cargo artifacts
+        if: ${{ matrix.lane.tool != '' }}
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
@@ -61,12 +82,29 @@ jobs:
           cache-workspace-crates: "true"
 
       - name: Install governance tools
+        if: ${{ matrix.lane.tool != '' }}
         # taiki-e/install-action v2
         uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5
         with:
-          tool: cargo-deny,cargo-audit,cargo-outdated
+          tool: ${{ matrix.lane.tool }}
 
-      - name: Run dependency governance checks
-        env:
-          STRICT_OUTDATED: "0"
-        run: ./scripts/dependency_governance_check.sh
+      - name: Run dependency governance lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ matrix.lane.command }}
+
+  dependency-governance:
+    name: dependency-governance
+    runs-on: ubuntu-24.04
+    needs: [dependency-governance-lane]
+    if: ${{ always() }}
+    steps:
+      - name: Require every governance lane to pass
+        shell: bash
+        run: |
+          if [[ "${{ needs.dependency-governance-lane.result }}" != "success" ]]; then
+            echo "One or more dependency governance lanes failed." >&2
+            exit 1
+          fi
+          echo "All dependency governance lanes passed."
