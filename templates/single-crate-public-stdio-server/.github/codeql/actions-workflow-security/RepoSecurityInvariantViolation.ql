@@ -22,5 +22,12 @@ where
   or
   job.getARunsOnLabel() = "self-hosted" and
   invariant = "public workflows must not use self-hosted runners"
+  or
+  exists(string label |
+    label = job.getARunsOnLabel() and
+    label != "self-hosted" and
+    not repoApprovedPublicRunnerLabel(label) and
+    invariant = "public workflows must use only standard GitHub-hosted runner labels"
+  )
 select job,
   "Repository workflow invariant violated: " + invariant + "."

@@ -10,8 +10,8 @@
   <recommendation>
     <p>
       Keep official release publication in the approved release job, keep public
-      workflows on GitHub-hosted runners, and keep host-local operations out of
-      public CI.
+      workflows on standard GitHub-hosted runner labels, avoid runner groups or
+      larger-runner labels, and keep host-local operations out of public CI.
     </p>
   </recommendation>
 </qhelp>
