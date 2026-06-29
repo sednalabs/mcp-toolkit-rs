@@ -27,12 +27,12 @@ oauth2-reqwest = "0.1.0-alpha.3"
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "form", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tokio = { version = "1.49.0", features = ["io-util", "net", "sync", "time"] }
 uuid = { version = "1.19.0", features = ["v4"] }
-rand = "0.9.3"
+rand = "0.10.1"
 futures-util = "0.3.31"
 tower = "0.5.2"
 
