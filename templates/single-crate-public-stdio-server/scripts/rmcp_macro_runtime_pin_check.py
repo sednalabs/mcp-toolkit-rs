@@ -76,7 +76,7 @@ def check_manifest(path: Path) -> list[str]:
         if macros is not None and actual != expected:
             errors.append(
                 f"{rel}: {section_name}.rmcp enables macros at {expected}, "
-                f"but {section_name}.rmcp-macros is {actual or 'missing'}"
+                f"but {section_name}.rmcp-macros version is {actual or 'unspecified'}"
             )
 
     return errors

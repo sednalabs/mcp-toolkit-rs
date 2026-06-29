@@ -104,11 +104,11 @@ fn starter_templates_source_rmcp_through_mcp_toolkit() {
         let cargo_toml =
             std::fs::read_to_string(root.join("Cargo.toml")).expect("template Cargo.toml");
         assert!(
-            !cargo_toml.contains("\nrmcp ="),
+            !manifest_declares_dependency(&cargo_toml, "rmcp"),
             "{template} should not declare a direct rmcp dependency"
         );
         assert!(
-            !cargo_toml.contains("rmcp-macros"),
+            !manifest_declares_dependency(&cargo_toml, "rmcp-macros"),
             "{template} should not declare a direct rmcp-macros dependency"
         );
 
@@ -118,4 +118,36 @@ fn starter_templates_source_rmcp_through_mcp_toolkit() {
             "{template} should import the server authoring surface through mcp_toolkit::rmcp"
         );
     }
+}
+
+fn manifest_declares_dependency(manifest: &str, dependency_name: &str) -> bool {
+    let mut in_dependency_section = false;
+
+    for line in manifest.lines() {
+        let trimmed = line.split('#').next().unwrap_or_default().trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let section = &trimmed[1..trimmed.len() - 1];
+            in_dependency_section = matches!(
+                section,
+                "dependencies" | "dev-dependencies" | "build-dependencies"
+            );
+            continue;
+        }
+
+        if !in_dependency_section {
+            continue;
+        }
+
+        if let Some((declared_name, _)) = trimmed.split_once('=')
+            && declared_name.trim() == dependency_name
+        {
+            return true;
+        }
+    }
+
+    false
 }
