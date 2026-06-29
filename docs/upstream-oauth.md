@@ -48,7 +48,7 @@ For Google upstream APIs, the toolkit provides:
 - `RefreshTokenProvider` for cached access-token refreshes, including
   provider-issued replacement refresh tokens.
 
-The helper uses `oauth2-rs` for authorization URL construction, PKCE, code
+The helper uses `oauth2` for authorization URL construction, PKCE, code
 exchange, refresh-token exchange, and response parsing. Token endpoint HTTP is
 toolkit-owned and disables redirects, so downstream servers do not need to pass
 or correctly configure a lower-level HTTP client. Provider-neutral configs can

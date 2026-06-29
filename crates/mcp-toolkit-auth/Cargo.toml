@@ -20,7 +20,6 @@ axum = "0.8.8"
 base64 = "0.22.1"
 http = "1.3.1"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-libc = "0.2.186"
 mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http" }
 mcp-toolkit-observability = { version = "0.1.0", path = "../mcp-toolkit-observability" }
 oauth2 = { version = "5.0.0", default-features = false }
@@ -40,3 +39,6 @@ tower = "0.5.2"
 [dev-dependencies]
 mcp-toolkit-testing = { version = "0.1.0", path = "../mcp-toolkit-testing" }
 tokio = { version = "1.49.0", features = ["macros", "rt"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
