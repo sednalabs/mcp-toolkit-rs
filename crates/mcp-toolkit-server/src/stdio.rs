@@ -79,7 +79,10 @@ impl From<tokio::task::JoinError> for StdioServeError {
 /// ```rust,no_run
 /// # async fn example<S>(server: S) -> Result<(), mcp_toolkit_server::stdio::StdioServeError>
 /// # where
-/// #     S: rmcp::Service<rmcp::RoleServer> + Send + Sync + 'static,
+/// #     S: mcp_toolkit_server::rmcp::Service<mcp_toolkit_server::rmcp::RoleServer>
+/// #         + Send
+/// #         + Sync
+/// #         + 'static,
 /// # {
 /// let _quit = mcp_toolkit_server::stdio::serve_stdio(server).await?;
 /// # Ok(())

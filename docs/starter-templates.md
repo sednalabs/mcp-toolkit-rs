@@ -17,8 +17,9 @@ process-local stdio MCP service with a small curated tool surface.
 It demonstrates:
 
 - `mcp-toolkit-server::stdio::serve_stdio` for stdio startup and shutdown;
-- rmcp `#[tool_router]` plus `#[tool_handler]` wiring so tools are callable at
-  the actual MCP boundary;
+- toolkit-provided `rmcp` `#[tool_router]` plus `#[tool_handler]` wiring so
+  tools are callable at the actual MCP boundary without a direct `rmcp`
+  dependency in the starter;
 - typed tool input schemas;
 - explicit `ToolInventory` metadata for the exposed tools;
 - `assert_tool_schema_snapshot` drift protection;
