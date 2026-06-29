@@ -43,6 +43,18 @@ pub const MCP_APPS_APPROVAL_REQUIRED_META_KEY: &str = "approval_required";
 /// `_meta` key that describes a tool's output sensitivity class.
 pub const MCP_APPS_SENSITIVITY_META_KEY: &str = "sensitivity";
 
+/// `_meta` key that describes a tool operation class.
+pub const MCP_APPS_OPERATION_CLASS_META_KEY: &str = "operation_class";
+
+/// `_meta` key that describes the hazardous boundary a proof-only tool stops at.
+pub const MCP_APPS_PROOF_BOUNDARY_META_KEY: &str = "proof_boundary";
+
+/// `_meta` key that records whether mutation is prohibited by the tool contract.
+pub const MCP_APPS_MUTATION_PROHIBITED_META_KEY: &str = "mutation_prohibited";
+
+/// `_meta` key that records whether a production action is authorized.
+pub const MCP_APPS_PRODUCTION_ACTION_AUTHORIZED_META_KEY: &str = "production_action_authorized";
+
 /// `_meta` key used by Apps clients for widget bridge accessibility.
 pub const MCP_APPS_WIDGET_ACCESSIBLE_META_KEY: &str = "openai/widgetAccessible";
 
@@ -240,6 +252,45 @@ pub fn with_mcp_apps_sensitive_output_metadata(
     meta
 }
 
+/// Adds model-only no-mutation proof metadata to an MCP Apps tool descriptor.
+///
+/// Existing metadata is preserved. The helper records a reusable contract for
+/// tools that may approach a hazardous boundary for proof while prohibiting
+/// the final mutation, send, publish, trigger, or schedule action.
+pub fn with_mcp_apps_no_mutation_proof_metadata(
+    existing: Option<Meta>,
+    proof_boundary: impl Into<String>,
+) -> Meta {
+    let mut meta = with_mcp_apps_security_schemes(existing, [McpAppsSecurityScheme::noauth()]);
+    meta.0.insert(
+        MCP_APPS_OPERATION_CLASS_META_KEY.to_string(),
+        json!("no_mutation_proof"),
+    );
+    meta.0.insert(
+        MCP_APPS_APPROVAL_REQUIRED_META_KEY.to_string(),
+        json!(false),
+    );
+    meta.0.insert(
+        MCP_APPS_PROOF_BOUNDARY_META_KEY.to_string(),
+        json!(proof_boundary.into()),
+    );
+    meta.0.insert(
+        MCP_APPS_MUTATION_PROHIBITED_META_KEY.to_string(),
+        json!(true),
+    );
+    meta.0.insert(
+        MCP_APPS_PRODUCTION_ACTION_AUTHORIZED_META_KEY.to_string(),
+        json!(false),
+    );
+    meta.0.insert(
+        MCP_APPS_WIDGET_ACCESSIBLE_META_KEY.to_string(),
+        json!(false),
+    );
+    meta.0
+        .insert("ui".to_string(), json!({"visibility": ["model"]}));
+    meta
+}
+
 /// Serializes an `rmcp` tool descriptor with Apps security schemes mirrored.
 ///
 /// The returned JSON object includes both the descriptor-level
@@ -399,11 +450,14 @@ mod tests {
         mcp_apps_tool_descriptor_with_security_schemes,
         normalize_mcp_apps_security_schemes_in_tool_descriptor,
         normalize_mcp_apps_security_schemes_in_tools_list_payload,
-        with_mcp_apps_oauth_security_scheme, with_mcp_apps_security_schemes,
-        with_mcp_apps_sensitive_output_metadata, McpAppsOAuthSecurityScheme, McpAppsSecurityScheme,
-        MCP_APPS_APPROVAL_REQUIRED_META_KEY, MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE,
-        MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE, MCP_APPS_SECURITY_SCHEMES_META_KEY,
-        MCP_APPS_SENSITIVITY_META_KEY, MCP_APPS_WIDGET_ACCESSIBLE_META_KEY,
+        with_mcp_apps_no_mutation_proof_metadata, with_mcp_apps_oauth_security_scheme,
+        with_mcp_apps_security_schemes, with_mcp_apps_sensitive_output_metadata,
+        McpAppsOAuthSecurityScheme, McpAppsSecurityScheme, MCP_APPS_APPROVAL_REQUIRED_META_KEY,
+        MCP_APPS_MUTATION_PROHIBITED_META_KEY, MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE,
+        MCP_APPS_OAUTH2_SECURITY_SCHEME_TYPE, MCP_APPS_OPERATION_CLASS_META_KEY,
+        MCP_APPS_PRODUCTION_ACTION_AUTHORIZED_META_KEY, MCP_APPS_PROOF_BOUNDARY_META_KEY,
+        MCP_APPS_SECURITY_SCHEMES_META_KEY, MCP_APPS_SENSITIVITY_META_KEY,
+        MCP_APPS_WIDGET_ACCESSIBLE_META_KEY,
     };
     use rmcp::model::{JsonObject, Meta, Tool};
     use serde_json::json;
@@ -461,6 +515,41 @@ mod tests {
         assert_eq!(
             meta.0[MCP_APPS_SENSITIVITY_META_KEY],
             json!("unredacted_admin_form_values")
+        );
+        assert_eq!(meta.0[MCP_APPS_WIDGET_ACCESSIBLE_META_KEY], json!(false));
+        assert_eq!(meta.0["ui"], json!({"visibility": ["model"]}));
+        assert_eq!(
+            meta.0[MCP_APPS_SECURITY_SCHEMES_META_KEY],
+            json!([{"type": MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE}])
+        );
+    }
+
+    #[test]
+    fn no_mutation_proof_metadata_marks_model_only_non_mutating_boundary() {
+        let mut existing = Meta::new();
+        existing
+            .0
+            .insert("owner".to_string(), json!("service-owned"));
+
+        let meta = with_mcp_apps_no_mutation_proof_metadata(
+            Some(existing),
+            "render final form without submitting",
+        );
+
+        assert_eq!(meta.0["owner"], json!("service-owned"));
+        assert_eq!(
+            meta.0[MCP_APPS_OPERATION_CLASS_META_KEY],
+            json!("no_mutation_proof")
+        );
+        assert_eq!(meta.0[MCP_APPS_APPROVAL_REQUIRED_META_KEY], json!(false));
+        assert_eq!(
+            meta.0[MCP_APPS_PROOF_BOUNDARY_META_KEY],
+            json!("render final form without submitting")
+        );
+        assert_eq!(meta.0[MCP_APPS_MUTATION_PROHIBITED_META_KEY], json!(true));
+        assert_eq!(
+            meta.0[MCP_APPS_PRODUCTION_ACTION_AUTHORIZED_META_KEY],
+            json!(false)
         );
         assert_eq!(meta.0[MCP_APPS_WIDGET_ACCESSIBLE_META_KEY], json!(false));
         assert_eq!(meta.0["ui"], json!({"visibility": ["model"]}));
