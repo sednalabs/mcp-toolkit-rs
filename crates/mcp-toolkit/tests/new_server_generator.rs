@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mcp_toolkit::new_server::{
@@ -33,6 +34,15 @@ fn generator_creates_curated_stdio_project() {
 
     let smoke = read(&output.join("tests/stdio_smoke.rs"));
     assert!(smoke.contains("CARGO_BIN_EXE_example-mcp"));
+
+    let main = read(&output.join("src/main.rs"));
+    assert!(main.contains("use example_mcp::"));
+    assert!(!main.contains("curated_stdio_intent_server"));
+
+    let readme = read(&output.join("README.md"));
+    assert!(readme.contains("--manifest-path Cargo.toml"));
+    assert!(!readme.contains("templates/example-mcp/Cargo.toml"));
+    assert!(!readme.contains("templates/curated-stdio-intent-server/Cargo.toml"));
 
     cleanup(root);
 }
@@ -108,6 +118,128 @@ fn generator_preserves_executable_template_scripts() {
     cleanup(root);
 }
 
+#[cfg(unix)]
+#[test]
+fn generator_refuses_symlink_output_directory() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("symlink-output");
+    let external = root.join("external");
+    let output = root.join("example-mcp");
+    fs::create_dir_all(&external).expect("create external target");
+    symlink(&external, &output).expect("create output symlink");
+
+    let error = generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output,
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect_err("symlinked output directories should be rejected")
+    .to_string();
+
+    assert!(error.contains("refusing output directory through symlink"));
+    assert!(!external.join("Cargo.toml").exists());
+
+    cleanup(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn generator_refuses_symlink_destination_files() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("symlink-file");
+    let output = root.join("example-mcp");
+    let external = root.join("external-readme.md");
+    fs::create_dir_all(&output).expect("create output dir");
+    fs::write(&external, "external\n").expect("write external file");
+    symlink(&external, output.join("README.md")).expect("create file symlink");
+
+    let error = generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output,
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: true,
+    })
+    .expect_err("symlinked generated files should be rejected")
+    .to_string();
+
+    assert!(error.contains("refusing to write generated file through symlink"));
+    assert_eq!(read(&external), "external\n");
+
+    cleanup(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn generator_refuses_symlink_destination_directories() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("symlink-child-dir");
+    let output = root.join("example-mcp");
+    let external = root.join("external-src");
+    fs::create_dir_all(&external).expect("create external target");
+    fs::create_dir_all(&output).expect("create output dir");
+    symlink(&external, output.join("src")).expect("create src symlink");
+
+    let error = generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output,
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: true,
+    })
+    .expect_err("symlinked generated directories should be rejected")
+    .to_string();
+
+    assert!(error.contains("refusing generated output path through symlink"));
+    assert!(!external.join("main.rs").exists());
+
+    cleanup(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_resolves_relative_toolkit_root_from_invocation_cwd() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("cli-toolkit-root");
+    let work = root.join("work");
+    let toolkit_link = root.join("toolkit-root");
+    fs::create_dir_all(&work).expect("create invocation cwd");
+    symlink(default_toolkit_root(), &toolkit_link).expect("create toolkit root symlink");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .current_dir(&work)
+        .args([
+            "new",
+            "--name",
+            "example-mcp",
+            "--toolkit-root",
+            "../toolkit-root",
+        ])
+        .output()
+        .expect("run mcp-toolkit new");
+
+    assert!(
+        output.status.success(),
+        "mcp-toolkit new failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let manifest = read(&work.join("example-mcp/Cargo.toml"));
+    let expected = default_toolkit_root().join("crates/mcp-toolkit");
+    assert!(manifest.contains(&format!("path = \"{}\"", toml_path(&expected))));
+    assert!(!manifest.contains("../toolkit-root"));
+
+    cleanup(root);
+}
+
 fn temp_root(label: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -127,4 +259,11 @@ fn read(path: &Path) -> String {
 
 fn cleanup(path: PathBuf) {
     let _ = fs::remove_dir_all(path);
+}
+
+fn toml_path(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }

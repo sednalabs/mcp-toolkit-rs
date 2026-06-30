@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::process;
 
@@ -122,7 +123,7 @@ fn run_new(args: &[String]) -> Result<(), String> {
         (Some(_), Some(_)) => {
             return Err("use either --toolkit-root or --toolkit-git, not both".to_string());
         }
-        (Some(root), None) => ToolkitDependencySource::LocalPath(root),
+        (Some(root), None) => ToolkitDependencySource::LocalPath(canonical_toolkit_root(root)?),
         (None, Some(url)) => ToolkitDependencySource::Git(url),
         (None, None) => ToolkitDependencySource::LocalPath(default_toolkit_root()),
     };
@@ -171,6 +172,18 @@ fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String
     args.get(*index)
         .cloned()
         .ok_or_else(|| format!("missing value for {}", option))
+}
+
+fn canonical_toolkit_root(root: PathBuf) -> Result<PathBuf, String> {
+    let root = if root.is_absolute() {
+        root
+    } else {
+        env::current_dir()
+            .map_err(|error| format!("failed to resolve current directory: {error}"))?
+            .join(root)
+    };
+    fs::canonicalize(&root)
+        .map_err(|error| format!("invalid --toolkit-root `{}`: {error}", root.display()))
 }
 
 fn run_patterns(args: &[String]) -> Result<(), String> {
@@ -320,8 +333,8 @@ fn print_patterns_help() {
     println!("  mcp-toolkit patterns");
     println!("  mcp-toolkit patterns <pattern-id>");
     println!();
-    println!("Patterns are generated from docs/pattern-manifests/*.json and linked to");
-    println!("docs/reference-server-atlas.md plus docs/pattern-recipes.md.");
+    println!("Patterns include manifest evidence from docs/pattern-manifests/*.json");
+    println!("and link to docs/reference-server-atlas.md plus docs/pattern-recipes.md.");
     println!();
     print_patterns();
 }

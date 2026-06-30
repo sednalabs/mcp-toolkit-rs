@@ -28,10 +28,26 @@ fn starter_templates_doc_mentions_generator_front_door() {
         "--pattern <id>",
         "--toolkit-git",
         "--force",
+        "evidence behind an archetype",
     ] {
         assert!(
             STARTER_TEMPLATES_DOC.contains(needle),
             "starter template doc is missing generator front-door detail `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn starter_templates_doc_distinguishes_curated_and_standalone_ci() {
+    for needle in [
+        "minimal\n`.github/workflows/rust-baseline.yml`",
+        "does not carry the standalone public template's CodeQL",
+        "Inside a generated standalone repository",
+        "./scripts/rebaseline_tool_schema_snapshot.sh",
+    ] {
+        assert!(
+            STARTER_TEMPLATES_DOC.contains(needle),
+            "starter template doc is missing curated-vs-standalone detail `{needle}`"
         );
     }
 }

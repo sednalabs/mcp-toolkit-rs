@@ -101,6 +101,12 @@ pub enum NewServerError {
     /// The requested output directory is absolute, empty, or attempts to escape
     /// the current working directory.
     InvalidOutputDirectory(PathBuf),
+    /// An existing output directory component is a symbolic link.
+    OutputDirectoryContainsSymlink(PathBuf),
+    /// An existing generated output path component is a symbolic link.
+    OutputPathContainsSymlink(PathBuf),
+    /// A generated destination file is a symbolic link.
+    RefusingSymlinkDestination(PathBuf),
     /// A generated file would overwrite changed content without permission.
     RefusingOverwrite(PathBuf),
     /// Underlying filesystem I/O failed.
@@ -133,6 +139,21 @@ impl fmt::Display for NewServerError {
             Self::InvalidOutputDirectory(path) => write!(
                 formatter,
                 "invalid output directory `{}`; use a relative path under the current directory",
+                path.display()
+            ),
+            Self::OutputDirectoryContainsSymlink(path) => write!(
+                formatter,
+                "refusing output directory through symlink `{}`",
+                path.display()
+            ),
+            Self::OutputPathContainsSymlink(path) => write!(
+                formatter,
+                "refusing generated output path through symlink `{}`",
+                path.display()
+            ),
+            Self::RefusingSymlinkDestination(path) => write!(
+                formatter,
+                "refusing to write generated file through symlink `{}`",
                 path.display()
             ),
             Self::RefusingOverwrite(path) => write!(
@@ -335,6 +356,34 @@ fn safe_output_relative_path(path: &Path) -> Result<PathBuf, NewServerError> {
         .map_err(|_| NewServerError::InvalidOutputDirectory(path.to_path_buf()))
 }
 
+fn existing_symlink_component(
+    root: &Path,
+    relative: &Path,
+) -> Result<Option<PathBuf>, NewServerError> {
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            continue;
+        };
+        current.push(part);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Ok(Some(current));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(source) => {
+                return Err(NewServerError::Io {
+                    path: current,
+                    source,
+                });
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 fn safe_relative_components(path: &Path) -> Result<PathBuf, ()> {
     if path.as_os_str().is_empty() || path.is_absolute() {
         return Err(());
@@ -381,13 +430,27 @@ impl OutputDirectory {
             path: PathBuf::from("."),
             source,
         })?;
+        if let Some(symlink) = existing_symlink_component(&cwd, &relative)? {
+            return Err(NewServerError::OutputDirectoryContainsSymlink(symlink));
+        }
         Ok(Self {
             path: cwd.join(relative),
         })
     }
 
     fn destination(&self, relative_path: &Path) -> Result<GeneratedPath, NewServerError> {
-        ensure_destination_inside_output(&self.path, self.path.join(relative_path), relative_path)
+        let path = ensure_destination_inside_output(
+            &self.path,
+            self.path.join(relative_path),
+            relative_path,
+        )?;
+        if let Some(symlink) = existing_symlink_component(&self.path, relative_path)? {
+            if symlink == path.path {
+                return Err(NewServerError::RefusingSymlinkDestination(symlink));
+            }
+            return Err(NewServerError::OutputPathContainsSymlink(symlink));
+        }
+        Ok(path)
     }
 }
 
@@ -411,19 +474,26 @@ fn render_asset(contents: &[u8], template: TemplateSpec, options: &NewServerOpti
     let Ok(text) = std::str::from_utf8(contents) else {
         return contents.to_vec();
     };
+    let source_crate = cargo_crate_identifier(template.source_package);
+    let target_crate = cargo_crate_identifier(&options.package_name);
 
     let rendered = rewrite_toolkit_dependencies(
         &text
-            .replace(template.source_package, &options.package_name)
             .replace(
                 &format!("templates/{}/Cargo.toml", template.source_dir),
                 "Cargo.toml",
             )
-            .replace(&format!("templates/{}", template.source_dir), "."),
+            .replace(&format!("templates/{}", template.source_dir), ".")
+            .replace(&source_crate, &target_crate)
+            .replace(template.source_package, &options.package_name),
         &options.toolkit_dependency,
     );
 
     rendered.into_bytes()
+}
+
+fn cargo_crate_identifier(package_name: &str) -> String {
+    package_name.replace('-', "_")
 }
 
 fn rewrite_toolkit_dependencies(
@@ -432,22 +502,39 @@ fn rewrite_toolkit_dependencies(
 ) -> String {
     let mut rewritten = text.to_string();
 
-    for package in [
-        "mcp-toolkit",
-        "mcp-toolkit-auth",
-        "mcp-toolkit-core",
-        "mcp-toolkit-testing",
-    ] {
+    for package in toolkit_path_dependencies(text) {
         rewritten = rewritten.replace(
             &format!("{package} = {{ path = \"../../crates/{package}\""),
             &format!(
                 "{package} = {{ {}",
-                dependency_prefix(package, toolkit_dependency)
+                dependency_prefix(&package, toolkit_dependency)
             ),
         );
     }
 
     rewritten
+}
+
+fn toolkit_path_dependencies(text: &str) -> Vec<String> {
+    let mut packages = Vec::new();
+    let dependency_prefix = " = { path = \"../../crates/";
+
+    for line in text.lines() {
+        let line = line.trim_start();
+        let Some((package, path_suffix)) = line.split_once(dependency_prefix) else {
+            continue;
+        };
+        let Some(path_package) = path_suffix.split('"').next() else {
+            continue;
+        };
+        if package.starts_with("mcp-toolkit") && package == path_package {
+            packages.push(package.to_string());
+        }
+    }
+
+    packages.sort();
+    packages.dedup();
+    packages
 }
 
 fn dependency_prefix(package: &str, toolkit_dependency: &ToolkitDependencySource) -> String {
@@ -568,8 +655,13 @@ mod tests {
 
     #[test]
     fn dependency_rewrite_supports_git_sources() {
-        let manifest =
-            r#"mcp-toolkit = { path = "../../crates/mcp-toolkit", features = ["server-stdio"] }"#;
+        let manifest = concat!(
+            r#"mcp-toolkit = { path = "../../crates/mcp-toolkit", features = ["server-stdio"] }"#,
+            "\n",
+            r#"mcp-toolkit-server = { path = "../../crates/mcp-toolkit-server" }"#,
+            "\n",
+            r#"mcp-toolkit-http = { path = "../../crates/mcp-toolkit-http", features = ["auth"] }"#,
+        );
         let rewritten = render_asset(
             manifest.as_bytes(),
             templates()[0],
@@ -585,7 +677,28 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8(rewritten).expect("utf8"),
-            r#"mcp-toolkit = { git = "https://example.com/toolkit.git", features = ["server-stdio"] }"#
+            concat!(
+                r#"mcp-toolkit = { git = "https://example.com/toolkit.git", features = ["server-stdio"] }"#,
+                "\n",
+                r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git" }"#,
+                "\n",
+                r#"mcp-toolkit-http = { git = "https://example.com/toolkit.git", features = ["auth"] }"#,
+            )
+        );
+    }
+
+    #[test]
+    fn dependency_rewrite_discovers_only_matching_toolkit_path_dependencies() {
+        let manifest = concat!(
+            r#"mcp-toolkit-server = { path = "../../crates/mcp-toolkit-server" }"#,
+            "\n",
+            r#"mcp-toolkit-http = { path = "../../crates/mcp-toolkit-core" }"#,
+            "\n",
+            r#"other-toolkit = { path = "../../crates/other-toolkit" }"#,
+        );
+        assert_eq!(
+            toolkit_path_dependencies(manifest),
+            vec!["mcp-toolkit-server".to_string()]
         );
     }
 

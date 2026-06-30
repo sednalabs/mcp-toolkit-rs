@@ -209,6 +209,20 @@ mod tests {
     }
 
     #[test]
+    fn every_manifest_pattern_has_registry_entry() {
+        for manifest in pattern_manifests() {
+            for pattern in manifest.patterns {
+                assert!(
+                    find_pattern(pattern).is_some(),
+                    "{} references unregistered pattern {}",
+                    manifest.path,
+                    pattern
+                );
+            }
+        }
+    }
+
+    #[test]
     fn recommended_templates_resolve() {
         for pattern in patterns() {
             if let Some(template_id) = pattern.recommended_template {

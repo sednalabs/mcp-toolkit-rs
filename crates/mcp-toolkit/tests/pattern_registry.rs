@@ -31,6 +31,10 @@ fn cli_lists_patterns_and_pattern_details() {
     assert!(detail_output.contains("google-admin-mcp"));
     assert!(detail_output.contains("google-search-console-mcp"));
     assert!(detail_output.contains("docs/pattern-recipes.md#google-provider-read-only"));
+
+    let help_output = run_toolkit(["patterns", "--help"]);
+    assert!(help_output.contains("Patterns include manifest evidence"));
+    assert!(!help_output.contains("Patterns are generated from"));
 }
 
 fn run_toolkit<const N: usize>(args: [&str; N]) -> String {
