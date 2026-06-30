@@ -16,7 +16,9 @@ Start by naming the transport and trust boundary. Before designing a new
 abstraction, check `docs/reference-server-atlas.md` and record the closest
 living reference pattern. The atlas keeps reusable lessons tied to real MCP
 servers while this toolkit keeps provider and deployment semantics out of
-generic APIs.
+generic APIs. When a row fits, also check `docs/pattern-manifests.md` and
+`docs/pattern-recipes.md`; those files give future generators a stable pattern
+shape and give reviewers a concrete crate-ownership checklist.
 
 | Shape | Use when | Toolkit defaults |
 | --- | --- | --- |

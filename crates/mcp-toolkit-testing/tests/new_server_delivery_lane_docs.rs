@@ -1,5 +1,9 @@
 const LANE_DOC: &str = include_str!("../../../docs/new-server-delivery-lane.md");
 const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-atlas.md");
+const PATTERN_MANIFESTS_DOC: &str = include_str!("../../../docs/pattern-manifests.md");
+const PATTERN_RECIPES_DOC: &str = include_str!("../../../docs/pattern-recipes.md");
+const PATTERN_MANIFEST_SCHEMA: &str =
+    include_str!("../../../docs/pattern-manifest.schema.json");
 
 const REQUIRED_GATES: [&str; 7] = [
     "## Gate 1: Start From The Appropriate mcp-toolkit-rs Template",
@@ -97,10 +101,121 @@ fn delivery_lane_requires_reference_atlas_evidence() {
     for needle in [
         "docs/reference-server-atlas.md",
         "the reference atlas row used, or why no row fits",
+        "docs/pattern-manifests/*.json",
+        "docs/pattern-recipes.md",
+        "the pattern manifest and recipe used, or why no manifest fits yet",
     ] {
         assert!(
             LANE_DOC.contains(needle),
             "delivery lane is missing atlas evidence requirement `{needle}`"
         );
+    }
+}
+
+#[test]
+fn pattern_manifest_docs_pin_the_generator_facing_contract() {
+    for needle in [
+        "docs/pattern-manifest.schema.json",
+        "docs/pattern-manifests/*.json",
+        "schema_version",
+        "toolkit_crates",
+        "auth_modes",
+        "tool_surface",
+        "scratchpad",
+        "conformance",
+        "mcp-toolkit-core",
+        "mcp-toolkit-testing",
+    ] {
+        assert!(
+            PATTERN_MANIFESTS_DOC.contains(needle),
+            "pattern manifest docs are missing `{needle}`"
+        );
+    }
+
+    for needle in [
+        "\"schema_version\"",
+        "\"server\"",
+        "\"patterns\"",
+        "\"toolkit_crates\"",
+        "\"transports\"",
+        "\"auth_modes\"",
+        "\"tool_surface\"",
+        "\"scratchpad\"",
+        "\"profiles\"",
+        "\"conformance\"",
+        "\"references\"",
+        "\"minimal-stdio-intent\"",
+        "\"google-provider-read-only\"",
+        "\"analytics-scratchpad\"",
+        "\"hosted-http-auth\"",
+        "\"operator-mutation\"",
+        "\"database-policy\"",
+        "\"public-release-ready\"",
+    ] {
+        assert!(
+            PATTERN_MANIFEST_SCHEMA.contains(needle),
+            "pattern manifest schema is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn pattern_recipes_cover_all_atlas_archetypes() {
+    for needle in [
+        "## `minimal-stdio-intent`",
+        "## `google-provider-read-only`",
+        "## `analytics-scratchpad`",
+        "## `hosted-http-auth`",
+        "## `operator-mutation`",
+        "## `database-policy`",
+        "## `public-release-ready`",
+        "Toolkit owner:",
+        "Reference manifests:",
+        "Required proof:",
+    ] {
+        assert!(
+            PATTERN_RECIPES_DOC.contains(needle),
+            "pattern recipes are missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn pattern_manifest_examples_are_present_for_reference_rows() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/pattern-manifests");
+
+    for file_name in [
+        "google-admin-mcp.json",
+        "ga4-mcp.json",
+        "google-search-console-mcp.json",
+        "cloudflare-mcp.json",
+        "postgres-mcp.json",
+        "keycloak-admin-mcp.json",
+    ] {
+        let path = manifest_dir.join(file_name);
+        let manifest = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let value: serde_json::Value = serde_json::from_str(&manifest)
+            .unwrap_or_else(|err| panic!("invalid JSON in {}: {err}", path.display()));
+
+        for field in [
+            "schema_version",
+            "server",
+            "patterns",
+            "toolkit_crates",
+            "transports",
+            "auth_modes",
+            "tool_surface",
+            "scratchpad",
+            "profiles",
+            "conformance",
+            "references",
+        ] {
+            assert!(
+                value.get(field).is_some(),
+                "{file_name} is missing required field `{field}`"
+            );
+        }
     }
 }

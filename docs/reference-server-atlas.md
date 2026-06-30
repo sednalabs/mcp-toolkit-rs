@@ -9,13 +9,20 @@ a pile of example apps. The toolkit should extract substrate that is useful to
 unrelated MCP projects. Service repositories should keep provider clients,
 domain payloads, deployment choices, and product-specific policy.
 
+Machine-readable pattern summaries live in `docs/pattern-manifests/*.json`.
+Implementation guidance for each archetype lives in `docs/pattern-recipes.md`.
+Use the atlas to understand the source service, the manifest to summarize the
+shape, and the recipe to decide what a new server should copy, adopt, or defer.
+
 ## How To Use This Atlas
 
 1. Pick the closest server shape from the archetype map.
 2. Read the source landmarks for that row before designing a new abstraction.
-3. Start from the maintained toolkit template named by the delivery lane.
-4. Extract only the generic substrate that at least two unrelated servers need.
-5. Record the reference row used in the PR or work item evidence block.
+3. Check the matching pattern manifest and recipe when one exists.
+4. Start from the maintained toolkit template named by the delivery lane.
+5. Extract only the generic substrate that at least two unrelated servers need.
+6. Record the reference row, manifest, and recipe used in the PR or work item
+   evidence block.
 
 If a pattern is valuable but still tied to one provider, document it as a
 reference-service pattern first. Promote it into `mcp-toolkit-rs` only after the
