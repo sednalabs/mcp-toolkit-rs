@@ -93,13 +93,20 @@ For all servers:
 
 - an exported tool-schema snapshot;
 - a real runtime smoke test for the served transport;
+- catalog-profile contract tests when the server exposes filtered discovery
+  profiles such as `read_only`, `scratchpad`, or `operator`;
+- an optional scripted MCP probe scenario beside the snapshots when a compatible
+  probe runner is available;
 - GitHub-hosted CI that runs strict tests without update-mode environment
   variables.
 
 For stdio servers:
 
 - use `stdio_contract::assert_stdio_tools_list` or a service-specific stdio
-  JSON-RPC equivalent that initializes the real binary and calls `tools/list`.
+  JSON-RPC equivalent that initializes the real binary and calls `tools/list`;
+- use `stdio_contract::assert_stdio_tool_response_excludes_substrings` for
+  starter tools or sensitive readbacks that should prove serialized responses
+  exclude common secret material.
 
 For hosted HTTP/auth servers:
 

@@ -156,6 +156,33 @@ impl StdioMcpProcess {
             .filter_map(|tool| tool["name"].as_str().map(ToString::to_string))
             .collect()
     }
+
+    /// Call one MCP tool and return the raw JSON-RPC response.
+    ///
+    /// # Panics
+    /// Panics if `arguments` is neither null nor an object, or if the response
+    /// does not arrive before the default timeout.
+    pub fn call_tool(&mut self, id: u64, name: &str, arguments: Value) -> Value {
+        self.send(tool_call_request(id, name, arguments));
+        self.response(id)
+    }
+}
+
+fn tool_call_request(id: u64, name: &str, arguments: Value) -> Value {
+    assert!(
+        arguments.is_null() || arguments.is_object(),
+        "tools/call arguments must be a JSON object or null"
+    );
+    let mut params = json!({ "name": name });
+    if !arguments.is_null() {
+        params["arguments"] = arguments;
+    }
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": params
+    })
 }
 
 impl Drop for StdioMcpProcess {
@@ -181,12 +208,56 @@ pub fn assert_stdio_tools_list(exe: impl AsRef<OsStr>, expected_names: &[&str]) 
     assert_eq!(names, expected);
 }
 
+/// Assert that a stdio MCP tool call response excludes forbidden substrings.
+///
+/// # Panics
+/// Panics if the process cannot initialize, the tool call fails to return, the
+/// response cannot be serialized, or the serialized response contains a
+/// forbidden substring.
+pub fn assert_stdio_tool_response_excludes_substrings<S>(
+    exe: impl AsRef<OsStr>,
+    tool_name: &str,
+    arguments: Value,
+    forbidden: &[S],
+) where
+    S: AsRef<str>,
+{
+    let mut process = StdioMcpProcess::start(exe);
+    let response = process.call_tool(3, tool_name, arguments);
+    if let Some(error) = response.get("error") {
+        assert!(error.is_null(), "tools/call returned error: {response}");
+    }
+    crate::response_safety_contract::assert_payload_excludes_substrings(&response, forbidden);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::StdioMcpProcess;
+    use super::{tool_call_request, StdioMcpProcess};
     use serde_json::json;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn tool_call_request_omits_null_arguments() {
+        let request = tool_call_request(4, "brief_target", serde_json::Value::Null);
+
+        assert_eq!(request["method"], json!("tools/call"));
+        assert_eq!(request["params"]["name"], json!("brief_target"));
+        assert!(request["params"].get("arguments").is_none());
+    }
+
+    #[test]
+    fn tool_call_request_includes_object_arguments() {
+        let request = tool_call_request(4, "brief_target", json!({"target": "probe"}));
+
+        assert_eq!(request["params"]["arguments"], json!({"target": "probe"}));
+    }
+
+    #[test]
+    #[should_panic(expected = "tools/call arguments must be a JSON object or null")]
+    fn tool_call_request_rejects_non_object_arguments() {
+        let _ = tool_call_request(4, "brief_target", json!(["probe"]));
+    }
 
     #[test]
     fn response_ignores_unrelated_ids_until_match() {

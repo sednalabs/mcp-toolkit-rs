@@ -123,7 +123,17 @@ For stdio servers:
 
 - use `mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list`, or a
   service-specific equivalent that spawns the real binary, initializes the MCP
-  session, and calls `tools/list`.
+  session, and calls `tools/list`;
+- add a response-safety assertion for starter tools, proof-only readbacks, or
+  sensitive-adjacent reads using
+  `stdio_contract::assert_stdio_tool_response_excludes_substrings`.
+
+For servers with multiple catalog profiles:
+
+- add catalog-profile contract tests that pin the default profile and any
+  explicit operator, scratchpad, or deployment-specific profile;
+- assert the required tools for each profile instead of checking only that a
+  profile exists.
 
 For hosted HTTP/auth servers:
 
@@ -136,6 +146,11 @@ For hosted HTTP/auth servers:
 
 Tests that call handlers directly are useful, but they do not satisfy this
 gate by themselves.
+
+When the service can be exercised by a compatible MCP probe runner, commit a
+small `spec/mcp_probe_*.v1.json` scenario beside the schema snapshots. The
+scenario should cover the first useful MCP call and any required transport
+guard, such as stdio launch permission or loopback host allowlists.
 
 ## Gate 4: Add Domain Output Contract Tests For Every Intent Tool
 

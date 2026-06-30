@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mcp_toolkit::new_server::{
-    default_toolkit_root, generate_new_server, NewServerOptions, ToolkitDependencySource,
+    default_toolkit_root, generate_new_server, templates, NewServerOptions, ToolkitDependencySource,
 };
 
 #[test]
@@ -23,9 +23,15 @@ fn generator_creates_curated_stdio_project() {
     })
     .expect("generate curated template");
 
-    assert_eq!(summary.created_files, 9);
+    assert!(
+        summary.created_files >= 11,
+        "expected generated curated template to create at least 11 files, got {}",
+        summary.created_files
+    );
     assert!(output.join("Cargo.toml").exists());
     assert!(output.join(".github/workflows/rust-baseline.yml").exists());
+    assert!(output.join("tests/catalog_profile_contract.rs").exists());
+    assert!(output.join("spec/mcp_probe_stdio_smoke.v1.json").exists());
 
     let manifest = read(&output.join("Cargo.toml"));
     assert!(manifest.contains("name = \"example-mcp\""));
@@ -35,6 +41,14 @@ fn generator_creates_curated_stdio_project() {
     let smoke = read(&output.join("tests/stdio_smoke.rs"));
     assert!(smoke.contains("CARGO_BIN_EXE_example-mcp"));
 
+    let profile_contract = read(&output.join("tests/catalog_profile_contract.rs"));
+    assert!(profile_contract.contains("use example_mcp::{IntentServer, IntentServerConfig};"));
+    assert!(!profile_contract.contains("curated_stdio_intent_server"));
+
+    let probe_scenario = read(&output.join("spec/mcp_probe_stdio_smoke.v1.json"));
+    assert!(probe_scenario.contains("example-mcp brief for probe"));
+    assert!(!probe_scenario.contains("curated-stdio-intent-server"));
+
     let main = read(&output.join("src/main.rs"));
     assert!(main.contains("use example_mcp::"));
     assert!(!main.contains("curated_stdio_intent_server"));
@@ -43,6 +57,64 @@ fn generator_creates_curated_stdio_project() {
     assert!(readme.contains("--manifest-path Cargo.toml"));
     assert!(!readme.contains("templates/example-mcp/Cargo.toml"));
     assert!(!readme.contains("templates/curated-stdio-intent-server/Cargo.toml"));
+
+    cleanup(root);
+}
+
+#[test]
+fn generator_emits_contract_and_probe_artifacts_for_every_template() {
+    let root = temp_root("all-template-contracts");
+
+    for template in templates() {
+        let package_name = format!("{}-generated", template.id);
+        let output = root.join(&package_name);
+
+        generate_new_server(&NewServerOptions {
+            template: template.id.to_string(),
+            package_name: package_name.clone(),
+            output_dir: output.clone(),
+            toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+            overwrite: false,
+        })
+        .unwrap_or_else(|error| panic!("generate template {}: {error}", template.id));
+
+        assert!(
+            output.join("tests/catalog_profile_contract.rs").exists(),
+            "{} should include catalog profile contract tests",
+            template.id
+        );
+        assert!(
+            output.join("tests/tool_schema_snapshot.rs").exists(),
+            "{} should include tool schema snapshot tests",
+            template.id
+        );
+
+        if template.id == "hosted-http-auth" {
+            assert!(
+                output.join("tests/http_auth_contract.rs").exists(),
+                "{} should include HTTP auth contract tests",
+                template.id
+            );
+            assert!(
+                output
+                    .join("spec/mcp_probe_http_auth_smoke.v1.json")
+                    .exists(),
+                "{} should include an HTTP auth probe scenario",
+                template.id
+            );
+        } else {
+            assert!(
+                output.join("tests/stdio_smoke.rs").exists(),
+                "{} should include stdio smoke tests",
+                template.id
+            );
+            assert!(
+                output.join("spec/mcp_probe_stdio_smoke.v1.json").exists(),
+                "{} should include a stdio probe scenario",
+                template.id
+            );
+        }
+    }
 
     cleanup(root);
 }

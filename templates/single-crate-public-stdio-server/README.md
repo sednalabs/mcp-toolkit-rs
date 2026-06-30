@@ -10,7 +10,11 @@ one:
   `ToolInventory` checks;
 - standard `read_only` and `operator` catalog profiles, with
   `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default live MCP surface;
-- strict tool-schema snapshot and installed-binary stdio smoke tests;
+- generated catalog-profile contract tests for `read_only` and `operator`;
+- strict tool-schema snapshot and installed-binary stdio smoke tests, including
+  a starter tool response-safety check;
+- `spec/mcp_probe_stdio_smoke.v1.json` for a portable scripted `mcp-probe`
+  smoke scenario;
 - pinned GitHub Actions workflows for baseline validation, CodeQL Advanced,
   GitHub Code Quality coverage upload, dependency governance, and CodeQL query
   pack compilation;
@@ -58,6 +62,15 @@ cargo test --all-targets --all-features
 
 The hosted GitHub workflows in `.github/workflows/` should be the shared proof
 surface for public review and merge.
+
+The scripted probe scenario exercises the generated binary through a real MCP
+client:
+
+```bash
+MCP_PROBE_ALLOW_STDIO=1 \
+node /path/to/mcp-probe/dist/index.js run \
+  --script spec/mcp_probe_stdio_smoke.v1.json
+```
 
 ## Snapshot Rebaseline
 

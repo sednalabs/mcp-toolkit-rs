@@ -13,8 +13,11 @@ It demonstrates:
 - standard `read_only` and `operator` catalog profiles, with
   `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default live MCP surface;
 - device-code capable OAuth metadata for headless MCP client login;
+- generated catalog-profile contract tests for `read_only` and `operator`;
 - route-level auth-surface contract tests;
-- tool schema snapshots for exported MCP tools.
+- tool schema snapshots for exported MCP tools;
+- `spec/mcp_probe_http_auth_smoke.v1.json` for a token-backed scripted
+  `mcp-probe` smoke scenario against a running local server.
 
 ## Use
 
@@ -38,6 +41,26 @@ When copying the template into a new repository, replace the path dependencies
 in `Cargo.toml` with Git dependencies, configure a real HTTPS
 `EXAMPLE_MCP_PUBLIC_BASE_URL`, and use a production token validator instead of
 the delegation-mode development skeleton.
+
+## Contract And Probe Checks
+
+The generated tests cover profile contracts, route-level auth metadata,
+schema drift, and bind safety:
+
+```bash
+cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml \
+  --all-targets --all-features
+```
+
+The scripted probe scenario is intentionally bearer-token backed because `/mcp`
+requires auth. Start the local server, place a valid test access token at the
+configured `access_token_path`, then run:
+
+```bash
+MCP_PROBE_ALLOWED_HOSTS=127.0.0.1,localhost \
+node /path/to/mcp-probe/dist/index.js run \
+  --script spec/mcp_probe_http_auth_smoke.v1.json
+```
 
 ## Headless MCP Device Auth
 
