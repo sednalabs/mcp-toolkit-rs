@@ -13,6 +13,10 @@ until the first non-alpha `0.1.0` release.
 A hosted MCP server can use both. Keep the tool names, configuration, and docs
 clear so operators know which side of the boundary they are changing.
 
+For operator-facing setup, profile, quota-project, service-account, and MCP
+client configuration guidance, use
+`docs/provider-auth-and-client-config.md`.
+
 ## Recommended Server Shape
 
 For provider APIs such as Google Search Console or Google Analytics, expose a

@@ -295,6 +295,9 @@ Security reporting guidance is documented in `SECURITY.md`.
   with crate ownership, proof expectations, and reference manifests.
 - `docs/public-landing-policy.md` defines the public repository landing,
   hosted-check, and break-glass remediation policy.
+- `docs/provider-auth-and-client-config.md` explains provider auth setup,
+  read-only/operator profile selection, Google quota-project troubleshooting,
+  service-account notes, and MCP client configuration.
 - `docs/reference-server-atlas.md` maps reusable server patterns to real MCP
   services so new abstractions start from existing evidence instead of toy
   examples.

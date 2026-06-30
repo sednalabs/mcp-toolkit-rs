@@ -1,5 +1,7 @@
 const STARTER_TEMPLATES_DOC: &str = include_str!("../../../docs/starter-templates.md");
 const EASY_SERVER_ERGONOMICS_DOC: &str = include_str!("../../../docs/easy-server-ergonomics.md");
+const PROVIDER_AUTH_CLIENT_CONFIG_DOC: &str =
+    include_str!("../../../docs/provider-auth-and-client-config.md");
 const GUARDED_ACTION_DOC: &str = include_str!("../../../docs/guarded-action-pattern.md");
 const CODEQL_REUSE_DOC: &str = include_str!("../../../docs/codeql-query-pack-reuse.md");
 
@@ -65,6 +67,29 @@ fn ergonomics_docs_cover_guarded_actions_and_redacted_outputs() {
         assert!(
             EASY_SERVER_ERGONOMICS_DOC.contains(needle),
             "easy server ergonomics doc is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn provider_auth_docs_cover_profiles_google_and_client_config() {
+    for needle in [
+        "MCP Auth",
+        "Provider auth",
+        "Tool profiles",
+        "auth_status",
+        "read_only",
+        "operator",
+        "quota project",
+        "gcloud auth application-default set-quota-project YOUR_PROJECT",
+        "service-account",
+        "[mcp_servers.my_mcp_server]",
+        "TOOL_DENIED_READ_ONLY_PROFILE",
+        "restart the MCP client",
+    ] {
+        assert!(
+            PROVIDER_AUTH_CLIENT_CONFIG_DOC.contains(needle),
+            "provider auth/client config doc is missing `{needle}`"
         );
     }
 }
