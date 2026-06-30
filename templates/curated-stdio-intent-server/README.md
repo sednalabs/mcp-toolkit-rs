@@ -9,6 +9,8 @@ It demonstrates:
 - an rmcp `ToolRouter` with typed input schemas;
 - `mcp-toolkit-core::tool_inventory::ToolCatalog` for explicit tool exposure
   metadata with derived inventory checks;
+- standard `read_only` and `operator` catalog profiles, with
+  `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default live MCP surface;
 - `mcp-toolkit-testing::assert_tool_schema_snapshot` for contract drift;
 - a real stdio JSON-RPC smoke test that initializes and runs `tools/list`.
 

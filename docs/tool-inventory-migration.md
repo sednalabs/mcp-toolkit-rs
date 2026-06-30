@@ -22,12 +22,19 @@ tool capability composition without changing your auth authority model.
    - attach discovery metadata, schemas, examples, tags, and handler symbols
    - derive `ToolInventory` from the catalog with `catalog.inventory()`
    - set `ToolInventoryPolicy` (`strict()` recommended once registrations are complete)
-   - use `ToolInventoryPolicy::strict_read_only()` for the default profile when
-     mutations require an explicit operator or admin mode
+   - call `catalog.with_standard_profiles(["read"])` or
+     `catalog.register_standard_profiles(["read"])` for generated servers that
+     should default to `read_only` while still supporting an explicit
+     `operator` profile
+   - mark mutation-capable entries with
+     `ToolCatalogEntry::with_operator_profile_gate()` so strict non-operator
+     policies do not expose them accidentally
 2. Filter `list_tools` with:
    - `inventory.filter_tools(..., ToolOperation::List, ...)`
 3. Gate `call_tool` with:
    - `inventory.is_allowed(request.name, ToolOperation::Call, ...)`
+   - or `inventory.decision_for_profile(...)` when you need a caller-visible
+     denial reason such as `TOOL_DENIED_READ_ONLY_PROFILE`
 4. Use filtered names for tool-list-change tracking/notifications.
 
 If the published tool list can change after startup, pair this with
@@ -44,7 +51,7 @@ A server using this pattern should register each exported tool explicitly:
   - `example.get_doc`
 - `ToolCatalogEntry` metadata for schema snapshots, generated docs, and
   deferred-loading search responses;
-- strict inventory policy for production behavior;
+- standard `read_only` and `operator` profiles for production behavior;
 - a deliberately reviewed fallback only if registration initialization fails.
 
 ## Design boundary

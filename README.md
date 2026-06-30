@@ -99,31 +99,37 @@ stable public surface:
 1. Use `mcp-toolkit-core::tool_inventory::ToolCatalog` to declare the tools,
    schemas, examples, handler symbols, and inventory metadata your server can
    expose.
-2. Define native catalog profiles with `ToolCatalogProfile` when a server has
-   large or role-shaped tool surfaces. Emit `ToolCatalogContract` artifacts from
-   the same catalog-derived inventory and validate them with
+2. Register the standard generated profiles with
+   `ToolCatalog::with_standard_profiles(["read"])` when the server may grow
+   beyond a pure read-only surface. This adds a default `read_only` profile and
+   an explicit `operator` profile; gate mutation tools with
+   `ToolCatalogEntry::with_operator_profile_gate()` so they can ship in the
+   binary without appearing in the default profile.
+3. Define additional native catalog profiles with `ToolCatalogProfile` when a
+   server has large or role-shaped tool surfaces. Emit `ToolCatalogContract`
+   artifacts from the same catalog-derived inventory and validate them with
    `mcp_toolkit_testing::catalog_profile_contract` so required tools and groups
    are probe-visible without adding production `find_tools` workarounds.
-3. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
+4. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
    `tools/list` contract.
-4. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
+5. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
    catalogs should publish a reusable `defer_loading` plus `tool_search`
    request fragment, a richer documentation/resource template, and a local
    `allowed_tools` discovery envelope.
-5. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
+6. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery, Protected Resource Metadata, and
    device-authorization metadata for headless MCP client login.
-6. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+7. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle. Server authors can import the underlying
    `rmcp` authoring surface through `mcp_toolkit::rmcp` or
    `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
-7. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+8. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-8. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+9. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.
-9. Add policy crates only when the service has an authorization, SQL
+10. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a legacy backend, first map source authority and blocked operations using

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -6,8 +7,13 @@ use axum::Router;
 use mcp_toolkit::rmcp::{
     self,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo, Tool},
-    schemars, tool, tool_handler, tool_router, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResult, Content, ListToolsResult, ServerCapabilities,
+        ServerInfo, Tool,
+    },
+    schemars,
+    service::RequestContext,
+    tool, tool_handler, tool_router, RoleServer, ServerHandler,
 };
 use mcp_toolkit::server::{
     auth::{AuthSurfaceBuilder, IssuerEntry},
@@ -17,7 +23,8 @@ use mcp_toolkit_auth::surface::AuthorizationServerMetadataSource;
 use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerMetadata};
 use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
-    ToolCatalog, ToolCatalogEntry, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
+    ToolCatalog, ToolCatalogEntry, ToolCatalogProfile, ToolDiscoveryMetadata, ToolInventory,
+    ToolInventoryDecision, ToolInventoryError, ToolOperation, READ_ONLY_PROFILE_KEY,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -33,6 +40,7 @@ pub struct HostedHttpConfig {
     pub delegation_secret: String,
     pub allowed_hosts: Vec<String>,
     pub allow_non_loopback: bool,
+    pub tool_profile: String,
 }
 
 impl HostedHttpConfig {
@@ -44,6 +52,7 @@ impl HostedHttpConfig {
             delegation_secret: "development-only-secret".to_string(),
             allowed_hosts: vec!["127.0.0.1".to_string(), "localhost".to_string()],
             allow_non_loopback: false,
+            tool_profile: READ_ONLY_PROFILE_KEY.to_string(),
         }
     }
 
@@ -69,6 +78,8 @@ impl HostedHttpConfig {
             .filter(|hosts| !hosts.is_empty())
             .unwrap_or(default.allowed_hosts);
         let allow_non_loopback = parse_bool_env("EXAMPLE_MCP_ALLOW_NON_LOOPBACK");
+        let tool_profile =
+            std::env::var("EXAMPLE_MCP_TOOL_PROFILE").unwrap_or(default.tool_profile);
         Ok(Self {
             bind_addr,
             public_base_url,
@@ -76,6 +87,7 @@ impl HostedHttpConfig {
             delegation_secret,
             allowed_hosts,
             allow_non_loopback,
+            tool_profile,
         })
     }
 
@@ -105,10 +117,15 @@ pub struct HostedHttpServer {
     tool_router: ToolRouter<Self>,
     catalog: ToolCatalog,
     inventory: ToolInventory,
+    tool_profile: String,
 }
 
 impl HostedHttpServer {
     pub fn new() -> Result<Self, ToolInventoryError> {
+        Self::with_tool_profile(READ_ONLY_PROFILE_KEY)
+    }
+
+    pub fn with_tool_profile(profile_key: impl Into<String>) -> Result<Self, ToolInventoryError> {
         let catalog = ToolCatalog::from_entries([ToolCatalogEntry::new("read_status")
             .with_group("read")
             .with_read_only(true)
@@ -117,17 +134,32 @@ impl HostedHttpServer {
                 "Read a status summary for one component.",
                 ["status", "health", "read"],
             ))
-            .with_handler("HostedHttpServer::read_status")?])?;
+            .with_handler("HostedHttpServer::read_status")?])?
+        .with_standard_profiles(["read"])?;
         let inventory = catalog.inventory();
         Ok(Self {
             tool_router: Self::tool_router(),
             catalog,
             inventory,
+            tool_profile: profile_key.into(),
         })
     }
 
     pub fn tool_schema_snapshot(&self) -> Vec<Tool> {
         self.tool_router.list_all()
+    }
+
+    pub fn tool_schema_snapshot_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Result<Vec<Tool>, ToolInventoryError> {
+        let profile = self.catalog.require_profile(profile_key)?;
+        Ok(self.inventory.filter_tools_for_profile(
+            self.tool_router.list_all(),
+            ToolOperation::List,
+            profile,
+            |tool| tool.name.as_ref(),
+        ))
     }
 
     pub fn catalog(&self) -> &ToolCatalog {
@@ -136,6 +168,26 @@ impl HostedHttpServer {
 
     pub fn inventory(&self) -> &ToolInventory {
         &self.inventory
+    }
+
+    fn active_profile<'a>(
+        &'a self,
+        profile_key: &'a str,
+    ) -> Result<&'a ToolCatalogProfile, ToolInventoryError> {
+        self.catalog.require_profile(profile_key)
+    }
+
+    fn profile_decision(
+        &self,
+        profile_key: &str,
+        tool_name: &str,
+        operation: ToolOperation,
+    ) -> Result<ToolInventoryDecision, ToolInventoryError> {
+        Ok(self.inventory.decision_for_profile(
+            tool_name,
+            operation,
+            self.active_profile(profile_key)?,
+        ))
     }
 }
 
@@ -156,10 +208,60 @@ impl HostedHttpServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for HostedHttpServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let decision = self
+            .profile_decision(
+                &self.tool_profile,
+                request.name.as_ref(),
+                ToolOperation::Call,
+            )
+            .map_err(profile_error)?;
+        if !decision.allowed() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                decision.caller_message(),
+            )]));
+        }
+
+        let context = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(context).await
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Hosted HTTP/auth MCP server starter template.")
     }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        let decision = self
+            .profile_decision(&self.tool_profile, name, ToolOperation::List)
+            .ok()?;
+        decision
+            .allowed()
+            .then(|| self.tool_router.get(name).cloned())
+            .flatten()
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult {
+            tools: self
+                .tool_schema_snapshot_for_profile(&self.tool_profile)
+                .map_err(profile_error)?,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+}
+
+fn profile_error(error: ToolInventoryError) -> rmcp::ErrorData {
+    rmcp::ErrorData::internal_error(error.to_string(), None)
 }
 
 pub fn build_router(
@@ -170,12 +272,15 @@ pub fn build_router(
             .public_path("/health")
             .detect_insecure_http()
             .build()?;
+    let tool_profile = config.tool_profile.clone();
 
     Ok(LocalMcpHttpServerBuilder::new()
         .allowed_hosts(config.allowed_hosts.clone())
         .stateless_fallback(true)
         .auth_layer(auth_layer)
-        .build(|| Ok(HostedHttpServer::default())))
+        .build(move || {
+            HostedHttpServer::with_tool_profile(tool_profile.clone()).map_err(io::Error::other)
+        }))
 }
 
 fn issuer_entry(
@@ -222,7 +327,7 @@ fn issuer_entry(
 mod tests {
     use super::{HostedHttpConfig, HostedHttpServer};
     use mcp_toolkit::server::http::{HttpBindSafety, HttpBindSafetyError};
-    use mcp_toolkit_core::tool_inventory::{ToolInventoryPolicy, ToolOperation};
+    use mcp_toolkit_core::tool_inventory::{OPERATOR_PROFILE_KEY, READ_ONLY_PROFILE_KEY};
 
     #[test]
     fn inventory_exposes_only_read_status() {
@@ -234,11 +339,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["read_status"]);
 
-        assert!(server.inventory().is_allowed(
-            "read_status",
-            ToolOperation::List,
-            &ToolInventoryPolicy::default()
-        ));
+        let active_tools = server
+            .tool_schema_snapshot_for_profile(READ_ONLY_PROFILE_KEY)
+            .expect("read-only profile");
+        let active_names = active_tools
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(active_names, vec!["read_status"]);
+        assert!(server.catalog().operator_profile().is_some());
+        assert!(server
+            .tool_schema_snapshot_for_profile(OPERATOR_PROFILE_KEY)
+            .is_ok());
         assert_eq!(
             server.catalog().to_value()["tools"][0]["handler"],
             "HostedHttpServer::read_status"

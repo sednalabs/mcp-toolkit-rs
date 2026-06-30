@@ -84,6 +84,12 @@ Profile filtering should be centralized once. The same visible-tool helper or
 inventory policy should drive `tools/list`, local discovery tools, schema
 printing, and generated documentation. If a read-only profile denies a mutation
 at call time, it should normally hide that mutation from discovery too.
+Generated servers should start from `ToolCatalog::with_standard_profiles(...)`,
+keep `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default, and require an
+explicit `operator` profile before `ToolCatalogEntry::with_operator_profile_gate()`
+tools appear or run. Use `ToolInventoryDecision::caller_message()` for denial
+responses so clients see `TOOL_DENIED_READ_ONLY_PROFILE` instead of an opaque
+transport failure.
 
 Do not hide setup behind README-only instructions. If the server can explain
 what is missing through a safe tool response, add that tool.
