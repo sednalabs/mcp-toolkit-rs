@@ -163,9 +163,8 @@ impl ServerHandler for IntentServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let tool_name = request.name.as_ref().to_string();
         let decision = self
-            .active_profile_decision(&tool_name, ToolOperation::Call)
+            .active_profile_decision(request.name.as_ref(), ToolOperation::Call)
             .map_err(profile_error)?;
         if !decision.allowed() {
             return Ok(CallToolResult::error(vec![Content::text(

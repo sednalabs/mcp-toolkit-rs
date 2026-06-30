@@ -124,12 +124,12 @@ stable public surface:
    the default MCP route bundle. Server authors can import the underlying
    `rmcp` authoring surface through `mcp_toolkit::rmcp` or
    `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
-7. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+8. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-8. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+9. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.
-9. Add policy crates only when the service has an authorization, SQL
+10. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a legacy backend, first map source authority and blocked operations using

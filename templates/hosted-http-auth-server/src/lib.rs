@@ -213,9 +213,12 @@ impl ServerHandler for HostedHttpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let tool_name = request.name.as_ref().to_string();
         let decision = self
-            .profile_decision(&self.tool_profile, &tool_name, ToolOperation::Call)
+            .profile_decision(
+                &self.tool_profile,
+                request.name.as_ref(),
+                ToolOperation::Call,
+            )
             .map_err(profile_error)?;
         if !decision.allowed() {
             return Ok(CallToolResult::error(vec![Content::text(
