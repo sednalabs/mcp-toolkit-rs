@@ -127,6 +127,8 @@ For stdio servers:
 
 For hosted HTTP/auth servers:
 
+- use `mcp-toolkit-server::http::LocalMcpHttpServerBuilder` as the default
+  hosted route-bundle front door;
 - assert Protected Resource Metadata;
 - assert authorization-server metadata when discovery is served;
 - assert missing-token bearer challenges;

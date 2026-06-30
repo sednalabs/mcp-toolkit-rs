@@ -420,6 +420,359 @@ impl<S> Clone for LocalMcpHttpState<S> {
     }
 }
 
+/// Opinionated builder for a local Streamable HTTP MCP router.
+pub struct LocalMcpHttpServerBuilder {
+    runtime: LocalMcpHttpRuntimeBuilder,
+    auth_enabled: bool,
+    include_health: bool,
+    include_host_guard: bool,
+    include_oauth_not_configured: bool,
+    mcp_path: String,
+    resource_path: Option<String>,
+    #[cfg(feature = "auth")]
+    auth_layer: Option<AuthSurfaceLayer>,
+}
+
+impl Default for LocalMcpHttpServerBuilder {
+    fn default() -> Self {
+        Self {
+            runtime: LocalMcpHttpRuntimeBuilder::new(),
+            auth_enabled: false,
+            include_health: true,
+            include_host_guard: true,
+            include_oauth_not_configured: false,
+            mcp_path: "/mcp".to_string(),
+            resource_path: None,
+            #[cfg(feature = "auth")]
+            auth_layer: None,
+        }
+    }
+}
+
+impl LocalMcpHttpServerBuilder {
+    /// Builds a hosted HTTP builder with safe local defaults.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Host guarding and health routes are enabled by default. Bearer auth is
+    /// not installed unless callers supply an auth layer.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the underlying Streamable HTTP runtime builder.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Callers replacing the runtime remain responsible for bounded sessions,
+    /// allowed hosts, cancellation, and stateless fallback posture.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn runtime(mut self, runtime: LocalMcpHttpRuntimeBuilder) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    /// Sets allowed Host header values on the stateful and fallback services.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Host allowlists mitigate DNS rebinding attacks. Keep them explicit for
+    /// public deployments.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allowed_hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.runtime = self.runtime.allowed_hosts(hosts);
+        self
+    }
+
+    /// Sets the maximum number of bounded stateful sessions.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep this bound small enough for the deployment's memory budget.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn max_sessions(mut self, max_sessions: usize) -> Self {
+        self.runtime = self.runtime.max_sessions(max_sessions);
+        self
+    }
+
+    /// Enables or disables resumable sessions.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Resume mode retains disconnected session state until expiry.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allow_resume(mut self, allow_resume: bool) -> Self {
+        self.runtime = self.runtime.allow_resume(allow_resume);
+        self
+    }
+
+    /// Sets the cancellation token used by the HTTP runtime.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Use a service-owned token so shutdown tears down session sweepers and
+    /// Streamable HTTP workers together.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.runtime = self.runtime.cancellation_token(token);
+        self
+    }
+
+    /// Enables or disables stateless fallback for sessionless POST requests.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep auth and host guards enabled around stateless fallback routes for
+    /// exposed deployments.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn stateless_fallback(mut self, enabled: bool) -> Self {
+        self.runtime = self.runtime.stateless_fallback(enabled);
+        self
+    }
+
+    /// Replaces the low-level Streamable HTTP service configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Callers must preserve safe allowed-host and cancellation-token posture
+    /// when replacing the full configuration.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn runtime_config(mut self, config: LocalStreamableHttpServiceConfig) -> Self {
+        self.runtime = self.runtime.config(config);
+        self
+    }
+
+    /// Replaces the low-level local session configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Session channel capacity and keepalive settings influence memory use and
+    /// retention behavior.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn session_config(
+        mut self,
+        session_config: rmcp::transport::streamable_http_server::session::local::SessionConfig,
+    ) -> Self {
+        self.runtime = self.runtime.session_config(session_config);
+        self
+    }
+
+    /// Replaces the stateful Streamable HTTP server configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Ensure allowed hosts and cancellation behavior match the deployment.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn server_config(mut self, server_config: StreamableHttpServerConfig) -> Self {
+        self.runtime = self.runtime.server_config(server_config);
+        self
+    }
+
+    /// Replaces the stateless fallback server configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The supplied configuration should keep `stateful_mode` disabled unless
+    /// callers intentionally want two stateful services.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn stateless_server_config(mut self, config: StreamableHttpServerConfig) -> Self {
+        self.runtime = self.runtime.stateless_server_config(config);
+        self
+    }
+
+    /// Enables or disables the built-in health route.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The built-in health payload includes only transport/session posture.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn include_health(mut self, include: bool) -> Self {
+        self.include_health = include;
+        self
+    }
+
+    /// Enables or disables the route-bundle host guard.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Disabling the host guard is not recommended for public deployments.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn include_host_guard(mut self, include: bool) -> Self {
+        self.include_host_guard = include;
+        self
+    }
+
+    /// Enables unauthenticated OAuth protected-resource placeholder routes.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Authenticated deployments should prefer a real auth layer.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn include_oauth_not_configured(mut self, include: bool) -> Self {
+        self.include_oauth_not_configured = include;
+        self
+    }
+
+    /// Sets the MCP route path.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep this aligned with protected resource metadata when auth is enabled.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn mcp_path(mut self, path: impl Into<String>) -> Self {
+        self.mcp_path = normalize_route_path(&path.into());
+        self
+    }
+
+    /// Sets the protected resource path used for discovery routes.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep this aligned with the MCP resource path exposed to clients.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn resource_path(mut self, path: impl Into<String>) -> Self {
+        self.resource_path = Some(normalize_route_path(&path.into()));
+        self
+    }
+
+    /// Marks the route bundle as protected by auth middleware supplied elsewhere.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// This flag changes unauthenticated route hints only. It does not install
+    /// auth middleware; use `auth_layer` when this crate owns bearer
+    /// enforcement.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn auth_enabled(mut self, enabled: bool) -> Self {
+        self.auth_enabled = enabled;
+        self
+    }
+
+    /// Installs an auth layer around the route bundle.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The supplied layer must match the public resource URL for this route
+    /// bundle. Installing a layer also marks auth as enabled.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    #[cfg(feature = "auth")]
+    pub fn auth_layer(mut self, layer: AuthSurfaceLayer) -> Self {
+        self.auth_enabled = true;
+        self.auth_layer = Some(layer);
+        self
+    }
+
+    /// Builds the HTTP router from a service factory.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The service factory must not capture secrets that could be exposed in
+    /// debug output. Auth middleware is installed only when supplied.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn build<S, F>(self, service_factory: F) -> Router
+    where
+        S: Service<RoleServer> + Send + 'static,
+        F: Fn() -> Result<S, std::io::Error> + Clone + Send + Sync + 'static,
+    {
+        let runtime = self.runtime.build(service_factory);
+        let mut router = LocalMcpHttpRouterBuilder::new(runtime.into_state(self.auth_enabled))
+            .include_health(self.include_health)
+            .include_host_guard(self.include_host_guard)
+            .include_oauth_not_configured(self.include_oauth_not_configured)
+            .mcp_path(self.mcp_path);
+
+        if let Some(resource_path) = self.resource_path {
+            router = router.resource_path(resource_path);
+        }
+
+        #[cfg(feature = "auth")]
+        {
+            if let Some(layer) = self.auth_layer {
+                router = router.auth_layer(layer);
+            }
+        }
+
+        router.build()
+    }
+}
+
 /// Builder for a local MCP HTTP route bundle.
 pub struct LocalMcpHttpRouterBuilder<S> {
     state: LocalMcpHttpState<S>,

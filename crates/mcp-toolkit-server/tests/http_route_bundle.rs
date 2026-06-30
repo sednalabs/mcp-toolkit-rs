@@ -3,7 +3,7 @@
 use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
 use mcp_toolkit_server::{
-    http::{LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder},
+    http::{LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder, LocalMcpHttpServerBuilder},
     rmcp::{
         handler::server::{router::tool::ToolRouter, wrapper::Parameters},
         model::{ServerCapabilities, ServerInfo},
@@ -48,6 +48,41 @@ impl ServerHandler for TestMcp {
 
 const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
 const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
+
+#[tokio::test]
+async fn server_builder_composes_runtime_and_router_defaults() {
+    let router = LocalMcpHttpServerBuilder::new()
+        .allowed_hosts(["127.0.0.1"])
+        .mcp_path("/api/mcp")
+        .build(|| Ok(TestMcp::new()));
+
+    let health = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "127.0.0.1")
+                .body(Body::empty())
+                .expect("health request"),
+        )
+        .await
+        .expect("health response");
+    assert_eq!(health.status(), 200);
+
+    let ready = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/mcp")
+                .header("host", "127.0.0.1")
+                .body(Body::empty())
+                .expect("ready request"),
+        )
+        .await
+        .expect("ready response");
+    assert_eq!(ready.status(), 200);
+}
 
 #[tokio::test]
 async fn route_bundle_serves_health_and_initialize() {

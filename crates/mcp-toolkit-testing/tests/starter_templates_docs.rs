@@ -8,6 +8,7 @@ fn starter_templates_doc_mentions_standalone_public_template() {
     for needle in [
         "templates/single-crate-public-stdio-server",
         "standalone public stdio",
+        "StdioServerBuilder",
         "CodeQL workflow-security queries",
         "dependency governance",
     ] {
@@ -29,6 +30,7 @@ fn starter_templates_doc_mentions_generator_front_door() {
         "--toolkit-git",
         "--force",
         "evidence behind an archetype",
+        "LocalMcpHttpServerBuilder",
     ] {
         assert!(
             STARTER_TEMPLATES_DOC.contains(needle),

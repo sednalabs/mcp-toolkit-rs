@@ -11,7 +11,7 @@ use mcp_toolkit::rmcp::{
 };
 use mcp_toolkit::server::{
     auth::{AuthSurfaceBuilder, IssuerEntry},
-    http::{HttpBindSafety, LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder},
+    http::{HttpBindSafety, LocalMcpHttpServerBuilder},
 };
 use mcp_toolkit_auth::surface::AuthorizationServerMetadataSource;
 use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerMetadata};
@@ -156,19 +156,17 @@ impl ServerHandler for HostedHttpServer {
 pub fn build_router(
     config: HostedHttpConfig,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
-    let runtime = LocalMcpHttpRuntimeBuilder::new()
-        .allowed_hosts(config.allowed_hosts.clone())
-        .stateless_fallback(true)
-        .build(|| Ok(HostedHttpServer::default()));
     let auth_layer =
         AuthSurfaceBuilder::single_issuer(config.public_base_url.clone(), issuer_entry(&config)?)
             .public_path("/health")
             .detect_insecure_http()
             .build()?;
 
-    Ok(LocalMcpHttpRouterBuilder::new(runtime.into_state(true))
+    Ok(LocalMcpHttpServerBuilder::new()
+        .allowed_hosts(config.allowed_hosts.clone())
+        .stateless_fallback(true)
         .auth_layer(auth_layer)
-        .build())
+        .build(|| Ok(HostedHttpServer::default())))
 }
 
 fn issuer_entry(

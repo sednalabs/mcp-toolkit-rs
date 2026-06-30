@@ -90,6 +90,7 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         "templates/single-crate-public-stdio-server",
         "templates/hosted-http-auth-server",
         "mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list",
+        "mcp-toolkit-server::http::LocalMcpHttpServerBuilder",
         "Protected Resource Metadata",
         "GitHub Actions",
         "reviewer sidecar",
