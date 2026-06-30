@@ -234,7 +234,7 @@ fn pattern_manifest_examples_are_present_for_reference_rows() {
             discovered.remove(file_name),
             "expected pattern manifest file is missing: {file_name}"
         );
-        let value: serde_json::Value = serde_json::from_str(&manifest)
+        let value: serde_json::Value = serde_json::from_str(manifest)
             .unwrap_or_else(|err| panic!("invalid JSON in {file_name}: {err}"));
 
         for field in [
