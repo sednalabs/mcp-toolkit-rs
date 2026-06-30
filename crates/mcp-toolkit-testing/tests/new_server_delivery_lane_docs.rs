@@ -2,8 +2,7 @@ const LANE_DOC: &str = include_str!("../../../docs/new-server-delivery-lane.md")
 const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-atlas.md");
 const PATTERN_MANIFESTS_DOC: &str = include_str!("../../../docs/pattern-manifests.md");
 const PATTERN_RECIPES_DOC: &str = include_str!("../../../docs/pattern-recipes.md");
-const PATTERN_MANIFEST_SCHEMA: &str =
-    include_str!("../../../docs/pattern-manifest.schema.json");
+const PATTERN_MANIFEST_SCHEMA: &str = include_str!("../../../docs/pattern-manifest.schema.json");
 
 const REQUIRED_GATES: [&str; 7] = [
     "## Gate 1: Start From The Appropriate mcp-toolkit-rs Template",
@@ -182,8 +181,8 @@ fn pattern_recipes_cover_all_atlas_archetypes() {
 
 #[test]
 fn pattern_manifest_examples_are_present_for_reference_rows() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/pattern-manifests");
+    let manifest_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/pattern-manifests");
 
     for file_name in [
         "google-admin-mcp.json",
