@@ -9,6 +9,22 @@ Use this page with `docs/golden-path.md`: the templates show the first copyable
 server shape, while the golden path covers crate selection, review handoff,
 hosted validation, and release evidence.
 
+## Fast Generator
+
+Use the generator when starting from a maintained template:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
+```
+
+The generator writes a new directory named after the package, rewrites the
+template package name, keeps toolkit dependencies pointed at the current local
+checkout by default, and refuses to overwrite changed files. Output paths are
+relative to the current directory. Use `mcp-toolkit templates` to list
+maintained templates, `--toolkit-git https://github.com/sednalabs/mcp-toolkit-rs`
+for portable Git dependencies, and `--force` only when replacing generated
+files intentionally.
+
 ## Curated Stdio Intent Server
 
 Use `templates/curated-stdio-intent-server` when the server should run as a

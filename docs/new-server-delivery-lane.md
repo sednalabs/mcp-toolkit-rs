@@ -34,6 +34,17 @@ missing evidence line means the lane is not complete.
 
 Choose the server shape before writing domain code.
 
+Prefer the generator front door when starting a new crate:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
+```
+
+Use `mcp-toolkit templates` to list maintained template ids. The generator uses
+the same `templates/` sources documented below, rewrites package names and
+toolkit dependency sources, writes only to relative output directories, and
+refuses changed-file overwrites unless `--force` is provided.
+
 First check `docs/reference-server-atlas.md` for the closest living reference
 service or adjacent auth/policy reference. Record the row used in the evidence
 block so reviewers can see which real pattern informed the scaffold.

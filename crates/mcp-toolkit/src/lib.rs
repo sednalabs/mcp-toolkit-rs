@@ -26,6 +26,8 @@
 
 pub use mcp_toolkit_core as core;
 
+pub mod new_server;
+
 #[cfg(feature = "http")]
 pub use mcp_toolkit_http as http;
 

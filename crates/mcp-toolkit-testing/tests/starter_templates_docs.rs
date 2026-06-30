@@ -19,6 +19,21 @@ fn starter_templates_doc_mentions_standalone_public_template() {
 }
 
 #[test]
+fn starter_templates_doc_mentions_generator_front_door() {
+    for needle in [
+        "mcp-toolkit --bin mcp-toolkit -- new",
+        "mcp-toolkit templates",
+        "--toolkit-git",
+        "--force",
+    ] {
+        assert!(
+            STARTER_TEMPLATES_DOC.contains(needle),
+            "starter template doc is missing generator front-door detail `{needle}`"
+        );
+    }
+}
+
+#[test]
 fn ergonomics_docs_cover_guarded_actions_and_redacted_outputs() {
     for needle in [
         "GuardedActionPosture",
