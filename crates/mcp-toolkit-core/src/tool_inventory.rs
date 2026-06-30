@@ -1403,5 +1403,10 @@ mod tests {
             .with_read_only(false)
             .with_risk_posture(GuardedActionPosture::read_only());
         assert!(read_only.read_only());
+
+        let proof = ToolCapability::new("send_wizard_readback")
+            .with_read_only(false)
+            .with_risk_posture(GuardedActionPosture::no_mutation_proof());
+        assert!(proof.read_only());
     }
 }

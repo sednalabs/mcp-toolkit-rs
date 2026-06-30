@@ -1,14 +1,10 @@
 name: codeql-query-tests
 
 on:
-  pull_request:
-    paths:
-      - ".github/codeql/actions-workflow-security/**"
-      - ".github/workflows/codeql.yml"
-      - ".github/workflows/codeql-query-tests.yml"
-      - "templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/**"
-      - "templates/single-crate-public-stdio-server/.github/workflows/codeql.yml"
-      - "templates/single-crate-public-stdio-server/.github/workflows/codeql-query-tests.yml"
+  # Branch protection requires the gate context on every pull request. Keep the
+  # PR trigger unfiltered so required checks are not skipped for non-workflow
+  # changes.
+  pull_request: {}
   push:
     branches:
       - main

@@ -8,8 +8,9 @@ surface.
 
 `mcp-toolkit-core::guarded_action` provides the reusable substrate:
 
-- `GuardedActionPosture` describes whether an action is read-only, preview,
-  guarded apply, mutating, destructive, or send-adjacent.
+- `GuardedActionPosture` describes whether an action is read-only,
+  no-mutation proof, preview, guarded apply, mutating, destructive, or
+  send-adjacent.
 - `GuardedActionRuntimeMode` enforces fail-closed service modes:
   `read_only`, `preview_only`, and `enabled`.
 - `GuardedActionPlanSeed` builds deterministic plan ids from public-safe action,
@@ -17,6 +18,9 @@ surface.
 - `GuardedActionPreview<TPreview, TEvidence>` and
   `GuardedActionApply<TApplied, TEvidence>` provide typed response envelopes for
   preview/apply flows.
+- `GuardedActionNoMutationProof<TProof, TEvidence>` provides a typed response
+  envelope for proof-only tools that approach a hazardous boundary while
+  keeping `mutation_performed=false` and `production_action_authorized=false`.
 
 These helpers do not replace service-owned authorization, allowlists, or fresh
 readback. They standardize the shape so different MCP servers stop reinventing
@@ -38,6 +42,10 @@ let preview = ToolCapability::new("queue_control_preview")
 let apply = ToolCapability::new("queue_control_apply")
     .with_group("admin")
     .with_risk_posture(GuardedActionPosture::guarded_apply());
+
+let proof = ToolCapability::new("send_wizard_readback")
+    .with_group("admin")
+    .with_risk_posture(GuardedActionPosture::no_mutation_proof());
 ```
 
 The `ToolSearchResponse` JSON now carries `risk_posture` for each matching tool
@@ -55,8 +63,30 @@ For a service-level runtime mode:
 This keeps the default behavior boring:
 
 - `read_only` allows reads only;
+- `read_only` also allows no-mutation proof tools because they are
+  non-mutating, but those tools must expose their proof boundary explicitly;
 - `preview_only` allows reads plus preview planning;
 - `enabled` allows guarded apply and other reviewed write surfaces.
+
+## No-Mutation Proof Tools
+
+Use `GuardedActionPosture::no_mutation_proof()` before adding service-local
+"safe preview" or "readback" helpers that touch a hazardous workflow boundary.
+Examples include rendering a final confirmation form, resolving a send wizard
+recipient count, or probing a publish path without submitting the final action.
+
+The service still owns:
+
+- an explicit route/action allowlist;
+- before/after invariant readback;
+- proof evidence that explains exactly where the tool stopped;
+- tests that prove the final mutation, send, publish, trigger, or schedule step
+  was not invoked.
+
+The generic helper `no_mutation_proof_policy_decision(...)` in
+`mcp-toolkit-policy-core` can be used to fail closed if a response admits that
+proof was not performed, evidence is empty, a mutation occurred, or a
+production action was authorized.
 
 ## Plan Binding Guidance
 

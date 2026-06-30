@@ -36,6 +36,10 @@ artifact.
 - Keep `qlpack.yml` and `codeql-pack.lock.yml` committed together.
 - Re-run the query-pack compile workflow after any `.ql`, `.qll`, `.qls`, or
   CodeQL workflow changes.
+- If `Actions workflow security query tests` is a required branch-protection
+  context, keep the pull request trigger unfiltered. Path-filtering a required
+  check can leave unrelated pull requests permanently blocked because the
+  required context is never created for that head SHA.
 - Prefer repository-neutral invariant wording over organization-private
   phrasing.
 
