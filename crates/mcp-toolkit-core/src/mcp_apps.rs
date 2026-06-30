@@ -247,8 +247,7 @@ pub fn with_mcp_apps_sensitive_output_metadata(
         MCP_APPS_WIDGET_ACCESSIBLE_META_KEY.to_string(),
         json!(false),
     );
-    meta.0
-        .insert("ui".to_string(), json!({"visibility": ["model"]}));
+    upsert_model_only_ui_visibility(&mut meta);
     meta
 }
 
@@ -286,8 +285,7 @@ pub fn with_mcp_apps_no_mutation_proof_metadata(
         MCP_APPS_WIDGET_ACCESSIBLE_META_KEY.to_string(),
         json!(false),
     );
-    meta.0
-        .insert("ui".to_string(), json!({"visibility": ["model"]}));
+    upsert_model_only_ui_visibility(&mut meta);
     meta
 }
 
@@ -444,6 +442,19 @@ where
     )
 }
 
+fn upsert_model_only_ui_visibility(meta: &mut Meta) {
+    let mut ui = meta
+        .0
+        .remove("ui")
+        .and_then(|value| match value {
+            Value::Object(object) => Some(object),
+            _ => None,
+        })
+        .unwrap_or_default();
+    ui.insert("visibility".to_string(), json!(["model"]));
+    meta.0.insert("ui".to_string(), Value::Object(ui));
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -506,6 +517,9 @@ mod tests {
         existing
             .0
             .insert("owner".to_string(), json!("service-owned"));
+        existing
+            .0
+            .insert("ui".to_string(), json!({"resourceUri": "ui://admin.html"}));
 
         let meta =
             with_mcp_apps_sensitive_output_metadata(Some(existing), "unredacted_admin_form_values");
@@ -517,7 +531,10 @@ mod tests {
             json!("unredacted_admin_form_values")
         );
         assert_eq!(meta.0[MCP_APPS_WIDGET_ACCESSIBLE_META_KEY], json!(false));
-        assert_eq!(meta.0["ui"], json!({"visibility": ["model"]}));
+        assert_eq!(
+            meta.0["ui"],
+            json!({"resourceUri": "ui://admin.html", "visibility": ["model"]})
+        );
         assert_eq!(
             meta.0[MCP_APPS_SECURITY_SCHEMES_META_KEY],
             json!([{"type": MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE}])
@@ -530,6 +547,9 @@ mod tests {
         existing
             .0
             .insert("owner".to_string(), json!("service-owned"));
+        existing
+            .0
+            .insert("ui".to_string(), json!({"resourceUri": "ui://proof.html"}));
 
         let meta = with_mcp_apps_no_mutation_proof_metadata(
             Some(existing),
@@ -552,7 +572,10 @@ mod tests {
             json!(false)
         );
         assert_eq!(meta.0[MCP_APPS_WIDGET_ACCESSIBLE_META_KEY], json!(false));
-        assert_eq!(meta.0["ui"], json!({"visibility": ["model"]}));
+        assert_eq!(
+            meta.0["ui"],
+            json!({"resourceUri": "ui://proof.html", "visibility": ["model"]})
+        );
         assert_eq!(
             meta.0[MCP_APPS_SECURITY_SCHEMES_META_KEY],
             json!([{"type": MCP_APPS_NOAUTH_SECURITY_SCHEME_TYPE}])

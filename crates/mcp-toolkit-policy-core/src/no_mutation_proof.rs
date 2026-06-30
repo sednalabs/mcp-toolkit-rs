@@ -93,4 +93,13 @@ mod tests {
             Some("evidence_required")
         );
     }
+
+    #[test]
+    fn no_mutation_proof_policy_rejects_oversized_evidence_notes() {
+        let notes = vec!["x".repeat(crate::BOUNDARY_MAX_STRING_LENGTH + 1)];
+        let decision = no_mutation_proof_policy_decision(true, false, false, &notes);
+
+        assert!(!decision.allow);
+        assert_eq!(decision.reason.as_deref(), Some("boundary_limit_exceeded"));
+    }
 }

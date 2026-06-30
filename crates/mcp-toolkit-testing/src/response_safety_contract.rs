@@ -28,8 +28,11 @@ where
         .unwrap_or_else(|err| panic!("failed to serialize payload for leak assertion: {err}"));
     for needle in forbidden {
         let needle = needle.as_ref();
+        let escaped_needle = serde_json::to_string(needle)
+            .unwrap_or_else(|err| panic!("failed to serialize forbidden substring: {err}"));
+        let escaped_needle = &escaped_needle[1..escaped_needle.len() - 1];
         assert!(
-            !rendered.contains(needle),
+            !rendered.contains(escaped_needle),
             "serialized payload contained forbidden substring: {needle}"
         );
     }
@@ -109,5 +112,20 @@ mod tests {
 
         assert_json_bool_field_false(&payload, "mutation_performed");
         assert_no_mutation_proof_flags(&payload);
+    }
+
+    #[test]
+    #[should_panic(expected = "serialized payload contained forbidden substring")]
+    fn detects_forbidden_substrings_after_json_escaping() {
+        #[derive(Debug, Serialize)]
+        struct EscapedPayload {
+            value: String,
+        }
+
+        let payload = EscapedPayload {
+            value: "token=\"abc\\123\"".to_string(),
+        };
+
+        assert_payload_excludes_substrings(&payload, &["token=\"abc\\123\""]);
     }
 }
