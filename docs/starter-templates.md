@@ -43,6 +43,9 @@ It demonstrates:
 - typed tool input schemas;
 - explicit `ToolCatalog` metadata for the exposed tools, with `ToolInventory`
   derived from the catalog;
+- generated `read_only` and `operator` profiles, with the live `tools/list`,
+  `get_tool`, and `call_tool` path using `EXAMPLE_MCP_TOOL_PROFILE=read_only`
+  by default;
 - `assert_tool_schema_snapshot` drift protection;
 - `stdio_contract::assert_stdio_tools_list` for a JSON-RPC stdio smoke test
   that initializes the server and runs `tools/list`.
@@ -97,6 +100,9 @@ It demonstrates:
 - `HttpBindSafety` for fail-closed non-loopback bind checks;
 - host allowlists for request guardrails;
 - `AuthSurfaceBuilder` with public health and protected `/mcp` routes;
+- generated `read_only` and `operator` profiles, with mutation-ready tools
+  kept behind an explicit profile gate before they appear in the hosted tool
+  surface;
 - OAuth Protected Resource Metadata with device authorization metadata;
 - bearer-auth challenge contract tests;
 - authorization-server metadata contract tests for device grants and grant
@@ -116,7 +122,9 @@ cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-ta
 ## Snapshot Workflow
 
 Strict snapshot tests are part of normal validation. To intentionally rebaseline
-a template snapshot, run the matching test with:
+a template snapshot, run the matching test with. Template snapshots use the
+default `read_only` profile, so future operator-only tools do not enter the
+served default contract unless that profile changes intentionally.
 
 ```bash
 MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS=1 cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml tool_schema_snapshot_contract_is_stable

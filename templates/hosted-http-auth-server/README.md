@@ -10,6 +10,8 @@ It demonstrates:
 - explicit bind safety for non-loopback listeners;
 - host allowlists for DNS rebinding defense;
 - `AuthSurfaceBuilder` with public health checks and `/mcp` bearer challenges;
+- standard `read_only` and `operator` catalog profiles, with
+  `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default live MCP surface;
 - device-code capable OAuth metadata for headless MCP client login;
 - route-level auth-surface contract tests;
 - tool schema snapshots for exported MCP tools.
@@ -61,6 +63,8 @@ server, then stores the resulting MCP credentials for that configured server.
 - Auth is always required for `/mcp`.
 - `/health` is public and should not include service-specific secrets.
 - Host headers are allowlisted by default.
+- `EXAMPLE_MCP_TOOL_PROFILE` defaults to `read_only`; mutation tools should use
+  the `operator` profile and `ToolCatalogEntry::with_operator_profile_gate()`.
 
 ## Snapshot Workflow
 

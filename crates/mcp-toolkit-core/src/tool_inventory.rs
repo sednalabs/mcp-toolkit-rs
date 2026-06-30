@@ -35,6 +35,15 @@ use serde_json::{json, Map, Value};
 use crate::guarded_action::GuardedActionPosture;
 use crate::openai_tool_search::OpenAiDeferredLoadingMetadata;
 
+/// Standard profile key for generated read-only tool surfaces.
+pub const READ_ONLY_PROFILE_KEY: &str = "read_only";
+
+/// Standard profile key for explicit operator tool surfaces.
+pub const OPERATOR_PROFILE_KEY: &str = "operator";
+
+/// Standard feature flag for tools that should only appear in operator profiles.
+pub const OPERATOR_TOOLS_FEATURE_FLAG: &str = "operator_tools";
+
 /// MCP tool operation used for method-aware exposure checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolOperation {
@@ -111,6 +120,11 @@ impl ToolCapability {
     pub fn with_feature_flag(mut self, feature_flag: impl Into<String>) -> Self {
         self.feature_flag = Some(feature_flag.into());
         self
+    }
+
+    /// Gate this capability behind the standard operator profile feature flag.
+    pub fn with_operator_profile_gate(self) -> Self {
+        self.with_feature_flag(OPERATOR_TOOLS_FEATURE_FLAG)
     }
 
     /// Configure operation-aware exposure.
@@ -464,6 +478,11 @@ impl ToolInventoryPolicy {
         }
     }
 
+    /// Create the standard explicit operator policy for generated servers.
+    pub fn strict_operator() -> Self {
+        Self::strict().with_feature_flags([OPERATOR_TOOLS_FEATURE_FLAG])
+    }
+
     /// Create a strict policy for default read-only server profiles.
     ///
     /// This is the common safe baseline for MCP servers that expose read tools
@@ -531,24 +550,148 @@ impl ToolInventoryPolicy {
     }
 
     fn allows_capability(&self, capability: &ToolCapability, operation: ToolOperation) -> bool {
+        self.denial_reason(capability, operation).is_none()
+    }
+
+    fn denial_reason(
+        &self,
+        capability: &ToolCapability,
+        operation: ToolOperation,
+    ) -> Option<ToolInventoryDenialReason> {
         if !capability.exposure.allows(operation) {
-            return false;
+            return Some(ToolInventoryDenialReason::ExposureDisabled);
         }
         if self.read_only_only && !capability.read_only {
-            return false;
+            return Some(ToolInventoryDenialReason::ReadOnlyProfile);
         }
         if let Some(groups) = &self.allowed_groups {
             let Some(group) = capability.group.as_deref() else {
-                return false;
+                return Some(ToolInventoryDenialReason::GroupNotAllowed);
             };
             if !groups.contains(group) {
-                return false;
+                return Some(ToolInventoryDenialReason::GroupNotAllowed);
             }
         }
         if let Some(feature_flag) = capability.feature_flag.as_deref() {
-            return self.enabled_feature_flags.contains(feature_flag);
+            if !self.enabled_feature_flags.contains(feature_flag) {
+                return Some(ToolInventoryDenialReason::FeatureFlagDisabled);
+            }
         }
-        true
+        None
+    }
+}
+
+/// Stable reason why a tool was denied by an inventory/profile policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolInventoryDenialReason {
+    /// The requested tool name was blank after trimming.
+    BlankToolName,
+    /// The tool is not registered and the policy denies unknown tools.
+    UnregisteredTool,
+    /// The tool is hidden for the requested MCP operation.
+    ExposureDisabled,
+    /// The active profile only permits read-only tools.
+    ReadOnlyProfile,
+    /// The active profile does not include the tool's group.
+    GroupNotAllowed,
+    /// The tool requires a feature flag that is not active.
+    FeatureFlagDisabled,
+}
+
+impl ToolInventoryDenialReason {
+    /// Stable machine-readable denial code.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::BlankToolName => "TOOL_DENIED_BLANK_NAME",
+            Self::UnregisteredTool => "TOOL_DENIED_UNREGISTERED",
+            Self::ExposureDisabled => "TOOL_DENIED_EXPOSURE_DISABLED",
+            Self::ReadOnlyProfile => "TOOL_DENIED_READ_ONLY_PROFILE",
+            Self::GroupNotAllowed => "TOOL_DENIED_GROUP_NOT_ALLOWED",
+            Self::FeatureFlagDisabled => "TOOL_DENIED_FEATURE_FLAG_DISABLED",
+        }
+    }
+
+    /// Human-readable reason suitable for operator diagnostics.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::BlankToolName => "tool name is empty",
+            Self::UnregisteredTool => "tool is not registered in the catalog",
+            Self::ExposureDisabled => "tool is not exposed for this MCP operation",
+            Self::ReadOnlyProfile => "active profile allows read-only tools only",
+            Self::GroupNotAllowed => "active profile does not include this tool group",
+            Self::FeatureFlagDisabled => "active profile has not enabled this tool feature flag",
+        }
+    }
+}
+
+/// Policy decision for one tool under one operation/profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolInventoryDecision {
+    pub tool_name: String,
+    pub operation: ToolOperation,
+    pub profile_key: Option<String>,
+    pub allowed: bool,
+    pub denial_reason: Option<ToolInventoryDenialReason>,
+}
+
+impl ToolInventoryDecision {
+    fn permit(tool_name: String, operation: ToolOperation, profile_key: Option<String>) -> Self {
+        Self {
+            tool_name,
+            operation,
+            profile_key,
+            allowed: true,
+            denial_reason: None,
+        }
+    }
+
+    fn denied(
+        tool_name: String,
+        operation: ToolOperation,
+        profile_key: Option<String>,
+        denial_reason: ToolInventoryDenialReason,
+    ) -> Self {
+        Self {
+            tool_name,
+            operation,
+            profile_key,
+            allowed: false,
+            denial_reason: Some(denial_reason),
+        }
+    }
+
+    /// Return true when the profile/policy allows the operation.
+    pub fn allowed(&self) -> bool {
+        self.allowed
+    }
+
+    /// Short caller-visible message for profile-gated tool denials.
+    pub fn caller_message(&self) -> String {
+        match self.denial_reason {
+            Some(reason) => format!(
+                "{}: {} for `{}`",
+                reason.code(),
+                reason.message(),
+                self.tool_name
+            ),
+            None => format!("tool `{}` is allowed", self.tool_name),
+        }
+    }
+
+    /// Serialize this decision into a stable diagnostic artifact.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "schema": "mcp_tool_inventory_decision",
+            "version": 1,
+            "tool_name": self.tool_name,
+            "operation": operation_label(self.operation),
+            "profile_key": self.profile_key,
+            "allowed": self.allowed,
+            "denial": self.denial_reason.map(|reason| json!({
+                "code": reason.code(),
+                "message": reason.message(),
+            })),
+        })
     }
 }
 
@@ -583,6 +726,36 @@ impl ToolCatalogProfile {
             required_tools: Vec::new(),
             required_groups: Vec::new(),
         })
+    }
+
+    /// Create the standard generated read-only profile.
+    pub fn read_only_default() -> Self {
+        Self {
+            key: READ_ONLY_PROFILE_KEY.to_string(),
+            title: "Read-only".to_string(),
+            description: "Default profile that exposes read-only tools only.".to_string(),
+            instructions: Some(
+                "Enable an explicit operator profile before exposing mutation tools.".to_string(),
+            ),
+            policy: ToolInventoryPolicy::strict_read_only(),
+            required_tools: Vec::new(),
+            required_groups: Vec::new(),
+        }
+    }
+
+    /// Create the standard explicit operator profile.
+    pub fn operator_default() -> Self {
+        Self {
+            key: OPERATOR_PROFILE_KEY.to_string(),
+            title: "Operator".to_string(),
+            description: "Opt-in profile for reviewed operator and mutation tools.".to_string(),
+            instructions: Some(
+                "Use only for trusted operators with matching provider permissions.".to_string(),
+            ),
+            policy: ToolInventoryPolicy::strict_operator(),
+            required_tools: Vec::new(),
+            required_groups: Vec::new(),
+        }
     }
 
     /// Attach short host-facing instructions for this profile.
@@ -813,6 +986,15 @@ impl ToolCatalogEntry {
         self
     }
 
+    /// Gate this entry behind the standard operator profile feature flag.
+    #[must_use]
+    pub fn with_operator_profile_gate(self) -> Self {
+        Self {
+            capability: self.capability.with_operator_profile_gate(),
+            ..self
+        }
+    }
+
     /// Configure operation-aware exposure.
     #[must_use]
     pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
@@ -1034,6 +1216,53 @@ impl ToolCatalog {
         Ok(self)
     }
 
+    /// Register the standard read-only and operator profiles for generated servers.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when group names are blank or the standard
+    /// profiles are already registered.
+    pub fn register_standard_profiles<I, S>(
+        &mut self,
+        read_only_groups: I,
+    ) -> Result<(), ToolInventoryError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let read_only_groups =
+            normalize_non_empty_list("read-only profile group", read_only_groups)?;
+        let mut read_only_profile = ToolCatalogProfile::read_only_default();
+        if !read_only_groups.is_empty() {
+            read_only_profile = read_only_profile
+                .with_policy(
+                    ToolInventoryPolicy::strict_read_only()
+                        .with_allowed_groups(read_only_groups.clone()),
+                )
+                .with_required_groups(read_only_groups)?;
+        }
+
+        self.register_profile(read_only_profile)?;
+        self.register_profile(ToolCatalogProfile::operator_default())?;
+        Ok(())
+    }
+
+    /// Return a copy of this catalog with standard generated profiles registered.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when group names are blank or the standard
+    /// profiles are already registered.
+    pub fn with_standard_profiles<I, S>(
+        mut self,
+        read_only_groups: I,
+    ) -> Result<Self, ToolInventoryError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.register_standard_profiles(read_only_groups)?;
+        Ok(self)
+    }
+
     /// Return all entries in stable name order.
     pub fn entries(&self) -> &[ToolCatalogEntry] {
         self.entries.as_slice()
@@ -1042,6 +1271,33 @@ impl ToolCatalog {
     /// Return all profiles in stable key order.
     pub fn profiles(&self) -> &[ToolCatalogProfile] {
         self.profiles.as_slice()
+    }
+
+    /// Return a named catalog profile.
+    pub fn profile(&self, key: &str) -> Option<&ToolCatalogProfile> {
+        let key = key.trim();
+        self.profiles.iter().find(|profile| profile.key() == key)
+    }
+
+    /// Return a named catalog profile or a stable error.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when the profile is not registered or the
+    /// requested key is blank.
+    pub fn require_profile(&self, key: &str) -> Result<&ToolCatalogProfile, ToolInventoryError> {
+        let key = normalize_non_empty("catalog profile key", key)?;
+        self.profile(&key)
+            .ok_or_else(|| ToolInventoryError::unknown_profile(key))
+    }
+
+    /// Return the standard generated read-only profile, when registered.
+    pub fn read_only_profile(&self) -> Option<&ToolCatalogProfile> {
+        self.profile(READ_ONLY_PROFILE_KEY)
+    }
+
+    /// Return the standard explicit operator profile, when registered.
+    pub fn operator_profile(&self) -> Option<&ToolCatalogProfile> {
+        self.profile(OPERATOR_PROFILE_KEY)
     }
 
     /// Return the catalog entry for a tool name.
@@ -1201,13 +1457,66 @@ impl ToolInventory {
         operation: ToolOperation,
         policy: &ToolInventoryPolicy,
     ) -> bool {
-        let trimmed = tool_name.trim();
+        self.decision(tool_name, operation, policy).allowed()
+    }
+
+    /// Explain whether a tool is allowed for an operation under a policy.
+    pub fn decision(
+        &self,
+        tool_name: &str,
+        operation: ToolOperation,
+        policy: &ToolInventoryPolicy,
+    ) -> ToolInventoryDecision {
+        self.decision_inner(tool_name, operation, policy, None)
+    }
+
+    /// Explain whether a tool is allowed for an operation through a named profile.
+    pub fn decision_for_profile(
+        &self,
+        tool_name: &str,
+        operation: ToolOperation,
+        profile: &ToolCatalogProfile,
+    ) -> ToolInventoryDecision {
+        self.decision_inner(
+            tool_name,
+            operation,
+            profile.policy(),
+            Some(profile.key().to_string()),
+        )
+    }
+
+    fn decision_inner(
+        &self,
+        tool_name: &str,
+        operation: ToolOperation,
+        policy: &ToolInventoryPolicy,
+        profile_key: Option<String>,
+    ) -> ToolInventoryDecision {
+        let trimmed = tool_name.trim().to_string();
         if trimmed.is_empty() {
-            return false;
+            return ToolInventoryDecision::denied(
+                trimmed,
+                operation,
+                profile_key,
+                ToolInventoryDenialReason::BlankToolName,
+            );
         }
-        match self.entries.get(trimmed) {
-            Some(capability) => policy.allows_capability(capability, operation),
-            None => policy.include_unregistered,
+        match self.entries.get(&trimmed) {
+            Some(capability) => match policy.denial_reason(capability, operation) {
+                Some(reason) => {
+                    ToolInventoryDecision::denied(trimmed, operation, profile_key, reason)
+                }
+                None => ToolInventoryDecision::permit(trimmed, operation, profile_key),
+            },
+            None if policy.include_unregistered => {
+                ToolInventoryDecision::permit(trimmed, operation, profile_key)
+            }
+            None => ToolInventoryDecision::denied(
+                trimmed,
+                operation,
+                profile_key,
+                ToolInventoryDenialReason::UnregisteredTool,
+            ),
         }
     }
 
@@ -1402,6 +1711,13 @@ impl ToolInventoryError {
         }
     }
 
+    fn unknown_profile(key: String) -> Self {
+        Self {
+            code: "TOOL_CATALOG_UNKNOWN_PROFILE".to_string(),
+            message: format!("tool catalog does not contain profile '{key}'"),
+        }
+    }
+
     fn invalid_value(field: &str, value: &str) -> Self {
         Self {
             code: "TOOL_INVENTORY_INVALID_VALUE".to_string(),
@@ -1519,7 +1835,8 @@ fn profile_value(profile: &ToolCatalogProfile) -> Value {
 mod tests {
     use super::{
         ToolCapability, ToolCatalog, ToolCatalogEntry, ToolCatalogExample, ToolCatalogProfile,
-        ToolExposure, ToolInventory, ToolInventoryPolicy, ToolOperation,
+        ToolExposure, ToolInventory, ToolInventoryDenialReason, ToolInventoryPolicy, ToolOperation,
+        OPERATOR_PROFILE_KEY, READ_ONLY_PROFILE_KEY,
     };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse};
     use crate::guarded_action::{GuardedActionOperationClass, GuardedActionPosture};
@@ -1916,6 +2233,85 @@ mod tests {
         );
         assert_eq!(snapshot["tools"][1]["name"], json!("items.update"));
         assert_eq!(snapshot["profiles"][0]["key"], json!("read-default"));
+    }
+
+    #[test]
+    fn standard_profiles_hide_operator_tools_by_default() {
+        let catalog = ToolCatalog::from_entries([
+            ToolCatalogEntry::new("items.search")
+                .with_group("read")
+                .with_risk_posture(GuardedActionPosture::read_only()),
+            ToolCatalogEntry::new("items.update")
+                .with_group("operator")
+                .with_operator_profile_gate()
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+        ])
+        .expect("catalog")
+        .with_standard_profiles(["read"])
+        .expect("standard profiles");
+        let inventory = catalog.inventory();
+        let read_only_profile = catalog
+            .read_only_profile()
+            .expect("standard read-only profile");
+        let operator_profile = catalog
+            .operator_profile()
+            .expect("standard operator profile");
+
+        assert_eq!(read_only_profile.key(), READ_ONLY_PROFILE_KEY);
+        assert_eq!(operator_profile.key(), OPERATOR_PROFILE_KEY);
+
+        let read_tools = inventory.filter_tools_for_profile(
+            vec!["items.search", "items.update"],
+            ToolOperation::List,
+            read_only_profile,
+            |tool| tool,
+        );
+        assert_eq!(read_tools, vec!["items.search"]);
+
+        let denied =
+            inventory.decision_for_profile("items.update", ToolOperation::Call, read_only_profile);
+        assert!(!denied.allowed());
+        assert_eq!(
+            denied.denial_reason,
+            Some(ToolInventoryDenialReason::ReadOnlyProfile)
+        );
+        assert_eq!(
+            denied.to_value()["denial"]["code"],
+            json!("TOOL_DENIED_READ_ONLY_PROFILE")
+        );
+
+        assert!(inventory
+            .decision_for_profile("items.update", ToolOperation::Call, operator_profile)
+            .allowed());
+        assert!(inventory
+            .decision_for_profile("items.search", ToolOperation::List, operator_profile)
+            .allowed());
+    }
+
+    #[test]
+    fn strict_operator_policy_requires_the_operator_feature_flag() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("items.update")
+            .with_group("operator")
+            .with_operator_profile_gate()
+            .with_risk_posture(GuardedActionPosture::guarded_apply())])
+        .expect("inventory");
+
+        let denied = inventory.decision(
+            "items.update",
+            ToolOperation::Call,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            denied.denial_reason,
+            Some(ToolInventoryDenialReason::FeatureFlagDisabled)
+        );
+
+        let allowed = inventory.decision(
+            "items.update",
+            ToolOperation::Call,
+            &ToolInventoryPolicy::strict_operator(),
+        );
+        assert!(allowed.allowed());
     }
 
     #[test]

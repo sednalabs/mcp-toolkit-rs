@@ -8,6 +8,8 @@ one:
 - stdio transport via `mcp-toolkit-server::stdio::StdioServerBuilder`;
 - typed intent tools plus explicit `ToolCatalog` metadata with derived
   `ToolInventory` checks;
+- standard `read_only` and `operator` catalog profiles, with
+  `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default live MCP surface;
 - strict tool-schema snapshot and installed-binary stdio smoke tests;
 - pinned GitHub Actions workflows for baseline validation, CodeQL Advanced,
   GitHub Code Quality coverage upload, dependency governance, and CodeQL query

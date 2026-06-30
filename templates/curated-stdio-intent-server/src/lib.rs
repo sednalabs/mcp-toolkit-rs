@@ -1,12 +1,18 @@
 use mcp_toolkit::rmcp::{
     self,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo, Tool},
-    schemars, tool, tool_handler, tool_router, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResult, Content, ListToolsResult, ServerCapabilities,
+        ServerInfo, Tool,
+    },
+    schemars,
+    service::RequestContext,
+    tool, tool_handler, tool_router, RoleServer, ServerHandler,
 };
 use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
-    ToolCatalog, ToolCatalogEntry, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
+    ToolCatalog, ToolCatalogEntry, ToolCatalogProfile, ToolDiscoveryMetadata, ToolInventory,
+    ToolInventoryDecision, ToolInventoryError, ToolOperation, READ_ONLY_PROFILE_KEY,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -22,6 +28,7 @@ pub struct DetailRequest {
 #[derive(Debug, Clone)]
 pub struct IntentServerConfig {
     pub service_name: String,
+    pub tool_profile: String,
 }
 
 impl IntentServerConfig {
@@ -29,6 +36,8 @@ impl IntentServerConfig {
         Self {
             service_name: std::env::var("EXAMPLE_MCP_SERVICE_NAME")
                 .unwrap_or_else(|_| "curated-stdio-intent-server".to_string()),
+            tool_profile: std::env::var("EXAMPLE_MCP_TOOL_PROFILE")
+                .unwrap_or_else(|_| READ_ONLY_PROFILE_KEY.to_string()),
         }
     }
 }
@@ -37,6 +46,7 @@ impl Default for IntentServerConfig {
     fn default() -> Self {
         Self {
             service_name: "curated-stdio-intent-server".to_string(),
+            tool_profile: READ_ONLY_PROFILE_KEY.to_string(),
         }
     }
 }
@@ -70,7 +80,8 @@ impl IntentServer {
                     ["detail", "tracking", "intent"],
                 ))
                 .with_handler("IntentServer::detail_by_tracking_id")?,
-        ])?;
+        ])?
+        .with_standard_profiles(["read"])?;
         let inventory = catalog.inventory();
         Ok(Self {
             config,
@@ -84,12 +95,39 @@ impl IntentServer {
         self.tool_router.list_all()
     }
 
+    pub fn tool_schema_snapshot_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Result<Vec<Tool>, ToolInventoryError> {
+        let profile = self.catalog.require_profile(profile_key)?;
+        Ok(self.inventory.filter_tools_for_profile(
+            self.tool_router.list_all(),
+            ToolOperation::List,
+            profile,
+            |tool| tool.name.as_ref(),
+        ))
+    }
+
     pub fn catalog(&self) -> &ToolCatalog {
         &self.catalog
     }
 
     pub fn inventory(&self) -> &ToolInventory {
         &self.inventory
+    }
+
+    fn active_profile(&self) -> Result<&ToolCatalogProfile, ToolInventoryError> {
+        self.catalog.require_profile(&self.config.tool_profile)
+    }
+
+    fn active_profile_decision(
+        &self,
+        tool_name: &str,
+        operation: ToolOperation,
+    ) -> Result<ToolInventoryDecision, ToolInventoryError> {
+        Ok(self
+            .inventory
+            .decision_for_profile(tool_name, operation, self.active_profile()?))
     }
 }
 
@@ -120,16 +158,63 @@ impl IntentServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for IntentServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let tool_name = request.name.as_ref().to_string();
+        let decision = self
+            .active_profile_decision(&tool_name, ToolOperation::Call)
+            .map_err(profile_error)?;
+        if !decision.allowed() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                decision.caller_message(),
+            )]));
+        }
+
+        let context = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(context).await
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Curated stdio intent server starter template.")
     }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        let decision = self
+            .active_profile_decision(name, ToolOperation::List)
+            .ok()?;
+        decision
+            .allowed()
+            .then(|| self.tool_router.get(name).cloned())
+            .flatten()
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult {
+            tools: self
+                .tool_schema_snapshot_for_profile(&self.config.tool_profile)
+                .map_err(profile_error)?,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+}
+
+fn profile_error(error: ToolInventoryError) -> rmcp::ErrorData {
+    rmcp::ErrorData::internal_error(error.to_string(), None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{IntentServer, IntentServerConfig};
-    use mcp_toolkit_core::tool_inventory::{ToolInventoryPolicy, ToolOperation};
+    use mcp_toolkit_core::tool_inventory::{OPERATOR_PROFILE_KEY, READ_ONLY_PROFILE_KEY};
 
     #[test]
     fn inventory_matches_exported_tool_names() {
@@ -141,15 +226,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["brief_target", "detail_by_tracking_id"]);
 
-        let policy = ToolInventoryPolicy::default();
+        let active_tools = server
+            .tool_schema_snapshot_for_profile(READ_ONLY_PROFILE_KEY)
+            .expect("read-only profile");
+        let active_names = active_tools
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(active_names, vec!["brief_target", "detail_by_tracking_id"]);
+        assert!(server.catalog().operator_profile().is_some());
         assert!(server
-            .inventory()
-            .is_allowed("brief_target", ToolOperation::List, &policy));
-        assert!(server.inventory().is_allowed(
-            "detail_by_tracking_id",
-            ToolOperation::Call,
-            &policy
-        ));
+            .tool_schema_snapshot_for_profile(OPERATOR_PROFILE_KEY)
+            .is_ok());
         assert_eq!(
             server.catalog().to_value()["tools"][0]["name"],
             "brief_target"
