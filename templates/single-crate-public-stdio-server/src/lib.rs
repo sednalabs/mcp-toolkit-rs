@@ -71,7 +71,7 @@ impl IntentServer {
                 ))
                 .with_handler("IntentServer::detail_by_tracking_id")?,
         ])?;
-        let inventory = catalog.inventory()?;
+        let inventory = catalog.inventory();
         Ok(Self {
             config,
             tool_router: Self::tool_router(),

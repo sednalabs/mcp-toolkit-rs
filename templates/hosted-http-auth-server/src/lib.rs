@@ -118,7 +118,7 @@ impl HostedHttpServer {
                 ["status", "health", "read"],
             ))
             .with_handler("HostedHttpServer::read_status")?])?;
-        let inventory = catalog.inventory()?;
+        let inventory = catalog.inventory();
         Ok(Self {
             tool_router: Self::tool_router(),
             catalog,

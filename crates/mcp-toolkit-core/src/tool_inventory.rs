@@ -1052,16 +1052,13 @@ impl ToolCatalog {
     }
 
     /// Build the inventory represented by this catalog.
-    ///
-    /// # Errors
-    /// Returns [`ToolInventoryError`] if an entry cannot be registered.
-    pub fn inventory(&self) -> Result<ToolInventory, ToolInventoryError> {
-        ToolInventory::from_capabilities(
-            self.entries
-                .iter()
-                .map(|entry| entry.capability.clone())
-                .collect::<Vec<_>>(),
-        )
+    pub fn inventory(&self) -> ToolInventory {
+        let entries = self
+            .entries
+            .iter()
+            .map(|entry| (entry.name().to_string(), entry.capability.clone()))
+            .collect();
+        ToolInventory { entries }
     }
 
     /// Build a schema object keyed by tool name.
@@ -1083,52 +1080,39 @@ impl ToolCatalog {
     }
 
     /// Search catalog inventory and return the standard tool-search envelope.
-    ///
-    /// # Errors
-    /// Returns [`ToolInventoryError`] when the catalog cannot build an inventory.
     pub fn search_response(
         &self,
         filter: &ToolSearchFilter,
         operation: ToolOperation,
         policy: &ToolInventoryPolicy,
-    ) -> Result<ToolSearchResponse, ToolInventoryError> {
-        let results = self.inventory()?.search(filter, operation, policy);
-        Ok(ToolSearchResponse::find_tools(
+    ) -> ToolSearchResponse {
+        let results = self.inventory().search(filter, operation, policy);
+        ToolSearchResponse::find_tools(
             filter.query.clone(),
             filter.group.clone(),
             filter.read_only,
             results,
         )
-        .with_schemas(Some(self.schemas_by_tool())))
+        .with_schemas(Some(self.schemas_by_tool()))
     }
 
     /// Search catalog inventory through a named catalog profile.
-    ///
-    /// # Errors
-    /// Returns [`ToolInventoryError`] when the catalog cannot build an inventory.
     pub fn search_response_for_profile(
         &self,
         filter: &ToolSearchFilter,
         operation: ToolOperation,
         profile: &ToolCatalogProfile,
-    ) -> Result<ToolSearchResponse, ToolInventoryError> {
+    ) -> ToolSearchResponse {
         self.search_response(filter, operation, profile.policy())
     }
 
     /// Build profile contracts for every registered profile.
-    ///
-    /// # Errors
-    /// Returns [`ToolInventoryError`] when the catalog cannot build an inventory.
-    pub fn profile_contracts(
-        &self,
-        operation: ToolOperation,
-    ) -> Result<Vec<ToolCatalogContract>, ToolInventoryError> {
-        let inventory = self.inventory()?;
-        Ok(self
-            .profiles
+    pub fn profile_contracts(&self, operation: ToolOperation) -> Vec<ToolCatalogContract> {
+        let inventory = self.inventory();
+        self.profiles
             .iter()
             .map(|profile| inventory.catalog_contract(profile, operation))
-            .collect())
+            .collect()
     }
 
     /// Serialize the catalog into a stable public artifact.
@@ -1888,7 +1872,7 @@ mod tests {
             .with_profile(profile)
             .expect("profile registration");
 
-        let inventory = catalog.inventory().expect("inventory");
+        let inventory = catalog.inventory();
         assert!(inventory.is_allowed(
             "items.search",
             ToolOperation::Call,
@@ -1911,7 +1895,6 @@ mod tests {
                 ToolOperation::List,
                 &catalog.profiles()[0],
             )
-            .expect("search response")
             .to_value();
         assert_eq!(response["openai_allowed_tools"], json!(["items.search"]));
         assert_eq!(
@@ -1919,9 +1902,7 @@ mod tests {
             json!("string")
         );
 
-        let contracts = catalog
-            .profile_contracts(ToolOperation::List)
-            .expect("contracts");
+        let contracts = catalog.profile_contracts(ToolOperation::List);
         assert_eq!(contracts.len(), 1);
         assert!(contracts[0].is_satisfied());
         assert_eq!(contracts[0].tool_names, vec!["items.search"]);
