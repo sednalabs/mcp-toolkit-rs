@@ -3,6 +3,32 @@ const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-a
 const PATTERN_MANIFESTS_DOC: &str = include_str!("../../../docs/pattern-manifests.md");
 const PATTERN_RECIPES_DOC: &str = include_str!("../../../docs/pattern-recipes.md");
 const PATTERN_MANIFEST_SCHEMA: &str = include_str!("../../../docs/pattern-manifest.schema.json");
+const PATTERN_MANIFEST_FILES: [(&str, &str); 6] = [
+    (
+        "cloudflare-mcp.json",
+        include_str!("../../../docs/pattern-manifests/cloudflare-mcp.json"),
+    ),
+    (
+        "ga4-mcp.json",
+        include_str!("../../../docs/pattern-manifests/ga4-mcp.json"),
+    ),
+    (
+        "google-admin-mcp.json",
+        include_str!("../../../docs/pattern-manifests/google-admin-mcp.json"),
+    ),
+    (
+        "google-search-console-mcp.json",
+        include_str!("../../../docs/pattern-manifests/google-search-console-mcp.json"),
+    ),
+    (
+        "keycloak-admin-mcp.json",
+        include_str!("../../../docs/pattern-manifests/keycloak-admin-mcp.json"),
+    ),
+    (
+        "postgres-mcp.json",
+        include_str!("../../../docs/pattern-manifests/postgres-mcp.json"),
+    ),
+];
 
 const REQUIRED_GATES: [&str; 7] = [
     "## Gate 1: Start From The Appropriate mcp-toolkit-rs Template",
@@ -183,40 +209,33 @@ fn pattern_recipes_cover_all_atlas_archetypes() {
 fn pattern_manifest_examples_are_present_for_reference_rows() {
     let manifest_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/pattern-manifests");
-    let manifest_dir = manifest_dir
-        .canonicalize()
-        .unwrap_or_else(|err| panic!("failed to canonicalize {}: {err}", manifest_dir.display()));
 
     let entries = std::fs::read_dir(&manifest_dir)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_dir.display()));
-    let mut manifest_count = 0;
+    let mut discovered = std::collections::BTreeSet::new();
 
     for entry in entries {
         let entry = entry.unwrap_or_else(|err| {
             panic!("failed to read entry in {}: {err}", manifest_dir.display())
         });
-        let path = entry.path();
-        let path = path
-            .canonicalize()
-            .unwrap_or_else(|err| panic!("failed to canonicalize {}: {err}", path.display()));
-        assert!(
-            path.starts_with(&manifest_dir),
-            "manifest path escaped manifest directory: {}",
-            path.display()
-        );
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+        let file_name = entry.file_name();
+        let file_name = file_name
+            .to_str()
+            .unwrap_or("<non-utf8 manifest filename>")
+            .to_owned();
+        if !file_name.ends_with(".json") {
             continue;
         }
+        discovered.insert(file_name);
+    }
 
-        manifest_count += 1;
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("<unknown manifest>");
-        let manifest = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    for (file_name, manifest) in PATTERN_MANIFEST_FILES {
+        assert!(
+            discovered.remove(file_name),
+            "expected pattern manifest file is missing: {file_name}"
+        );
         let value: serde_json::Value = serde_json::from_str(&manifest)
-            .unwrap_or_else(|err| panic!("invalid JSON in {}: {err}", path.display()));
+            .unwrap_or_else(|err| panic!("invalid JSON in {file_name}: {err}"));
 
         for field in [
             "schema_version",
@@ -239,7 +258,7 @@ fn pattern_manifest_examples_are_present_for_reference_rows() {
     }
 
     assert!(
-        manifest_count >= 6,
-        "expected at least six reference pattern manifests, found {manifest_count}"
+        discovered.is_empty(),
+        "unexpected pattern manifest files without include_str! coverage: {discovered:?}"
     );
 }
