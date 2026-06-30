@@ -190,10 +190,7 @@ fn pattern_manifest_examples_are_present_for_reference_rows() {
 
     for entry in entries {
         let entry = entry.unwrap_or_else(|err| {
-            panic!(
-                "failed to read entry in {}: {err}",
-                manifest_dir.display()
-            )
+            panic!("failed to read entry in {}: {err}", manifest_dir.display())
         });
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
