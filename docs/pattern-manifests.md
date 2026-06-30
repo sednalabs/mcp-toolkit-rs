@@ -7,9 +7,10 @@ human-readable atlas and future generator or documentation tooling.
 Use manifests when a pattern is real enough to reuse but not yet ready to
 become a toolkit API. The manifest records the evidence without copying
 provider clients, deployment policy, or product vocabulary into this toolkit.
-The `mcp-toolkit patterns` CLI command is generated from
-`docs/pattern-manifests/*.json`, so new server authors can choose an archetype
-without opening every reference repository first.
+The `mcp-toolkit patterns` CLI command uses manifest evidence generated from
+`docs/pattern-manifests/*.json`, so new server authors can inspect an archetype
+without opening every reference repository first. Add a registry entry when a
+new manifest introduces a new archetype.
 
 ## Files
 

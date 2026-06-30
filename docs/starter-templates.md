@@ -53,8 +53,10 @@ cargo clippy --manifest-path templates/curated-stdio-intent-server/Cargo.toml --
 cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
 ```
 
-This template is intentionally lean. It does not carry its own `.github`
-directory or standalone release scaffolding.
+This template is intentionally lean. It carries only a minimal
+`.github/workflows/rust-baseline.yml` for generated-project smoke validation;
+it does not carry the standalone public template's CodeQL, coverage, dependency
+governance, license, or release scaffolding.
 
 ## Single-Crate Public Stdio Server
 
@@ -121,10 +123,18 @@ MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS=1 cargo test --manifest-path templates/single-
 Review the JSON diff before merging. A schema snapshot change is a public tool
 contract change for that template.
 
-For repositories that carry the helper wrapper, you can also use:
+From this toolkit repository root, you can use the helper wrapper against an
+in-repo template:
 
 ```bash
 ./scripts/rebaseline_tool_schema_snapshot.sh templates/single-crate-public-stdio-server/Cargo.toml
+```
+
+Inside a generated standalone repository that carries the helper wrapper, use
+the copied-repo form:
+
+```bash
+./scripts/rebaseline_tool_schema_snapshot.sh
 ```
 
 ## GitHub Actions
