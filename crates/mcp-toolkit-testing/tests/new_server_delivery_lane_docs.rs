@@ -184,15 +184,27 @@ fn pattern_manifest_examples_are_present_for_reference_rows() {
     let manifest_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/pattern-manifests");
 
-    for file_name in [
-        "google-admin-mcp.json",
-        "ga4-mcp.json",
-        "google-search-console-mcp.json",
-        "cloudflare-mcp.json",
-        "postgres-mcp.json",
-        "keycloak-admin-mcp.json",
-    ] {
-        let path = manifest_dir.join(file_name);
+    let entries = std::fs::read_dir(&manifest_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_dir.display()));
+    let mut manifest_count = 0;
+
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read entry in {}: {err}",
+                manifest_dir.display()
+            )
+        });
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+
+        manifest_count += 1;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("<unknown manifest>");
         let manifest = std::fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
         let value: serde_json::Value = serde_json::from_str(&manifest)
@@ -217,4 +229,9 @@ fn pattern_manifest_examples_are_present_for_reference_rows() {
             );
         }
     }
+
+    assert!(
+        manifest_count >= 6,
+        "expected at least six reference pattern manifests, found {manifest_count}"
+    );
 }
