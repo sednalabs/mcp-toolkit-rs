@@ -96,11 +96,12 @@ cargo test --workspace --all-targets --all-features
 For a new Rust MCP server, start with the smallest slice that gives you a
 stable public surface:
 
-1. Use `mcp-toolkit-core::tool_inventory` to register the tools your server can
+1. Use `mcp-toolkit-core::tool_inventory::ToolCatalog` to declare the tools,
+   schemas, examples, handler symbols, and inventory metadata your server can
    expose.
 2. Define native catalog profiles with `ToolCatalogProfile` when a server has
    large or role-shaped tool surfaces. Emit `ToolCatalogContract` artifacts from
-   the same inventory and validate them with
+   the same catalog-derived inventory and validate them with
    `mcp_toolkit_testing::catalog_profile_contract` so required tools and groups
    are probe-visible without adding production `find_tools` workarounds.
 3. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported

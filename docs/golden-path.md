@@ -22,7 +22,7 @@ shape and give reviewers a concrete crate-ownership checklist.
 
 | Shape | Use when | Toolkit defaults |
 | --- | --- | --- |
-| Curated stdio | The MCP server is process-local and exposes a small intentional tool surface. | `mcp-toolkit-server::stdio::StdioServerBuilder`, `ToolInventory`, schema snapshots, and stdio contract tests. |
+| Curated stdio | The MCP server is process-local and exposes a small intentional tool surface. | `mcp-toolkit-server::stdio::StdioServerBuilder`, `ToolCatalog`, schema snapshots, and stdio contract tests. |
 | Hosted HTTP/auth | The MCP server serves Streamable HTTP and must publish OAuth Protected Resource Metadata. | `LocalMcpHttpServerBuilder`, `AuthSurfaceBuilder`, `HttpBindSafety`, host guards, bearer challenges, and auth-surface contract tests. |
 | Service adoption | An existing server wants less runtime boilerplate. | Adopt the smallest helper that removes repeated wiring while preserving the service's public contract. |
 
@@ -31,9 +31,10 @@ deployment's trust model, keep that logic in the service repository and document
 the pattern as an adopter note instead of moving it into the toolkit.
 
 The toolkit intentionally does not ship a monolithic `ToolkitMcpServer`
-abstraction. Prefer composing `StdioServerBuilder`, HTTP route builders, auth-surface
-helpers, and `ToolInventory` until repeated evidence shows a higher-level
-wrapper would remove real duplication without hiding trust boundaries.
+abstraction. Prefer composing `StdioServerBuilder`, HTTP route builders,
+auth-surface helpers, and `ToolCatalog`/`ToolInventory` until repeated evidence
+shows a higher-level wrapper would remove real duplication without hiding trust
+boundaries.
 
 ## 2. Start From A Maintained Template
 

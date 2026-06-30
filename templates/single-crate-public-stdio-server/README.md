@@ -6,7 +6,8 @@ and security scaffolding that public service repositories usually need on day
 one:
 
 - stdio transport via `mcp-toolkit-server::stdio::StdioServerBuilder`;
-- typed intent tools plus explicit `ToolInventory` metadata;
+- typed intent tools plus explicit `ToolCatalog` metadata with derived
+  `ToolInventory` checks;
 - strict tool-schema snapshot and installed-binary stdio smoke tests;
 - pinned GitHub Actions workflows for baseline validation, CodeQL Advanced,
   GitHub Code Quality coverage upload, dependency governance, and CodeQL query

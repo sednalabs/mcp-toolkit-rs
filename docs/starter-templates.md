@@ -41,7 +41,8 @@ It demonstrates:
   tools are callable at the actual MCP boundary without a direct `rmcp`
   dependency in the starter;
 - typed tool input schemas;
-- explicit `ToolInventory` metadata for the exposed tools;
+- explicit `ToolCatalog` metadata for the exposed tools, with `ToolInventory`
+  derived from the catalog;
 - `assert_tool_schema_snapshot` drift protection;
 - `stdio_contract::assert_stdio_tools_list` for a JSON-RPC stdio smoke test
   that initializes the server and runs `tools/list`.

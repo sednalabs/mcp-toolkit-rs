@@ -7,7 +7,8 @@ It demonstrates:
 
 - `mcp-toolkit-server::stdio::StdioServerBuilder` for the stdio transport;
 - an rmcp `ToolRouter` with typed input schemas;
-- `mcp-toolkit-core::tool_inventory` for explicit tool exposure metadata;
+- `mcp-toolkit-core::tool_inventory::ToolCatalog` for explicit tool exposure
+  metadata with derived inventory checks;
 - `mcp-toolkit-testing::assert_tool_schema_snapshot` for contract drift;
 - a real stdio JSON-RPC smoke test that initializes and runs `tools/list`.
 

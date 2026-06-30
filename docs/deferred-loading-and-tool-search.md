@@ -10,13 +10,15 @@ how to keep tool discovery lightweight without making the server surface vague.
 - tool availability depends on session state, backend capability, or feature flags
 - users need a search or discovery step before the final tool list is materialized
 
-If your tool list is small and static, start with `ToolInventory` and skip the
-rest of this guide.
+If your tool list is small and static, start with `ToolCatalog` plus the
+derived `ToolInventory`, then skip the rest of this guide.
 
 ## Recommended split
 
-1. Use `ToolInventory` for the authoritative, exported tool surface.
-   - Keep it explicit so `tools/list` reflects the real contract.
+1. Use `ToolCatalog` for the authoritative declaration and derive
+   `ToolInventory` for the exported tool surface.
+   - Keep the catalog explicit so `tools/list`, docs, schemas, and search
+     metadata reflect the same contract.
 2. Use `ToolListTracker` when that surface can change per session.
    - It tells you when a session needs `notifications/tools/list_changed`.
 3. Use deferred loading for heavy implementation details.
@@ -101,8 +103,10 @@ another workflow-level review gate applies.
 
 ## When to choose each helper
 
+- `ToolCatalog`
+  - use for explicit tool declarations, schemas, examples, and generated docs
 - `ToolInventory`
-  - use for explicit capability registration and method-aware exposure
+  - use for the derived capability registration and method-aware exposure checks
 - `openai_tool_search`
   - use for OpenAI MCP `defer_loading` and `tool_search` config payloads
 - `ToolListTracker`
@@ -114,6 +118,8 @@ another workflow-level review gate applies.
 
 ## Rule of thumb
 
+If you are asking "which tools exist and what metadata should ship with them?",
+use `ToolCatalog`.
 If you are asking "which tools should be visible?", use `ToolInventory`.
 If you are asking "did the visible tool list change for this session?", use
 `ToolListTracker`.
