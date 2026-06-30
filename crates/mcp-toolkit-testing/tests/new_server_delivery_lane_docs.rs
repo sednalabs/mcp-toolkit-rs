@@ -183,6 +183,9 @@ fn pattern_recipes_cover_all_atlas_archetypes() {
 fn pattern_manifest_examples_are_present_for_reference_rows() {
     let manifest_dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/pattern-manifests");
+    let manifest_dir = manifest_dir
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("failed to canonicalize {}: {err}", manifest_dir.display()));
 
     let entries = std::fs::read_dir(&manifest_dir)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_dir.display()));
@@ -193,6 +196,14 @@ fn pattern_manifest_examples_are_present_for_reference_rows() {
             panic!("failed to read entry in {}: {err}", manifest_dir.display())
         });
         let path = entry.path();
+        let path = path
+            .canonicalize()
+            .unwrap_or_else(|err| panic!("failed to canonicalize {}: {err}", path.display()));
+        assert!(
+            path.starts_with(&manifest_dir),
+            "manifest path escaped manifest directory: {}",
+            path.display()
+        );
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
