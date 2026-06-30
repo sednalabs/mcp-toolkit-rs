@@ -36,6 +36,47 @@ sends `notifications/initialized`, calls `tools/list`, and compares the
 exported tool names. It is intended to catch runtime wiring mistakes that a
 direct `ToolRouter` unit test cannot see.
 
+Use `stdio_contract::assert_stdio_tool_response_excludes_substrings` when the
+same process-boundary test should also prove a starter or readback tool does
+not serialize common secret material:
+
+```rust
+use mcp_toolkit_testing::stdio_contract::{
+    assert_stdio_tool_response_excludes_substrings, assert_stdio_tools_list,
+};
+use serde_json::json;
+
+assert_stdio_tools_list(env!("CARGO_BIN_EXE_my_server"), &["brief_target"]);
+assert_stdio_tool_response_excludes_substrings(
+    env!("CARGO_BIN_EXE_my_server"),
+    "brief_target",
+    json!({"target": "probe"}),
+    &["BEGIN PRIVATE KEY", "GOOGLE_APPLICATION_CREDENTIALS"],
+);
+```
+
+## Catalog Profile Contracts
+
+Use `catalog_profile_contract` helpers when a server ships multiple catalog
+profiles, especially the standard `read_only` and `operator` surfaces emitted
+by the maintained templates:
+
+```rust
+use mcp_toolkit_core::tool_inventory::{ToolOperation, READ_ONLY_PROFILE_KEY};
+use mcp_toolkit_testing::catalog_profile_contract::{
+    assert_tool_catalog_profile_contains_tools, assert_tool_catalog_profile_contract,
+};
+
+let profile = server.catalog().require_profile(READ_ONLY_PROFILE_KEY)?;
+let contract = server.inventory().catalog_contract(profile, ToolOperation::List);
+assert_tool_catalog_profile_contract(&contract);
+assert_tool_catalog_profile_contains_tools(&contract.to_value(), &["brief_target"]);
+```
+
+These tests protect both sides of profile-gated discovery: the default profile
+must keep first-run clients narrow, while the operator profile remains visible
+to reviewers and explicit deployments.
+
 ## Response Safety Contracts
 
 Use `response_safety_contract` helpers for proof-only and sensitive-adjacent
@@ -208,6 +249,8 @@ New toolkit-built servers should include at least:
 
 - one strict tool-schema snapshot;
 - one stdio or HTTP runtime smoke test, matching the served transport;
+- catalog-profile tests when the server exposes read-only, scratchpad,
+  operator, or other filtered discovery surfaces;
 - response-safety assertions for proof-only tools, sensitive reads, and
   redacted administrative readbacks;
 - auth metadata and bearer-challenge contract tests for hosted HTTP servers;

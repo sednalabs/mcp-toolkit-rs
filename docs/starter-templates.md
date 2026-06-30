@@ -46,9 +46,13 @@ It demonstrates:
 - generated `read_only` and `operator` profiles, with the live `tools/list`,
   `get_tool`, and `call_tool` path using `EXAMPLE_MCP_TOOL_PROFILE=read_only`
   by default;
+- catalog-profile contract tests that pin the expected `read_only` and
+  `operator` surfaces;
 - `assert_tool_schema_snapshot` drift protection;
 - `stdio_contract::assert_stdio_tools_list` for a JSON-RPC stdio smoke test
-  that initializes the server and runs `tools/list`.
+  that initializes the server and runs `tools/list`;
+- `spec/mcp_probe_stdio_smoke.v1.json` for an optional scripted MCP client
+  probe of the generated binary.
 
 Validate it with:
 
@@ -75,6 +79,8 @@ It demonstrates:
 - vendored CodeQL workflow-security queries for downstream reuse;
 - standalone GitHub workflows for baseline validation, CodeQL, coverage, and
   dependency governance;
+- catalog-profile, schema-snapshot, stdio-smoke, response-safety, and
+  `mcp-probe` scenario files carried from the curated stdio starter;
 - a public-safe `.gitignore`, `LICENSE`, and starter `deny.toml`;
 - repo-local governance and snapshot-rebaseline helper scripts.
 
@@ -109,7 +115,9 @@ It demonstrates:
   type lists;
 - pre-auth bad-host `/mcp` checks using
   `assert_forbidden_without_bearer_challenge`;
-- tool-schema snapshots for exported tools.
+- tool-schema snapshots for exported tools;
+- `spec/mcp_probe_http_auth_smoke.v1.json` for a bearer-token-backed scripted
+  MCP client probe against a running local server.
 
 Validate it with:
 
@@ -134,6 +142,31 @@ MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS=1 cargo test --manifest-path templates/single-
 
 Review the JSON diff before merging. A schema snapshot change is a public tool
 contract change for that template.
+
+## Probe Scenario Workflow
+
+Each maintained template includes a generated `spec/mcp_probe_*.v1.json`
+scenario. These scripts are optional local and CI probes for teams that carry a
+compatible MCP probe runner. They are deliberately committed beside the
+snapshots so a reviewer can see the first runtime call a generated server is
+expected to satisfy.
+
+For stdio templates, allow stdio process launch and run the generated scenario:
+
+```bash
+MCP_PROBE_ALLOW_STDIO=1 \
+node /path/to/mcp-probe/dist/index.js run \
+  --script spec/mcp_probe_stdio_smoke.v1.json
+```
+
+For the hosted HTTP/auth template, start the local server first, provide the
+test access token named by the scenario, and allow loopback hosts:
+
+```bash
+MCP_PROBE_ALLOWED_HOSTS=127.0.0.1,localhost \
+node /path/to/mcp-probe/dist/index.js run \
+  --script spec/mcp_probe_http_auth_smoke.v1.json
+```
 
 From this toolkit repository root, you can use the helper wrapper against an
 in-repo template:
