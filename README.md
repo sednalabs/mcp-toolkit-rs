@@ -40,8 +40,10 @@ Gemini CLI authentication.
 For the complete server creation, validation, review, and release route, start
 with `docs/golden-path.md`. Use `docs/reference-server-atlas.md` to choose a
 living reference pattern from existing MCP servers before adding new toolkit
-abstractions. For a copyable checklist that turns that route into a repeatable
-implementation lane, use `docs/new-server-delivery-lane.md`. For the
+abstractions. Use `docs/pattern-manifests.md` and `docs/pattern-recipes.md`
+when you need the machine-readable pattern shape and the implementation recipe
+that goes with it. For a copyable checklist that turns that route into a
+repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For the
 operator-facing details that make a server easy to try and debug, use
 `docs/easy-server-ergonomics.md`. For legacy systems with partial APIs, admin
 HTML, scheduled jobs, or private exports, use
@@ -215,6 +217,10 @@ Security reporting guidance is documented in `SECURITY.md`.
   promotion.
 - `docs/observability-evolution.md` and `docs/observability-rollout.md` cover
   observability adapters and adoption.
+- `docs/pattern-manifests.md` defines the machine-readable reference pattern
+  manifest contract and links the example manifest files.
+- `docs/pattern-recipes.md` turns atlas archetypes into implementation recipes
+  with crate ownership, proof expectations, and reference manifests.
 - `docs/public-landing-policy.md` defines the public repository landing,
   hosted-check, and break-glass remediation policy.
 - `docs/reference-server-atlas.md` maps reusable server patterns to real MCP

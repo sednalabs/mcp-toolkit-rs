@@ -38,6 +38,11 @@ First check `docs/reference-server-atlas.md` for the closest living reference
 service or adjacent auth/policy reference. Record the row used in the evidence
 block so reviewers can see which real pattern informed the scaffold.
 
+If a row fits, also record the matching `docs/pattern-manifests/*.json` file
+and recipe from `docs/pattern-recipes.md`. The manifest should identify the
+transport, auth modes, tool-surface posture, profiles, scratchpad posture, and
+conformance expectations that the implementation is borrowing.
+
 Use `templates/curated-stdio-intent-server` when the MCP server is
 process-local and should expose a compact curated tool surface over stdio.
 
@@ -55,6 +60,7 @@ seam is safer than copying a full template.
 Required evidence:
 
 - the reference atlas row used, or why no row fits;
+- the pattern manifest and recipe used, or why no manifest fits yet;
 - the selected template or adoption helper;
 - the transport and trust boundary;
 - the reason any raw `rmcp` runtime wiring remains;
@@ -231,4 +237,5 @@ Close the work item only when each checklist line has concrete evidence.
 Keep this lane stable and boring. Add a new gate only when a repeated failure
 mode cannot be caught by strengthening one of the existing gates. When a new
 template or transport shape is added, update this document, `docs/golden-path.md`,
-and the doc contract test that pins the lane gates.
+`docs/reference-server-atlas.md`, `docs/pattern-manifests.md`,
+`docs/pattern-recipes.md`, and the doc contract test that pins the lane gates.
