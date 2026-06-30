@@ -97,6 +97,13 @@ Never include access tokens, refresh tokens, bearer headers, private keys,
 client secrets, raw credential JSON, service-account private-key material, or
 full provider responses in status output.
 
+Use `mcp_toolkit_auth::provider_auth::ProviderAuthStatus` for this shape when a
+server is implemented in Rust. Populate credential sources with
+`ProviderCredentialSourceStatus`, quota state with `ProviderQuotaProjectStatus`,
+and probe results with `ProviderAuthVerification`. Those types are deliberately
+secret-safe status containers; credential loading and provider probing still
+belong in the server or provider SDK.
+
 ## Credential Source Order
 
 Use provider-standard credentials when they exist. A typical precedence order is:
@@ -141,6 +148,19 @@ When the server owns browser OAuth directly, use
 a Desktop OAuth client for dynamic loopback ports. For SSH or remote hosts,
 print the authorization URL and use a loopback port forward, or use a two-step
 MCP login tool that starts the listener and completes after the callback.
+
+For Google ADC paths, use `mcp_toolkit_auth::provider_auth` helpers to keep
+scopes and diagnostics consistent:
+
+- `GoogleProviderAuthConfig::adc_login_scopes()` and
+  `google_adc_login_command()` include
+  `https://www.googleapis.com/auth/cloud-platform` with provider read scopes;
+- `classify_google_provider_auth_error()` maps common Google failures into
+  stable kinds such as `missing_quota_project`, `api_disabled`,
+  `missing_scope`, `permission_denied`, `oauth_app_blocked`, and
+  `reauth_required`;
+- `google_quota_project_next_steps()` returns the canonical ADC quota-project
+  remediation sequence.
 
 For unattended Google deployments, prefer a service-account file or workload
 identity path. Configure the service-account credential with the provider's
