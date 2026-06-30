@@ -81,6 +81,8 @@ fn new_server_delivery_lane_records_reviewable_evidence_block() {
 #[test]
 fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
     for surface in [
+        "mcp-toolkit --bin mcp-toolkit -- new",
+        "mcp-toolkit templates",
         "templates/curated-stdio-intent-server",
         "templates/single-crate-public-stdio-server",
         "templates/hosted-http-auth-server",

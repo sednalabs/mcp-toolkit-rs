@@ -135,6 +135,15 @@ stdio intent tools and `templates/hosted-http-auth-server` for hosted HTTP with
 OAuth Protected Resource Metadata, headless device-auth metadata, bearer
 challenges, host guarding, schema snapshots, and contract tests.
 
+To start from a maintained template through the toolkit front door:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
+```
+
+Run `cargo run -p mcp-toolkit --bin mcp-toolkit -- templates` to list the
+available template ids.
+
 For existing service adoption, migrate one runtime seam at a time and prove the
 before/after contract through GitHub-hosted validation. The checklist in
 `docs/golden-path.md` defines the expected handoff, review gate, and release
