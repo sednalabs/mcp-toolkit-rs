@@ -150,6 +150,9 @@ mod tests {
             ToolOperation::Call,
             &policy
         ));
-        assert_eq!(server.catalog().to_value()["tools"][0]["name"], "brief_target");
+        assert_eq!(
+            server.catalog().to_value()["tools"][0]["name"],
+            "brief_target"
+        );
     }
 }
