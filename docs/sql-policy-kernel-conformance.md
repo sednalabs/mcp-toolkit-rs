@@ -69,13 +69,12 @@ uploads `policy-kernel-consumption-<run_id>` with:
 
 Public policy-kernel repositories can be consumed by passing
 `policy_kernel_repository` to `workflow_dispatch` without an extra secret.
-Private policy-kernel repositories should be supplied through repository
-settings or secrets rather than hard-coded in this public repository. If the
-configured policy-kernel target is private or inaccessible, the workflow
-requires a least-privilege `POLICY_KERNEL_READ_TOKEN` before it can perform
-cross-repository checkout or artifact download. Pull request runs without a
-configured target, or without the required read token for a private target, emit
-a skipped manifest; manual dispatch fails early with a clear setup error.
+Private policy-kernel repositories are intentionally out of scope for this
+public workflow. If the configured policy-kernel target is private or
+inaccessible, the workflow emits a skipped manifest on pull requests and fails
+manual dispatch with a clear setup error. Run private target validation from a
+separate trusted environment rather than adding secret-backed private checkout
+logic to this public repository.
 
 Use `workflow_dispatch` to test against a non-default policy-kernel ref:
 

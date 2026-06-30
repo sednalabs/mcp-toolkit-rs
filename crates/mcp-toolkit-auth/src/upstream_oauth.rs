@@ -1946,8 +1946,9 @@ fn normalize_callback_path(path: &str) -> String {
 }
 
 fn format_loopback_redirect_uri(local_addr: SocketAddr, callback_path: &str) -> String {
+    let loopback_scheme = "http://"; // DevSkim: ignore DS137138 OAuth loopback redirect URI
     format!(
-        "http://{}{}",
+        "{loopback_scheme}{}{}",
         local_addr,
         normalize_callback_path(callback_path)
     )
@@ -2040,11 +2041,10 @@ fn parse_loopback_request(request: &str) -> Result<LoopbackCallback, UpstreamOAu
     if method != "GET" || target.is_empty() {
         return Err(UpstreamOAuthError::CallbackMissingCode);
     }
-    let url = Url::parse(&format!("http://127.0.0.1{target}")).map_err(|_| {
-        UpstreamOAuthError::InvalidUrl {
-            field: "loopback_callback",
-            value: target.to_string(),
-        }
+    let loopback_url = format!("http://127.0.0.1{target}"); // DevSkim: ignore DS137138 loopback callback parser
+    let url = Url::parse(&loopback_url).map_err(|_| UpstreamOAuthError::InvalidUrl {
+        field: "loopback_callback",
+        value: target.to_string(),
     })?;
     let mut callback = LoopbackCallback {
         code: None,
@@ -2208,7 +2208,7 @@ mod tests {
             "client-id",
             None,
             "https://example.com/auth",
-            "http://127.0.0.1/token",
+            "http://127.0.0.1/token", // DevSkim: ignore DS137138 loopback test fixture
         )
         .expect_err("plain http endpoint");
 
@@ -2223,7 +2223,7 @@ mod tests {
             "client-id",
             None,
             "https://example.com/auth",
-            "http://127.0.0.1/token",
+            "http://127.0.0.1/token", // DevSkim: ignore DS137138 loopback test fixture
         )
         .expect("loopback emulator endpoint");
     }
@@ -2234,7 +2234,7 @@ mod tests {
             "client-id",
             None,
             "https://example.com/auth",
-            "http://192.0.2.1/token",
+            "http://192.0.2.1/token", // DevSkim: ignore DS137138 rejected negative test fixture
         )
         .expect_err("off-host http endpoint");
 
@@ -3277,7 +3277,10 @@ mod tests {
 
         let redirect = format_loopback_redirect_uri(addr, "oauth/callback");
 
-        assert_eq!(redirect, "http://[::1]:8091/oauth/callback");
+        assert_eq!(
+            redirect,
+            "http://[::1]:8091/oauth/callback" // DevSkim: ignore DS137138 loopback test fixture
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3388,20 +3391,20 @@ mod tests {
     #[test]
     fn web_client_loopback_redirect_matcher_accepts_canonical_aliases() {
         assert!(google_web_redirect_uri_matches(
-            "http://localhost/oauth/callback",
-            "http://[::1]:49152/oauth/callback"
+            "http://localhost/oauth/callback", // DevSkim: ignore DS137138 loopback test fixture
+            "http://[::1]:49152/oauth/callback"  // DevSkim: ignore DS137138 loopback test fixture
         ));
         assert!(google_web_redirect_uri_matches(
-            "http://[::1]/oauth/callback",
-            "http://127.0.0.1:49152/oauth/callback"
+            "http://[::1]/oauth/callback", // DevSkim: ignore DS137138 loopback test fixture
+            "http://127.0.0.1:49152/oauth/callback" // DevSkim: ignore DS137138 loopback test fixture
         ));
         assert!(!google_web_redirect_uri_matches(
-            "http://127.0.0.2/oauth/callback",
-            "http://127.0.0.1:49152/oauth/callback"
+            "http://127.0.0.2/oauth/callback", // DevSkim: ignore DS137138 negative loopback test fixture
+            "http://127.0.0.1:49152/oauth/callback" // DevSkim: ignore DS137138 loopback test fixture
         ));
         assert!(!google_web_redirect_uri_matches(
-            "http://localhost/oauth/callback",
-            "http://127.0.0.1:49152/other"
+            "http://localhost/oauth/callback", // DevSkim: ignore DS137138 loopback test fixture
+            "http://127.0.0.1:49152/other"     // DevSkim: ignore DS137138 loopback test fixture
         ));
     }
 
@@ -3458,7 +3461,7 @@ mod tests {
                 let _ = stream.write_all(response.as_bytes());
             }
         });
-        (format!("http://{addr}/token"), requests)
+        (format!("http://{addr}/token"), requests) // DevSkim: ignore DS137138 loopback test fixture
     }
 
     fn spawn_token_endpoint_sequence(
@@ -3488,7 +3491,7 @@ mod tests {
                 let _ = stream.write_all(response.as_bytes());
             }
         });
-        (format!("http://{addr}/token"), requests)
+        (format!("http://{addr}/token"), requests) // DevSkim: ignore DS137138 loopback test fixture
     }
 
     fn spawn_redirecting_token_endpoint(
@@ -3512,7 +3515,7 @@ mod tests {
                 let _ = stream.write_all(response.as_bytes());
             }
         });
-        (format!("http://{addr}/token"), requests)
+        (format!("http://{addr}/token"), requests) // DevSkim: ignore DS137138 loopback test fixture
     }
 
     fn spawn_redirect_target() -> (
@@ -3552,6 +3555,6 @@ mod tests {
                 };
             }
         });
-        (format!("http://{addr}/redirect-target"), requests, handle)
+        (format!("http://{addr}/redirect-target"), requests, handle) // DevSkim: ignore DS137138 loopback test fixture
     }
 }
