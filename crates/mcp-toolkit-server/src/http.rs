@@ -433,6 +433,26 @@ pub struct LocalMcpHttpServerBuilder {
     auth_layer: Option<AuthSurfaceLayer>,
 }
 
+impl std::fmt::Debug for LocalMcpHttpServerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut builder = f.debug_struct("LocalMcpHttpServerBuilder");
+        builder
+            .field("runtime", &self.runtime)
+            .field("auth_enabled", &self.auth_enabled)
+            .field("include_health", &self.include_health)
+            .field("include_host_guard", &self.include_host_guard)
+            .field(
+                "include_oauth_not_configured",
+                &self.include_oauth_not_configured,
+            )
+            .field("mcp_path", &self.mcp_path)
+            .field("resource_path", &self.resource_path);
+        #[cfg(feature = "auth")]
+        builder.field("auth_layer", &self.auth_layer.is_some());
+        builder.finish()
+    }
+}
+
 impl Default for LocalMcpHttpServerBuilder {
     fn default() -> Self {
         Self {

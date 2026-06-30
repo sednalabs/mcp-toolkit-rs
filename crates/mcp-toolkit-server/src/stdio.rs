@@ -64,8 +64,9 @@ impl From<tokio::task::JoinError> for StdioServeError {
 }
 
 /// Opinionated builder for serving a process-local stdio MCP server.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct StdioServerBuilder;
+pub struct StdioServerBuilder {}
 
 impl StdioServerBuilder {
     /// Builds a stdio server builder.
@@ -79,7 +80,7 @@ impl StdioServerBuilder {
     /// # Panics
     /// This function does not panic.
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
     /// Serves an MCP server over stdio and waits until the service exits.
