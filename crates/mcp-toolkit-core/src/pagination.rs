@@ -19,7 +19,7 @@
 //!   return MCP `Invalid params` instead of silently restarting pagination.
 //!
 //! ## References
-//! * [MCP pagination](https://modelcontextprotocol.io/specification/draft/server/utilities/pagination)
+//! * [MCP pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)
 
 use rmcp::model::PaginatedRequestParams;
 use std::error::Error;

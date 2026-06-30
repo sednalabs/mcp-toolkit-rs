@@ -25,7 +25,7 @@
 //!   authorization/permission requirements.
 //!
 //! ## References
-//! * MCP Tool Discovery: https://modelcontextprotocol.io/docs/concepts/tools
+//! * MCP tools: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};

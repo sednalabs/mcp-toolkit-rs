@@ -13,7 +13,7 @@
 //! * **Input Validation**: All session identifiers and event IDs are normalized and validated.
 //!
 //! ## References
-//! * **MCP HTTP Transport**: https://modelcontextprotocol.io/docs/concepts/transports#http-sse
+//! * **MCP Streamable HTTP Transport**: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
 //!
 //! ## Notes
 //! * Event stores can be memory-based or persistent (via SQLite).

@@ -9,6 +9,7 @@ use mcp_toolkit::rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router, RoleServer, ServerHandler,
 };
+use mcp_toolkit::server::tools::list_tools_result;
 use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
     ToolCatalog, ToolCatalogEntry, ToolCatalogProfile, ToolDiscoveryMetadata, ToolInventory,
@@ -193,16 +194,13 @@ impl ServerHandler for IntentServer {
 
     async fn list_tools(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
+        request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-        Ok(ListToolsResult {
-            tools: self
-                .tool_schema_snapshot_for_profile(&self.config.tool_profile)
-                .map_err(profile_error)?,
-            meta: None,
-            next_cursor: None,
-        })
+        let tools = self
+            .tool_schema_snapshot_for_profile(&self.config.tool_profile)
+            .map_err(profile_error)?;
+        list_tools_result(tools, request.as_ref())
     }
 }
 

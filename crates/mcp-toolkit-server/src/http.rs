@@ -4,14 +4,14 @@
 //!
 //! ## Rationale
 //! HTTP MCP services commonly repeat bind safety checks, bounded session
-//! construction, optional stateless fallback, host guarding, health routes, and
+//! construction, optional stateless fallback, host/origin guarding, health routes, and
 //! `/mcp` request routing. This module packages those seams while preserving
 //! service-owned state and policy decisions.
 //!
 //! ## Security Boundaries
 //! * Non-loopback bind validation is explicit and requires auth unless callers
 //!   intentionally choose a different deployment policy outside this helper.
-//! * Host guarding uses `mcp-toolkit-http` allowlist validation.
+//! * Host and Origin guarding use `mcp-toolkit-http` allowlist validation.
 //! * Domain authorization and tool policy stay in service crates.
 //!
 //! ## References
@@ -34,7 +34,7 @@ use http::{
 };
 use http_body_util::LengthLimitError;
 use mcp_toolkit_http::{
-    host::validate_request_authority,
+    host::{validate_origin_header, validate_request_authority},
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
     streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
@@ -236,14 +236,14 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
-    /// Sets allowed Host header values on the stateful service.
+    /// Sets allowed Host/Origin header values on the stateful service.
     ///
     /// # Errors
     /// This function does not return errors.
     ///
     /// # Security
-    /// Host allowlists mitigate DNS rebinding attacks. Do not clear them for
-    /// public deployments.
+    /// Host/Origin allowlists mitigate DNS rebinding attacks. Do not clear them
+    /// for public deployments.
     ///
     /// # Panics
     /// This function does not panic.
@@ -402,7 +402,7 @@ pub struct LocalMcpHttpState<S> {
     pub stateful_service: StreamableHttpService<S, RecordingSessionManager>,
     /// Optional stateless fallback service.
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
-    /// Allowed Host header values for the route-bundle host guard.
+    /// Allowed Host and Origin header values for the route-bundle guard.
     pub allowed_hosts: Vec<String>,
     /// True when bearer authentication is active above the route bundle.
     pub auth_enabled: bool,
@@ -660,13 +660,13 @@ impl LocalMcpHttpServerBuilder {
         self
     }
 
-    /// Enables or disables the route-bundle host guard.
+    /// Enables or disables the route-bundle host/origin guard.
     ///
     /// # Errors
     /// This function does not return errors.
     ///
     /// # Security
-    /// Disabling the host guard is not recommended for public deployments.
+    /// Disabling the guard is not recommended for public deployments.
     ///
     /// # Panics
     /// This function does not panic.
@@ -815,7 +815,7 @@ where
     /// This function does not return errors.
     ///
     /// # Security
-    /// The default bundle includes host guarding and a generic health route.
+    /// The default bundle includes host/origin guarding and a generic health route.
     /// Auth middleware must be supplied separately when serving non-loopback.
     ///
     /// # Panics
@@ -849,13 +849,13 @@ where
         self
     }
 
-    /// Enables or disables the route-bundle host guard.
+    /// Enables or disables the route-bundle host/origin guard.
     ///
     /// # Errors
     /// This function does not return errors.
     ///
     /// # Security
-    /// Disabling the host guard is not recommended for public deployments.
+    /// Disabling the guard is not recommended for public deployments.
     ///
     /// # Panics
     /// This function does not panic.
@@ -1199,6 +1199,16 @@ where
             method = %req.method(),
             has_session_header = session_id_from_headers(req.headers()).is_some(),
             rejection_class = "host_rejected",
+            status = err.status_code().as_u16(),
+            "streamable HTTP route-bundle request rejected"
+        );
+        return plain_response(err.status_code(), err.message());
+    }
+    if let Err(err) = validate_origin_header(req.headers(), &state.allowed_hosts) {
+        tracing::warn!(
+            method = %req.method(),
+            has_session_header = session_id_from_headers(req.headers()).is_some(),
+            rejection_class = "origin_rejected",
             status = err.status_code().as_u16(),
             "streamable HTTP route-bundle request rejected"
         );
