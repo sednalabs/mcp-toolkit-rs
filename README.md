@@ -51,6 +51,59 @@ HTML, scheduled jobs, or private exports, use
 or browser-style tool. For auth failure handling, use
 `docs/auth-error-contracts.md`.
 
+### Create A Server From A Maintained Template
+
+From this checkout, list the available shapes and generate the smallest stdio
+starter:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- templates
+cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
+  --name my-mcp-server \
+  --template curated-stdio-intent
+cd my-mcp-server
+cargo test --all-targets --all-features
+```
+
+For a portable service repository, generate outside the toolkit checkout and
+rewrite toolkit dependencies to public Git sources immediately:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
+  --name my-mcp-server \
+  --template single-crate-public-stdio \
+  --output ../my-mcp-server \
+  --toolkit-git https://github.com/sednalabs/mcp-toolkit-rs
+```
+
+Generated servers include the starter code and the proof files reviewers should
+expect on day one:
+
+- `src/lib.rs` and `src/main.rs` with a small typed tool surface;
+- `spec/tool_schema_snapshot.v1.json` for the exported `tools/list` contract;
+- `tests/tool_schema_snapshot.rs` and `tests/catalog_profile_contract.rs`;
+- a transport test such as `tests/stdio_smoke.rs` or
+  `tests/http_auth_contract.rs`;
+- `spec/mcp_probe_stdio_smoke.v1.json` or
+  `spec/mcp_probe_http_auth_smoke.v1.json` for an optional scripted MCP client
+  probe;
+- `.github/workflows/rust-baseline.yml` so the first PR has hosted validation.
+
+For stdio servers, build the binary and point your MCP client at the generated
+command path. The default served profile is `read_only`; add mutation tools
+behind the explicit `operator` profile before exposing them. For hosted
+HTTP/auth servers, start from the generated README environment block, check the
+public `/health` route, and point clients at the generated `/mcp` URL with the
+published OAuth Protected Resource Metadata. If the server calls an upstream
+provider such as Google, add an `auth_status` or equivalent diagnostic before
+release; `docs/upstream-oauth.md` and `docs/easy-server-ergonomics.md` describe
+that pattern.
+
+Keep the generated contract tests in CI. The generated GitHub workflow is the
+shared proof surface for review; local commands are useful while editing, but a
+mergeable branch should record the hosted run URL.
+
 Add the specific crates you need from Git:
 
 ```toml

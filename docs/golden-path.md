@@ -46,12 +46,47 @@ Use one of the maintained templates when creating a new server:
 - `templates/hosted-http-auth-server` for hosted Streamable HTTP with OAuth
   metadata, bearer challenges, host guarding, and session support.
 
-Copy the template into the service repository, rename the package, then replace
-only the example tool handlers and config with service-specific code. Keep the
-template's validation tests unless the service has a documented reason to use a
-stronger local equivalent. For a new public repository, start from the
-standalone public stdio template unless the hosted HTTP/auth template is a
-better fit.
+The quickest copy-paste path from this checkout is:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
+  --name my-mcp-server \
+  --template curated-stdio-intent
+cd my-mcp-server
+cargo test --all-targets --all-features
+```
+
+For a standalone service repository, generate to a sibling directory and use
+public Git dependencies from the first commit:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
+  --name my-mcp-server \
+  --template single-crate-public-stdio \
+  --output ../my-mcp-server \
+  --toolkit-git https://github.com/sednalabs/mcp-toolkit-rs
+```
+
+Generate or copy the template into the service repository, rename the package
+if needed, then replace only the example tool handlers and config with
+service-specific code. Keep the template's validation tests unless the service
+has a documented reason to use a stronger local equivalent. For a new public
+repository, start from the standalone public stdio template unless the hosted
+HTTP/auth template is a better fit.
+
+Treat the generated files as the initial review contract. A healthy generated
+server should keep its schema snapshot, catalog-profile contract test,
+transport smoke test, optional `mcp_probe` scenario, README first-run block, and
+GitHub `rust-baseline` workflow until an equal or stronger service-specific
+replacement exists.
+
+Before the first release, add a credential-free setup or status path for the
+real backend. For provider-backed servers this is usually an `auth_status` or
+`connection_status` tool that reports redacted credential sources, selected
+scopes, and the next login step. For hosted HTTP/auth servers, also verify
+`/health`, Protected Resource Metadata, bearer challenges, and client
+configuration against the generated README.
 
 Before adding generic API, SQL, or HTTP escape hatches, define three to seven
 first-class intent tools that answer the primary operator questions. The
