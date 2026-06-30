@@ -34,6 +34,10 @@ missing evidence line means the lane is not complete.
 
 Choose the server shape before writing domain code.
 
+First check `docs/reference-server-atlas.md` for the closest living reference
+service or adjacent auth/policy reference. Record the row used in the evidence
+block so reviewers can see which real pattern informed the scaffold.
+
 Use `templates/curated-stdio-intent-server` when the MCP server is
 process-local and should expose a compact curated tool surface over stdio.
 
@@ -50,6 +54,7 @@ seam is safer than copying a full template.
 
 Required evidence:
 
+- the reference atlas row used, or why no row fits;
 - the selected template or adoption helper;
 - the transport and trust boundary;
 - the reason any raw `rmcp` runtime wiring remains;

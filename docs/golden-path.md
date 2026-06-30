@@ -12,7 +12,11 @@ for protocol-adjacent substrate that an unrelated MCP server could also adopt.
 
 ## 1. Choose The Server Shape
 
-Start by naming the transport and trust boundary.
+Start by naming the transport and trust boundary. Before designing a new
+abstraction, check `docs/reference-server-atlas.md` and record the closest
+living reference pattern. The atlas keeps reusable lessons tied to real MCP
+servers while this toolkit keeps provider and deployment semantics out of
+generic APIs.
 
 | Shape | Use when | Toolkit defaults |
 | --- | --- | --- |
