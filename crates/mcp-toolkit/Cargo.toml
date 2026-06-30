@@ -61,6 +61,7 @@ server-http = [
   "rmcp/server",
   "rmcp/transport-streamable-http-server",
 ]
+
 server-auth = [
   "mcp-toolkit-server",
   "mcp-toolkit-server/auth",
@@ -71,3 +72,6 @@ server-auth = [
   "rmcp/transport-streamable-http-server",
   "rmcp/transport-streamable-http-server-session",
 ]
+
+[build-dependencies]
+serde_json = "1.0.149"

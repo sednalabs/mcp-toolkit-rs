@@ -141,8 +141,11 @@ To start from a maintained template through the toolkit front door:
 cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
 ```
 
-Run `cargo run -p mcp-toolkit --bin mcp-toolkit -- templates` to list the
-available template ids.
+Run `cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns` to choose by
+server archetype, then use `--pattern <id>` when you want the generator to
+select the maintained template for that shape. Run
+`cargo run -p mcp-toolkit --bin mcp-toolkit -- templates` when you already know
+the template id.
 
 For existing service adoption, migrate one runtime seam at a time and prove the
 before/after contract through GitHub-hosted validation. The checklist in

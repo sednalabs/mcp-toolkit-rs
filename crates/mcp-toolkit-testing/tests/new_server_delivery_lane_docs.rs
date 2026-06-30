@@ -82,7 +82,10 @@ fn new_server_delivery_lane_records_reviewable_evidence_block() {
 fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
     for surface in [
         "mcp-toolkit --bin mcp-toolkit -- new",
+        "mcp-toolkit --bin mcp-toolkit -- patterns",
+        "mcp-toolkit patterns <id>",
         "mcp-toolkit templates",
+        "--pattern minimal-stdio-intent",
         "templates/curated-stdio-intent-server",
         "templates/single-crate-public-stdio-server",
         "templates/hosted-http-auth-server",
@@ -144,6 +147,7 @@ fn pattern_manifest_docs_pin_the_generator_facing_contract() {
     for needle in [
         "docs/pattern-manifest.schema.json",
         "docs/pattern-manifests/*.json",
+        "mcp-toolkit patterns",
         "schema_version",
         "toolkit_crates",
         "auth_modes",

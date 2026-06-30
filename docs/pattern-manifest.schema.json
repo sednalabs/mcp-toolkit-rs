@@ -149,7 +149,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "default", "tool_groups"],
+        "required": ["name", "tool_groups"],
         "properties": {
           "name": { "type": "string", "minLength": 1 },
           "default": { "type": "boolean" },
