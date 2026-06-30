@@ -30,7 +30,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::guarded_action::GuardedActionPosture;
 use crate::openai_tool_search::OpenAiDeferredLoadingMetadata;
@@ -720,6 +720,413 @@ impl ToolCatalogContract {
     }
 }
 
+/// Example request/response pair attached to a typed catalog entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCatalogExample {
+    title: String,
+    request: Value,
+    response: Option<Value>,
+}
+
+impl ToolCatalogExample {
+    /// Create an example with a human-readable title and request payload.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when `title` is blank.
+    pub fn new(title: impl AsRef<str>, request: Value) -> Result<Self, ToolInventoryError> {
+        Ok(Self {
+            title: normalize_non_empty("tool example title", title.as_ref())?,
+            request,
+            response: None,
+        })
+    }
+
+    /// Attach the expected response payload for this example.
+    #[must_use]
+    pub fn with_response(mut self, response: Value) -> Self {
+        self.response = Some(response);
+        self
+    }
+
+    /// Human-readable example title.
+    pub fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    /// Example request payload.
+    pub fn request(&self) -> &Value {
+        &self.request
+    }
+
+    /// Optional example response payload.
+    pub fn response(&self) -> Option<&Value> {
+        self.response.as_ref()
+    }
+}
+
+/// Typed declaration for one MCP tool catalog entry.
+///
+/// The entry keeps one source of truth for inventory metadata, schemas, examples,
+/// tags, and the server-local handler symbol while leaving actual dispatch to
+/// the owning server framework.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCatalogEntry {
+    capability: ToolCapability,
+    input_schema: Option<Value>,
+    output_schema: Option<Value>,
+    examples: Vec<ToolCatalogExample>,
+    handler: Option<String>,
+    tags: Vec<String>,
+}
+
+impl ToolCatalogEntry {
+    /// Create a catalog entry for a tool name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            capability: ToolCapability::new(name),
+            input_schema: None,
+            output_schema: None,
+            examples: Vec::new(),
+            handler: None,
+            tags: Vec::new(),
+        }
+    }
+
+    /// Attach a logical group label.
+    #[must_use]
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.capability = self.capability.with_group(group);
+        self
+    }
+
+    /// Mark whether the tool is read-only.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.capability = self.capability.with_read_only(read_only);
+        self
+    }
+
+    /// Attach an optional feature flag gate.
+    #[must_use]
+    pub fn with_feature_flag(mut self, feature_flag: impl Into<String>) -> Self {
+        self.capability = self.capability.with_feature_flag(feature_flag);
+        self
+    }
+
+    /// Configure operation-aware exposure.
+    #[must_use]
+    pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
+        self.capability = self.capability.with_exposure(exposure);
+        self
+    }
+
+    /// Attach metadata used by deferred-loading/tool-search clients.
+    #[must_use]
+    pub fn with_discovery(mut self, discovery: ToolDiscoveryMetadata) -> Self {
+        self.capability = self.capability.with_discovery(discovery);
+        self
+    }
+
+    /// Attach risk posture metadata for guarded preview/apply or admin tools.
+    #[must_use]
+    pub fn with_risk_posture(mut self, risk_posture: GuardedActionPosture) -> Self {
+        self.capability = self.capability.with_risk_posture(risk_posture);
+        self
+    }
+
+    /// Attach the JSON input schema emitted for this tool.
+    #[must_use]
+    pub fn with_input_schema(mut self, schema: Value) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
+    /// Attach the JSON output schema emitted for this tool.
+    #[must_use]
+    pub fn with_output_schema(mut self, schema: Value) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    /// Attach a server-local handler symbol for docs and generated tests.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when `handler` is blank.
+    pub fn with_handler(mut self, handler: impl AsRef<str>) -> Result<Self, ToolInventoryError> {
+        self.handler = Some(normalize_non_empty("tool handler", handler.as_ref())?);
+        Ok(self)
+    }
+
+    /// Attach tags used by generated docs and recipe matching.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when any tag is blank.
+    pub fn with_tags<I, S>(mut self, tags: I) -> Result<Self, ToolInventoryError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.tags = normalize_non_empty_list("tool tag", tags)?;
+        Ok(self)
+    }
+
+    /// Attach a request/response example for docs and generated tests.
+    #[must_use]
+    pub fn with_example(mut self, example: ToolCatalogExample) -> Self {
+        self.examples.push(example);
+        self
+    }
+
+    /// Return the inventory capability owned by this entry.
+    pub fn capability(&self) -> &ToolCapability {
+        &self.capability
+    }
+
+    /// Stable tool name.
+    pub fn name(&self) -> &str {
+        self.capability.name()
+    }
+
+    /// Optional JSON input schema.
+    pub fn input_schema(&self) -> Option<&Value> {
+        self.input_schema.as_ref()
+    }
+
+    /// Optional JSON output schema.
+    pub fn output_schema(&self) -> Option<&Value> {
+        self.output_schema.as_ref()
+    }
+
+    /// Catalog examples in declaration order.
+    pub fn examples(&self) -> &[ToolCatalogExample] {
+        self.examples.as_slice()
+    }
+
+    /// Optional server-local handler symbol.
+    pub fn handler(&self) -> Option<&str> {
+        self.handler.as_deref()
+    }
+
+    /// Normalized tags used by generated docs and recipe matching.
+    pub fn tags(&self) -> &[String] {
+        self.tags.as_slice()
+    }
+}
+
+/// Typed catalog declaration that drives inventory, schemas, search, and profiles.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolCatalog {
+    entries: Vec<ToolCatalogEntry>,
+    profiles: Vec<ToolCatalogProfile>,
+}
+
+impl ToolCatalog {
+    /// Create an empty catalog.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build a catalog from entry declarations.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when an entry is invalid or duplicated.
+    pub fn from_entries<I>(entries: I) -> Result<Self, ToolInventoryError>
+    where
+        I: IntoIterator<Item = ToolCatalogEntry>,
+    {
+        let mut catalog = Self::new();
+        for entry in entries {
+            catalog.register(entry)?;
+        }
+        Ok(catalog)
+    }
+
+    /// Register a single catalog entry.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when the entry is invalid or duplicated.
+    pub fn register(&mut self, entry: ToolCatalogEntry) -> Result<(), ToolInventoryError> {
+        let ToolCatalogEntry {
+            capability,
+            input_schema,
+            output_schema,
+            examples,
+            handler,
+            tags,
+        } = entry;
+
+        let name = normalize_non_empty("tool name", capability.name())?;
+        if self.entries.iter().any(|entry| entry.name() == name) {
+            return Err(ToolInventoryError::duplicate_name(name));
+        }
+
+        let group = match capability.group {
+            Some(raw_group) => Some(normalize_non_empty("tool group", raw_group.as_str())?),
+            None => None,
+        };
+        let feature_flag = match capability.feature_flag {
+            Some(raw_flag) => Some(normalize_non_empty("feature flag", raw_flag.as_str())?),
+            None => None,
+        };
+        let handler = match handler {
+            Some(raw_handler) => Some(normalize_non_empty("tool handler", raw_handler.as_str())?),
+            None => None,
+        };
+        let tags = normalize_non_empty_list("tool tag", tags)?;
+
+        self.entries.push(ToolCatalogEntry {
+            capability: ToolCapability {
+                name,
+                group,
+                read_only: capability.read_only,
+                feature_flag,
+                exposure: capability.exposure,
+                discovery: capability.discovery,
+                risk_posture: capability.risk_posture,
+            },
+            input_schema,
+            output_schema,
+            examples,
+            handler,
+            tags,
+        });
+        self.entries
+            .sort_by(|left, right| left.capability.name.cmp(&right.capability.name));
+        Ok(())
+    }
+
+    /// Return a copy of this catalog with another entry registered.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when the entry is invalid or duplicated.
+    pub fn with_entry(mut self, entry: ToolCatalogEntry) -> Result<Self, ToolInventoryError> {
+        self.register(entry)?;
+        Ok(self)
+    }
+
+    /// Register a named profile for this catalog.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when a profile with the same key exists.
+    pub fn register_profile(
+        &mut self,
+        profile: ToolCatalogProfile,
+    ) -> Result<(), ToolInventoryError> {
+        if self
+            .profiles
+            .iter()
+            .any(|existing| existing.key == profile.key)
+        {
+            return Err(ToolInventoryError::duplicate_profile(profile.key));
+        }
+        self.profiles.push(profile);
+        self.profiles
+            .sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(())
+    }
+
+    /// Return a copy of this catalog with another profile registered.
+    ///
+    /// # Errors
+    /// Returns [`ToolInventoryError`] when a profile with the same key exists.
+    pub fn with_profile(mut self, profile: ToolCatalogProfile) -> Result<Self, ToolInventoryError> {
+        self.register_profile(profile)?;
+        Ok(self)
+    }
+
+    /// Return all entries in stable name order.
+    pub fn entries(&self) -> &[ToolCatalogEntry] {
+        self.entries.as_slice()
+    }
+
+    /// Return all profiles in stable key order.
+    pub fn profiles(&self) -> &[ToolCatalogProfile] {
+        self.profiles.as_slice()
+    }
+
+    /// Return the catalog entry for a tool name.
+    pub fn entry(&self, tool_name: &str) -> Option<&ToolCatalogEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.name() == tool_name.trim())
+    }
+
+    /// Build the inventory represented by this catalog.
+    pub fn inventory(&self) -> ToolInventory {
+        let entries = self
+            .entries
+            .iter()
+            .map(|entry| (entry.name().to_string(), entry.capability.clone()))
+            .collect();
+        ToolInventory { entries }
+    }
+
+    /// Build a schema object keyed by tool name.
+    pub fn schemas_by_tool(&self) -> Value {
+        let mut schemas = Map::new();
+        for entry in &self.entries {
+            let mut schema = Map::new();
+            if let Some(input_schema) = &entry.input_schema {
+                schema.insert("input".to_string(), input_schema.clone());
+            }
+            if let Some(output_schema) = &entry.output_schema {
+                schema.insert("output".to_string(), output_schema.clone());
+            }
+            if !schema.is_empty() {
+                schemas.insert(entry.name().to_string(), Value::Object(schema));
+            }
+        }
+        Value::Object(schemas)
+    }
+
+    /// Search catalog inventory and return the standard tool-search envelope.
+    pub fn search_response(
+        &self,
+        filter: &ToolSearchFilter,
+        operation: ToolOperation,
+        policy: &ToolInventoryPolicy,
+    ) -> ToolSearchResponse {
+        let results = self.inventory().search(filter, operation, policy);
+        ToolSearchResponse::find_tools(
+            filter.query.clone(),
+            filter.group.clone(),
+            filter.read_only,
+            results,
+        )
+        .with_schemas(Some(self.schemas_by_tool()))
+    }
+
+    /// Search catalog inventory through a named catalog profile.
+    pub fn search_response_for_profile(
+        &self,
+        filter: &ToolSearchFilter,
+        operation: ToolOperation,
+        profile: &ToolCatalogProfile,
+    ) -> ToolSearchResponse {
+        self.search_response(filter, operation, profile.policy())
+    }
+
+    /// Build profile contracts for every registered profile.
+    pub fn profile_contracts(&self, operation: ToolOperation) -> Vec<ToolCatalogContract> {
+        let inventory = self.inventory();
+        self.profiles
+            .iter()
+            .map(|profile| inventory.catalog_contract(profile, operation))
+            .collect()
+    }
+
+    /// Serialize the catalog into a stable public artifact.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "schema": "mcp_tool_catalog",
+            "version": 1,
+            "tools": self.entries.iter().map(catalog_entry_value).collect::<Vec<_>>(),
+            "profiles": self.profiles.iter().map(profile_value).collect::<Vec<_>>(),
+            "schemas": self.schemas_by_tool(),
+        })
+    }
+}
+
 /// Inventory of registered tool capabilities.
 #[derive(Debug, Clone, Default)]
 pub struct ToolInventory {
@@ -988,6 +1395,13 @@ impl ToolInventoryError {
         }
     }
 
+    fn duplicate_profile(key: String) -> Self {
+        Self {
+            code: "TOOL_CATALOG_DUPLICATE_PROFILE".to_string(),
+            message: format!("tool catalog contains duplicate profile '{key}'"),
+        }
+    }
+
     fn invalid_value(field: &str, value: &str) -> Self {
         Self {
             code: "TOOL_INVENTORY_INVALID_VALUE".to_string(),
@@ -1043,11 +1457,69 @@ fn operation_label(operation: ToolOperation) -> &'static str {
     }
 }
 
+fn exposure_label(exposure: ToolExposure) -> &'static str {
+    match exposure {
+        ToolExposure::All => "all",
+        ToolExposure::ListOnly => "list_only",
+        ToolExposure::CallOnly => "call_only",
+        ToolExposure::Disabled => "disabled",
+    }
+}
+
+fn catalog_entry_value(entry: &ToolCatalogEntry) -> Value {
+    json!({
+        "name": entry.name(),
+        "group": entry.capability.group(),
+        "read_only": entry.capability.read_only(),
+        "feature_flag": entry.capability.feature_flag(),
+        "exposure": exposure_label(entry.capability.exposure()),
+        "discovery": entry.capability.discovery().map(discovery_value),
+        "risk_posture": entry.capability.risk_posture(),
+        "handler": entry.handler(),
+        "tags": entry.tags(),
+        "input_schema": entry.input_schema(),
+        "output_schema": entry.output_schema(),
+        "examples": entry.examples().iter().map(example_value).collect::<Vec<_>>(),
+    })
+}
+
+fn discovery_value(discovery: &ToolDiscoveryMetadata) -> Value {
+    json!({
+        "description": discovery.description(),
+        "keywords": discovery.keywords(),
+    })
+}
+
+fn example_value(example: &ToolCatalogExample) -> Value {
+    json!({
+        "title": example.title(),
+        "request": example.request(),
+        "response": example.response(),
+    })
+}
+
+fn profile_value(profile: &ToolCatalogProfile) -> Value {
+    json!({
+        "key": profile.key(),
+        "title": profile.title(),
+        "description": profile.description(),
+        "instructions": profile.instructions(),
+        "required_tools": profile.required_tools(),
+        "required_groups": profile.required_groups(),
+        "policy": {
+            "allowed_groups": sorted_optional_set(&profile.policy.allowed_groups),
+            "read_only_only": profile.policy.read_only_only,
+            "include_unregistered": profile.policy.include_unregistered,
+            "enabled_feature_flags": sorted_set(&profile.policy.enabled_feature_flags),
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCapability, ToolCatalogProfile, ToolExposure, ToolInventory, ToolInventoryPolicy,
-        ToolOperation,
+        ToolCapability, ToolCatalog, ToolCatalogEntry, ToolCatalogExample, ToolCatalogProfile,
+        ToolExposure, ToolInventory, ToolInventoryPolicy, ToolOperation,
     };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse};
     use crate::guarded_action::{GuardedActionOperationClass, GuardedActionPosture};
@@ -1346,6 +1818,132 @@ mod tests {
         assert_eq!(
             contract.to_value()["requirements"]["satisfied"],
             json!(false)
+        );
+    }
+
+    #[test]
+    fn typed_catalog_drives_inventory_search_schemas_and_profiles() {
+        let read_entry = ToolCatalogEntry::new("items.search")
+            .with_group("items")
+            .with_risk_posture(GuardedActionPosture::read_only())
+            .with_discovery(ToolDiscoveryMetadata::new(
+                "Search item records.",
+                ["items", "search", "read"],
+            ))
+            .with_input_schema(json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                }
+            }))
+            .with_output_schema(json!({
+                "type": "object",
+                "properties": {
+                    "items": {"type": "array"}
+                }
+            }))
+            .with_handler("ItemsServer::search")
+            .expect("handler")
+            .with_tags(["default", "generated"])
+            .expect("tags")
+            .with_example(
+                ToolCatalogExample::new("search by owner", json!({"query": "owner:team"}))
+                    .expect("example")
+                    .with_response(json!({"items": []})),
+            );
+        let write_entry = ToolCatalogEntry::new("items.update")
+            .with_group("items")
+            .with_risk_posture(GuardedActionPosture::guarded_apply())
+            .with_discovery(ToolDiscoveryMetadata::new(
+                "Update an item record.",
+                ["items", "update", "write"],
+            ));
+        let profile = ToolCatalogProfile::new(
+            "read-default",
+            "Read Default",
+            "Default read-only generated profile.",
+        )
+        .expect("profile")
+        .with_policy(ToolInventoryPolicy::strict_read_only().with_allowed_groups(["items"]))
+        .with_required_tools(["items.search"])
+        .expect("required tools");
+        let catalog = ToolCatalog::from_entries([write_entry, read_entry])
+            .expect("catalog")
+            .with_profile(profile)
+            .expect("profile registration");
+
+        let inventory = catalog.inventory();
+        assert!(inventory.is_allowed(
+            "items.search",
+            ToolOperation::Call,
+            &ToolInventoryPolicy::strict_read_only()
+        ));
+        assert!(!inventory.is_allowed(
+            "items.update",
+            ToolOperation::Call,
+            &ToolInventoryPolicy::strict_read_only()
+        ));
+
+        let response = catalog
+            .search_response_for_profile(
+                &ToolSearchFilter {
+                    query: Some("search".to_string()),
+                    group: Some("items".to_string()),
+                    read_only: Some(true),
+                    limit: None,
+                },
+                ToolOperation::List,
+                &catalog.profiles()[0],
+            )
+            .to_value();
+        assert_eq!(response["openai_allowed_tools"], json!(["items.search"]));
+        assert_eq!(
+            response["schemas"]["items.search"]["input"]["properties"]["query"]["type"],
+            json!("string")
+        );
+
+        let contracts = catalog.profile_contracts(ToolOperation::List);
+        assert_eq!(contracts.len(), 1);
+        assert!(contracts[0].is_satisfied());
+        assert_eq!(contracts[0].tool_names, vec!["items.search"]);
+
+        let snapshot = catalog.to_value();
+        assert_eq!(snapshot["schema"], json!("mcp_tool_catalog"));
+        assert_eq!(snapshot["tools"][0]["name"], json!("items.search"));
+        assert_eq!(
+            snapshot["tools"][0]["examples"][0]["response"]["items"],
+            json!([])
+        );
+        assert_eq!(snapshot["tools"][1]["name"], json!("items.update"));
+        assert_eq!(snapshot["profiles"][0]["key"], json!("read-default"));
+    }
+
+    #[test]
+    fn typed_catalog_rejects_duplicate_tools_profiles_and_blank_metadata() {
+        let duplicate = ToolCatalog::from_entries([
+            ToolCatalogEntry::new("items.search"),
+            ToolCatalogEntry::new(" items.search "),
+        ]);
+        assert_eq!(
+            duplicate.expect_err("duplicate tool").code,
+            "TOOL_INVENTORY_DUPLICATE_NAME"
+        );
+
+        let blank_tag = ToolCatalogEntry::new("items.search").with_tags(["default", " "]);
+        assert_eq!(
+            blank_tag.expect_err("blank tag").code,
+            "TOOL_INVENTORY_INVALID_VALUE"
+        );
+
+        let profile =
+            ToolCatalogProfile::new("read-default", "Read", "Read tools").expect("profile");
+        let profile_duplicate = ToolCatalog::new()
+            .with_profile(profile.clone())
+            .expect("first profile")
+            .with_profile(profile);
+        assert_eq!(
+            profile_duplicate.expect_err("duplicate profile").code,
+            "TOOL_CATALOG_DUPLICATE_PROFILE"
         );
     }
 

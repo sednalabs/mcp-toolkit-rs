@@ -17,8 +17,10 @@ tool capability composition without changing your auth authority model.
 
 ## Migration steps
 
-1. Register your tool inventory in server construction:
-   - create `ToolInventory` from `ToolCapability` entries
+1. Declare your tool catalog in server construction:
+   - create `ToolCatalog` from `ToolCatalogEntry` values
+   - attach discovery metadata, schemas, examples, tags, and handler symbols
+   - derive `ToolInventory` from the catalog with `catalog.inventory()`
    - set `ToolInventoryPolicy` (`strict()` recommended once registrations are complete)
    - use `ToolInventoryPolicy::strict_read_only()` for the default profile when
      mutations require an explicit operator or admin mode
@@ -40,6 +42,8 @@ A server using this pattern should register each exported tool explicitly:
   - `example.search`
   - `example.list_sources`
   - `example.get_doc`
+- `ToolCatalogEntry` metadata for schema snapshots, generated docs, and
+  deferred-loading search responses;
 - strict inventory policy for production behavior;
 - a deliberately reviewed fallback only if registration initialization fails.
 

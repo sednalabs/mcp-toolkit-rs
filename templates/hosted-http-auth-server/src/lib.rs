@@ -17,7 +17,7 @@ use mcp_toolkit_auth::surface::AuthorizationServerMetadataSource;
 use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerMetadata};
 use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
-    ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
+    ToolCatalog, ToolCatalogEntry, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -103,26 +103,35 @@ fn parse_bool_env(name: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct HostedHttpServer {
     tool_router: ToolRouter<Self>,
+    catalog: ToolCatalog,
     inventory: ToolInventory,
 }
 
 impl HostedHttpServer {
     pub fn new() -> Result<Self, ToolInventoryError> {
+        let catalog = ToolCatalog::from_entries([ToolCatalogEntry::new("read_status")
+            .with_group("read")
+            .with_read_only(true)
+            .with_risk_posture(GuardedActionPosture::read_only())
+            .with_discovery(ToolDiscoveryMetadata::new(
+                "Read a status summary for one component.",
+                ["status", "health", "read"],
+            ))
+            .with_handler("HostedHttpServer::read_status")?])?;
+        let inventory = catalog.inventory();
         Ok(Self {
             tool_router: Self::tool_router(),
-            inventory: ToolInventory::from_capabilities([ToolCapability::new("read_status")
-                .with_group("read")
-                .with_read_only(true)
-                .with_risk_posture(GuardedActionPosture::read_only())
-                .with_discovery(ToolDiscoveryMetadata::new(
-                    "Read a status summary for one component.",
-                    ["status", "health", "read"],
-                ))])?,
+            catalog,
+            inventory,
         })
     }
 
     pub fn tool_schema_snapshot(&self) -> Vec<Tool> {
         self.tool_router.list_all()
+    }
+
+    pub fn catalog(&self) -> &ToolCatalog {
+        &self.catalog
     }
 
     pub fn inventory(&self) -> &ToolInventory {
@@ -230,6 +239,10 @@ mod tests {
             ToolOperation::List,
             &ToolInventoryPolicy::default()
         ));
+        assert_eq!(
+            server.catalog().to_value()["tools"][0]["handler"],
+            "HostedHttpServer::read_status"
+        );
     }
 
     #[test]

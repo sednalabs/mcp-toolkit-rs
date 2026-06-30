@@ -6,7 +6,7 @@ use mcp_toolkit::rmcp::{
 };
 use mcp_toolkit_core::guarded_action::GuardedActionPosture;
 use mcp_toolkit_core::tool_inventory::{
-    ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
+    ToolCatalog, ToolCatalogEntry, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -45,37 +45,47 @@ impl Default for IntentServerConfig {
 pub struct IntentServer {
     config: IntentServerConfig,
     tool_router: ToolRouter<Self>,
+    catalog: ToolCatalog,
     inventory: ToolInventory,
 }
 
 impl IntentServer {
     pub fn new(config: IntentServerConfig) -> Result<Self, ToolInventoryError> {
+        let catalog = ToolCatalog::from_entries([
+            ToolCatalogEntry::new("brief_target")
+                .with_group("read")
+                .with_read_only(true)
+                .with_risk_posture(GuardedActionPosture::read_only())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Summarize the current state for a named target.",
+                    ["brief", "intent", "summary"],
+                ))
+                .with_handler("IntentServer::brief_target")?,
+            ToolCatalogEntry::new("detail_by_tracking_id")
+                .with_group("read")
+                .with_read_only(true)
+                .with_risk_posture(GuardedActionPosture::read_only())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Fetch a focused detail view by tracking id.",
+                    ["detail", "tracking", "intent"],
+                ))
+                .with_handler("IntentServer::detail_by_tracking_id")?,
+        ])?;
+        let inventory = catalog.inventory();
         Ok(Self {
             config,
             tool_router: Self::tool_router(),
-            inventory: ToolInventory::from_capabilities([
-                ToolCapability::new("brief_target")
-                    .with_group("read")
-                    .with_read_only(true)
-                    .with_risk_posture(GuardedActionPosture::read_only())
-                    .with_discovery(ToolDiscoveryMetadata::new(
-                        "Summarize the current state for a named target.",
-                        ["brief", "intent", "summary"],
-                    )),
-                ToolCapability::new("detail_by_tracking_id")
-                    .with_group("read")
-                    .with_read_only(true)
-                    .with_risk_posture(GuardedActionPosture::read_only())
-                    .with_discovery(ToolDiscoveryMetadata::new(
-                        "Fetch a focused detail view by tracking id.",
-                        ["detail", "tracking", "intent"],
-                    )),
-            ])?,
+            catalog,
+            inventory,
         })
     }
 
     pub fn tool_schema_snapshot(&self) -> Vec<Tool> {
         self.tool_router.list_all()
+    }
+
+    pub fn catalog(&self) -> &ToolCatalog {
+        &self.catalog
     }
 
     pub fn inventory(&self) -> &ToolInventory {
@@ -140,5 +150,9 @@ mod tests {
             ToolOperation::Call,
             &policy
         ));
+        assert_eq!(
+            server.catalog().to_value()["tools"][0]["name"],
+            "brief_target"
+        );
     }
 }

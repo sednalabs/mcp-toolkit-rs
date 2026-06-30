@@ -9,6 +9,7 @@ fn starter_templates_doc_mentions_standalone_public_template() {
         "templates/single-crate-public-stdio-server",
         "standalone public stdio",
         "StdioServerBuilder",
+        "ToolCatalog",
         "CodeQL workflow-security queries",
         "dependency governance",
     ] {
