@@ -7,6 +7,9 @@ human-readable atlas and future generator or documentation tooling.
 Use manifests when a pattern is real enough to reuse but not yet ready to
 become a toolkit API. The manifest records the evidence without copying
 provider clients, deployment policy, or product vocabulary into this toolkit.
+The `mcp-toolkit patterns` CLI command is generated from
+`docs/pattern-manifests/*.json`, so new server authors can choose an archetype
+without opening every reference repository first.
 
 ## Files
 
@@ -32,7 +35,7 @@ Every manifest has these top-level fields:
 | `auth_modes` | Authentication and authorization modes the row demonstrates. |
 | `tool_surface` | Discovery, mutation, and schema-snapshot posture. |
 | `scratchpad` | Whether large-result scratchpad behavior is supported and by which engine. |
-| `profiles` | Named operator profiles and tool groups. |
+| `profiles` | Named operator profiles and tool groups. Omit `default` when it is false. |
 | `conformance` | Current proof posture for schema, transport, auth, domain, hosted validation, and release evidence. |
 | `references` | Public docs, source landmarks, tests, templates, or workflows used as evidence. |
 

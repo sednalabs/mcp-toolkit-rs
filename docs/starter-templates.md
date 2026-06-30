@@ -20,10 +20,13 @@ cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --templat
 The generator writes a new directory named after the package, rewrites the
 template package name, keeps toolkit dependencies pointed at the current local
 checkout by default, and refuses to overwrite changed files. Output paths are
-relative to the current directory. Use `mcp-toolkit templates` to list
-maintained templates, `--toolkit-git https://github.com/sednalabs/mcp-toolkit-rs`
-for portable Git dependencies, and `--force` only when replacing generated
-files intentionally.
+relative to the current directory. Use `mcp-toolkit patterns` to choose from
+living server archetypes, `mcp-toolkit patterns <id>` to inspect the manifest
+evidence behind an archetype, and `mcp-toolkit templates` when you already know
+the exact template id. Use
+`--toolkit-git https://github.com/sednalabs/mcp-toolkit-rs` for portable Git
+dependencies, `--pattern <id>` to let the generator choose the recommended
+template, and `--force` only when replacing generated files intentionally.
 
 ## Curated Stdio Intent Server
 

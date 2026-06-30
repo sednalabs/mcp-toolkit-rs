@@ -22,7 +22,10 @@ fn starter_templates_doc_mentions_standalone_public_template() {
 fn starter_templates_doc_mentions_generator_front_door() {
     for needle in [
         "mcp-toolkit --bin mcp-toolkit -- new",
+        "mcp-toolkit patterns",
+        "mcp-toolkit patterns <id>",
         "mcp-toolkit templates",
+        "--pattern <id>",
         "--toolkit-git",
         "--force",
     ] {
