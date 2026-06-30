@@ -8,6 +8,10 @@ The toolkit should centralize repeatable server ergonomics. Service
 repositories still own API-specific clients, credential scopes, resource names,
 fixtures, and safety policy.
 
+For provider-auth command names, Google quota-project troubleshooting,
+read-only/operator profile alignment, and MCP client configuration examples,
+use `docs/provider-auth-and-client-config.md`.
+
 ## First-Run Shape
 
 Every new server should make the first successful tool call obvious:

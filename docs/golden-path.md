@@ -86,7 +86,9 @@ real backend. For provider-backed servers this is usually an `auth_status` or
 `connection_status` tool that reports redacted credential sources, selected
 scopes, and the next login step. For hosted HTTP/auth servers, also verify
 `/health`, Protected Resource Metadata, bearer challenges, and client
-configuration against the generated README.
+configuration against the generated README. Use
+`docs/provider-auth-and-client-config.md` for provider auth, profile, quota
+project, service-account, and client configuration details.
 
 Before adding generic API, SQL, or HTTP escape hatches, define three to seven
 first-class intent tools that answer the primary operator questions. The
