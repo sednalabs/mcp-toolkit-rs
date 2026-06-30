@@ -38,9 +38,11 @@ Gemini CLI authentication.
 ## Quick Start
 
 For the complete server creation, validation, review, and release route, start
-with `docs/golden-path.md`. For a copyable checklist that turns that route into
-a repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
-the operator-facing details that make a server easy to try and debug, use
+with `docs/golden-path.md`. Use `docs/reference-server-atlas.md` to choose a
+living reference pattern from existing MCP servers before adding new toolkit
+abstractions. For a copyable checklist that turns that route into a repeatable
+implementation lane, use `docs/new-server-delivery-lane.md`. For the
+operator-facing details that make a server easy to try and debug, use
 `docs/easy-server-ergonomics.md`. For legacy systems with partial APIs, admin
 HTML, scheduled jobs, or private exports, use
 `docs/legacy-system-adapter-pattern.md` before exposing any generic HTTP, SQL,
@@ -215,6 +217,9 @@ Security reporting guidance is documented in `SECURITY.md`.
   observability adapters and adoption.
 - `docs/public-landing-policy.md` defines the public repository landing,
   hosted-check, and break-glass remediation policy.
+- `docs/reference-server-atlas.md` maps reusable server patterns to real MCP
+  services so new abstractions start from existing evidence instead of toy
+  examples.
 - `docs/security-profiles.md` describes auth profile selection.
 - `docs/server-composition-layer.md` describes the optional stdio and HTTP
   server composition layer.

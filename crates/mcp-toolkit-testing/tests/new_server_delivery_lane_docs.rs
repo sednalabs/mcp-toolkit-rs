@@ -1,4 +1,5 @@
 const LANE_DOC: &str = include_str!("../../../docs/new-server-delivery-lane.md");
+const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-atlas.md");
 
 const REQUIRED_GATES: [&str; 7] = [
     "## Gate 1: Start From The Appropriate mcp-toolkit-rs Template",
@@ -63,6 +64,43 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         assert!(
             LANE_DOC.contains(surface),
             "delivery lane does not mention `{surface}`"
+        );
+    }
+}
+
+#[test]
+fn reference_server_atlas_covers_living_server_patterns() {
+    for needle in [
+        "sednalabs/google-admin-mcp",
+        "sednalabs/ga4-mcp",
+        "sednalabs/google-search-console-mcp",
+        "sednalabs/cloudflare-mcp",
+        "sednalabs/postgres-mcp",
+        "sednalabs/keycloak-admin-mcp",
+        "`minimal-stdio-intent`",
+        "`google-provider-read-only`",
+        "`analytics-scratchpad`",
+        "`hosted-http-auth`",
+        "`operator-mutation`",
+        "`database-policy`",
+        "`public-release-ready`",
+    ] {
+        assert!(
+            REFERENCE_ATLAS_DOC.contains(needle),
+            "reference server atlas is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn delivery_lane_requires_reference_atlas_evidence() {
+    for needle in [
+        "docs/reference-server-atlas.md",
+        "the reference atlas row used, or why no row fits",
+    ] {
+        assert!(
+            LANE_DOC.contains(needle),
+            "delivery lane is missing atlas evidence requirement `{needle}`"
         );
     }
 }
