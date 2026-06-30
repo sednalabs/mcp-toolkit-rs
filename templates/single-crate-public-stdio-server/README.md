@@ -5,7 +5,7 @@ server. It keeps the code surface intentionally modest while bundling the CI
 and security scaffolding that public service repositories usually need on day
 one:
 
-- stdio transport via `mcp-toolkit-server::stdio::serve_stdio`;
+- stdio transport via `mcp-toolkit-server::stdio::StdioServerBuilder`;
 - typed intent tools plus explicit `ToolInventory` metadata;
 - strict tool-schema snapshot and installed-binary stdio smoke tests;
 - pinned GitHub Actions workflows for baseline validation, CodeQL Advanced,

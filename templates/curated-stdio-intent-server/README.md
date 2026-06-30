@@ -5,7 +5,7 @@ with a curated set of read-only intent tools.
 
 It demonstrates:
 
-- `mcp-toolkit-server::stdio::serve_stdio` for the stdio transport;
+- `mcp-toolkit-server::stdio::StdioServerBuilder` for the stdio transport;
 - an rmcp `ToolRouter` with typed input schemas;
 - `mcp-toolkit-core::tool_inventory` for explicit tool exposure metadata;
 - `mcp-toolkit-testing::assert_tool_schema_snapshot` for contract drift;

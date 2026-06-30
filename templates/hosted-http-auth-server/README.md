@@ -5,7 +5,8 @@ server with OAuth Protected Resource Metadata and bearer-auth enforcement.
 
 It demonstrates:
 
-- `mcp-toolkit-server` HTTP runtime and route-bundle composition;
+- `mcp-toolkit-server::http::LocalMcpHttpServerBuilder` for HTTP runtime and
+  route-bundle composition;
 - explicit bind safety for non-loopback listeners;
 - host allowlists for DNS rebinding defense;
 - `AuthSurfaceBuilder` with public health checks and `/mcp` bearer challenges;

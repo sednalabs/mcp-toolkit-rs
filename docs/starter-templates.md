@@ -35,7 +35,8 @@ process-local stdio MCP service with a small curated tool surface.
 
 It demonstrates:
 
-- `mcp-toolkit-server::stdio::serve_stdio` for stdio startup and shutdown;
+- `mcp-toolkit-server::stdio::StdioServerBuilder` for stdio startup and
+  shutdown;
 - toolkit-provided `rmcp` `#[tool_router]` plus `#[tool_handler]` wiring so
   tools are callable at the actual MCP boundary without a direct `rmcp`
   dependency in the starter;
@@ -89,7 +90,9 @@ Streamable HTTP with an explicit hosted auth surface.
 
 It demonstrates:
 
-- `LocalMcpHttpRuntimeBuilder` and `LocalMcpHttpRouterBuilder` route assembly;
+- `LocalMcpHttpServerBuilder` for hosted Streamable HTTP route assembly;
+- lower-level `LocalMcpHttpRuntimeBuilder` and `LocalMcpHttpRouterBuilder`
+  adoption points when a service needs to split runtime and routing itself;
 - `HttpBindSafety` for fail-closed non-loopback bind checks;
 - host allowlists for request guardrails;
 - `AuthSurfaceBuilder` with public health and protected `/mcp` routes;

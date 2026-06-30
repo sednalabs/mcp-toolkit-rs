@@ -110,9 +110,11 @@ assembly crate layered above the existing low-level crates:
 
 Current public pieces:
 
+- `stdio::StdioServerBuilder` for the stdio starter front door;
 - `stdio::serve_stdio` for the common stdio startup and wait loop;
 - `auth::AuthSurfaceBuilder` for auth-surface normalization and layer assembly;
 - `http::HttpBindSafety` for fail-closed non-loopback bind posture checks;
+- `http::LocalMcpHttpServerBuilder` for the common hosted HTTP route bundle;
 - `http::LocalMcpHttpRuntimeBuilder` for bounded Streamable HTTP sessions and
   optional stateless fallback;
 - `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
@@ -126,8 +128,8 @@ handlers, and product policy stay in service repositories.
 
 The composition layer should support three adoption styles:
 
-1. Full adoption: the server wants the toolkit to assemble most of the HTTP and
-   MCP runtime.
+1. Full adoption: the server wants `StdioServerBuilder` or
+   `LocalMcpHttpServerBuilder` to assemble the standard transport front door.
 2. Partial adoption: the server already has a router or runtime split and wants
    selected helpers.
 3. No adoption: stdio-only or highly specialized services should not be forced
