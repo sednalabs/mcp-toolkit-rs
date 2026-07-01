@@ -64,7 +64,10 @@ project directory:
 
 ```bash
 cargo run -- --doctor
+cargo run -- --print-tools
+cargo run -- --print-tool-schema
 cargo run -- --print-client-config
+cargo test --all-targets --all-features
 ```
 
 ## Contract And Probe Checks
@@ -94,8 +97,8 @@ endpoint. MCP clients can use that metadata to authenticate from SSH sessions,
 remote shells, CI jobs, and other headless environments where a localhost
 browser callback is inconvenient.
 
-For [Codex Sedna](https://github.com/sednalabs/codex), configure the server in
-`config.toml`, start the hosted MCP server, then run:
+For Codex CLI or a compatible MCP client, configure the server in `config.toml`,
+start the hosted MCP server, then run:
 
 ```bash
 codex mcp login <server-name> --device-auth

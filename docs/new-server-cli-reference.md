@@ -93,7 +93,7 @@ Useful options:
 | `--pattern <id>` or `--archetype <id>` | You want the generator to choose the recommended template for an archetype. | Inspect the archetype first with `mcp-toolkit patterns <id>`. |
 | `--output <dir>` or `-o <dir>` | The output directory should differ from the package name. | The directory must be relative and under the current working directory. |
 | `--toolkit-root <dir>` | You want generated manifests to use a local toolkit checkout. | This is the default during toolkit development. |
-| `--toolkit-git <url>` | You want a portable service repository. | Use `https://github.com/sednalabs/mcp-toolkit-rs` for public Git dependencies. |
+| `--toolkit-git <url>` | You want a portable service repository. | Use `https://github.com/sednalabs/mcp-toolkit-rs` for public Git dependencies; `release-preflight` rejects local toolkit path dependencies and committed Cargo path overrides for public-ready output. |
 | `--force` | You are intentionally replacing generated files. | Without this, changed files are protected from overwrite. |
 
 Do not pass both `--toolkit-root` and `--toolkit-git`. A generated public or
@@ -169,13 +169,14 @@ mcp-toolkit release-preflight my-mcp-server
 Release preflight is stricter than doctor. It expects a public-ready repository
 shape with README guidance, a license file, Cargo license and description
 metadata, baseline CI, CodeQL, coverage, dependency governance, schema/probe
-proof, governance docs, and no high-confidence secret markers in generated text
-files.
+proof for the generated transport, governance docs, portable toolkit
+dependencies, no committed Cargo path overrides, and no high-confidence secret
+markers in generated text files.
 
 The `single-crate-public-stdio` template is designed to pass release preflight
-from generation. Smaller starter templates may pass `doctor` but fail
-`release-preflight` until the service repository adds public release files and
-workflows.
+from generation when created with `--toolkit-git`. Smaller starter templates may
+pass `doctor` but fail `release-preflight` until the service repository adds
+public release files and workflows.
 
 ## Client Config
 

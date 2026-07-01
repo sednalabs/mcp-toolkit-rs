@@ -22,6 +22,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::doctor::{inspect_project, DoctorShape};
+use toml_edit::{DocumentMut, Item, TableLike};
 
 const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
     ("README", "README.md"),
@@ -45,7 +46,6 @@ const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
         ".github/workflows/codeql-query-tests.yml",
     ),
     ("Tool schema snapshot", "spec/tool_schema_snapshot.v1.json"),
-    ("MCP probe scenario", "spec/mcp_probe_stdio_smoke.v1.json"),
     (
         "Catalog profile contract test",
         "tests/catalog_profile_contract.rs",
@@ -61,6 +61,9 @@ const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
     ),
     ("Dependency audit config", "deny.toml"),
 ];
+
+const STDIO_PROBE_SCENARIO: &str = "spec/mcp_probe_stdio_smoke.v1.json";
+const HTTP_AUTH_PROBE_SCENARIO: &str = "spec/mcp_probe_http_auth_smoke.v1.json";
 
 const TEXT_FILE_EXTENSIONS: &[&str] =
     &["toml", "md", "rs", "json", "yml", "yaml", "sh", "py", "txt"];
@@ -184,7 +187,10 @@ pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightRepo
         checks.push(file_check(&root, label, path));
     }
 
+    checks.push(probe_scenario_check(&root, doctor.shape));
     checks.push(manifest_metadata_check(&root));
+    checks.push(portable_toolkit_dependencies_check(&root));
+    checks.push(cargo_local_path_overrides_check(&root));
     checks.push(readme_guidance_check(&root));
     checks.push(secret_marker_check(&root));
 
@@ -206,6 +212,34 @@ fn file_check(root: &Path, label: &'static str, path: &'static str) -> ReleasePr
             "present".to_string()
         } else {
             "required for a public-ready generated MCP repository".to_string()
+        },
+    }
+}
+
+fn probe_scenario_check(root: &Path, shape: DoctorShape) -> ReleasePreflightCheck {
+    let (target, detail) = match shape {
+        DoctorShape::HostedHttpAuth => (
+            HTTP_AUTH_PROBE_SCENARIO,
+            "required hosted HTTP auth MCP probe scenario",
+        ),
+        DoctorShape::PublicStdio | DoctorShape::Stdio => {
+            (STDIO_PROBE_SCENARIO, "required stdio MCP probe scenario")
+        }
+        DoctorShape::Unknown => (
+            "spec/mcp_probe_*.v1.json",
+            "doctor could not infer the generated transport; restore stdio or hosted HTTP proof",
+        ),
+    };
+    let passed = shape != DoctorShape::Unknown && exists(root, target);
+    ReleasePreflightCheck {
+        label: "MCP probe scenario",
+        target: target.to_string(),
+        required: true,
+        passed,
+        detail: if passed {
+            "present".to_string()
+        } else {
+            detail.to_string()
         },
     }
 }
@@ -239,6 +273,91 @@ fn manifest_metadata_check(root: &Path) -> ReleasePreflightCheck {
         required: true,
         passed,
         detail,
+    }
+}
+
+fn portable_toolkit_dependencies_check(root: &Path) -> ReleasePreflightCheck {
+    let path = root.join("Cargo.toml");
+    let contents = fs::read_to_string(&path);
+    let (passed, detail) = match contents {
+        Ok(contents) => match local_toolkit_path_dependencies(&contents) {
+            Ok(local_deps) => {
+                if local_deps.is_empty() {
+                    (
+                        true,
+                        "toolkit dependencies are portable or absent".to_string(),
+                    )
+                } else {
+                    (
+                        false,
+                        format!(
+                            "replace local toolkit path dependencies with `--toolkit-git`: {}",
+                            local_deps.join(", ")
+                        ),
+                    )
+                }
+            }
+            Err(error) => (false, format!("failed to parse Cargo.toml: {error}")),
+        },
+        Err(error) => (false, format!("failed to read Cargo.toml: {error}")),
+    };
+
+    ReleasePreflightCheck {
+        label: "Portable toolkit dependencies",
+        target: "Cargo.toml".to_string(),
+        required: true,
+        passed,
+        detail,
+    }
+}
+
+fn cargo_local_path_overrides_check(root: &Path) -> ReleasePreflightCheck {
+    let config_paths = [".cargo/config.toml", ".cargo/config"];
+    let mut overrides = Vec::new();
+    for relative in config_paths {
+        if !exists(root, relative) {
+            continue;
+        }
+        let path = root.join(relative);
+        match fs::read_to_string(&path) {
+            Ok(contents) => match cargo_config_path_overrides(&contents) {
+                Ok(mut findings) => overrides.append(&mut findings),
+                Err(error) => {
+                    return ReleasePreflightCheck {
+                        label: "Cargo local path overrides",
+                        target: relative.to_string(),
+                        required: true,
+                        passed: false,
+                        detail: format!("failed to parse {relative}: {error}"),
+                    };
+                }
+            },
+            Err(error) => {
+                return ReleasePreflightCheck {
+                    label: "Cargo local path overrides",
+                    target: relative.to_string(),
+                    required: true,
+                    passed: false,
+                    detail: format!("failed to read {relative}: {error}"),
+                };
+            }
+        }
+    }
+    overrides.sort();
+    overrides.dedup();
+    ReleasePreflightCheck {
+        label: "Cargo local path overrides",
+        target: ".cargo/config.toml".to_string(),
+        required: true,
+        passed: overrides.is_empty(),
+        detail: if overrides.is_empty() {
+            "no committed Cargo path overrides found".to_string()
+        } else {
+            format!(
+                "remove committed Cargo path overrides: {}",
+                overrides.join(", ")
+            )
+        },
     }
 }
 
@@ -294,6 +413,114 @@ fn secret_marker_check(root: &Path) -> ReleasePreflightCheck {
             format!("found {}", findings.join(", "))
         },
     }
+}
+
+fn local_toolkit_path_dependencies(contents: &str) -> Result<Vec<String>, toml_edit::TomlError> {
+    let manifest = contents.parse::<DocumentMut>()?;
+    let mut deps = Vec::new();
+    collect_dependency_tables(manifest.as_table(), &mut deps);
+    if let Some(workspace) = manifest
+        .as_item()
+        .get("workspace")
+        .and_then(Item::as_table_like)
+    {
+        collect_dependency_tables(workspace, &mut deps);
+    }
+    if let Some(target) = manifest
+        .as_item()
+        .get("target")
+        .and_then(Item::as_table_like)
+    {
+        collect_target_dependency_tables(target, &mut deps);
+    }
+    collect_cargo_override_tables(manifest.as_table(), &mut deps);
+    deps.sort();
+    deps.dedup();
+    Ok(deps)
+}
+
+fn cargo_config_path_overrides(contents: &str) -> Result<Vec<String>, toml_edit::TomlError> {
+    let config = contents.parse::<DocumentMut>()?;
+    let mut overrides = Vec::new();
+    if let Some(paths) = config.as_item().get("paths") {
+        let has_entries = paths
+            .as_array()
+            .map(|array| !array.is_empty())
+            .unwrap_or(true);
+        if has_entries {
+            overrides.push("paths".to_string());
+        }
+    }
+    Ok(overrides)
+}
+
+fn collect_cargo_override_tables(root: &dyn TableLike, deps: &mut Vec<String>) {
+    if let Some(patch) = root.get("patch").and_then(Item::as_table_like) {
+        for (_source, item) in patch.iter() {
+            if let Some(source_overrides) = item.as_table_like() {
+                collect_local_toolkit_dependencies(source_overrides, deps);
+            }
+        }
+    }
+    if let Some(replace) = root.get("replace").and_then(Item::as_table_like) {
+        collect_local_toolkit_dependencies(replace, deps);
+    }
+}
+
+fn collect_target_dependency_tables(table: &dyn TableLike, deps: &mut Vec<String>) {
+    for (_name, item) in table.iter() {
+        if let Some(child) = item.as_table_like() {
+            collect_dependency_tables(child, deps);
+            collect_target_dependency_tables(child, deps);
+        }
+        if let Some(array) = item.as_array_of_tables() {
+            for child in array.iter() {
+                collect_dependency_tables(child, deps);
+                collect_target_dependency_tables(child, deps);
+            }
+        }
+    }
+}
+
+fn collect_dependency_tables(table: &dyn TableLike, deps: &mut Vec<String>) {
+    for table_name in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(dependencies) = table.get(table_name).and_then(Item::as_table_like) {
+            collect_local_toolkit_dependencies(dependencies, deps);
+        }
+    }
+}
+
+fn collect_local_toolkit_dependencies(table: &dyn TableLike, deps: &mut Vec<String>) {
+    for (name, item) in table.iter() {
+        let Some(toolkit_dependency) = toolkit_dependency_label(name, item) else {
+            continue;
+        };
+        let Some(metadata) = item.as_table_like() else {
+            continue;
+        };
+        if metadata.contains_key("path") {
+            deps.push(toolkit_dependency);
+        }
+    }
+}
+
+fn toolkit_dependency_label(name: &str, item: &Item) -> Option<String> {
+    if is_toolkit_dependency_name(name) {
+        return Some(name.to_string());
+    }
+    let package = item
+        .as_table_like()
+        .and_then(|metadata| metadata.get("package"))
+        .and_then(Item::as_str)?;
+    if is_toolkit_dependency_name(package) {
+        Some(format!("{name} (package = {package})"))
+    } else {
+        None
+    }
+}
+
+fn is_toolkit_dependency_name(name: &str) -> bool {
+    name == "mcp-toolkit" || name.starts_with("mcp-toolkit-") || name.starts_with("mcp-toolkit:")
 }
 
 fn contains_manifest_key(contents: &str, key: &str) -> bool {

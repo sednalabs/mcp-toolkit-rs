@@ -71,13 +71,20 @@ response when the scratchpad path is selected.
 
 ## Safety Defaults
 
-- Require an absolute scratchpad root directory. Custom roots must already
-  exist and must not contain parent-directory components.
+- Default to a private, randomly named scratchpad directory under the process
+  temp directory. On Unix this directory is created with owner-only
+  permissions.
+- Require custom scratchpad root directories to be absolute, already present,
+  and free of parent-directory components.
+- Salt session database filenames per manager so two managers using the same
+  custom root and session id do not reuse the same DuckDB file.
 - Keep scratchpad tools out of the default `read_only` profile unless the
   server explicitly chooses a combined profile.
 - Reject mutating or file-reading SQL before it reaches DuckDB.
 - Bound result pages and export samples separately from upstream fetch limits.
 - Clean up local session databases on explicit close and expired-session prune.
+  Empty default directories may remain after a process crash and should be
+  treated as disposable local working data.
 - Treat scratchpad files as local working data; do not put secrets or provider
   credentials into scratchpad tables.
 

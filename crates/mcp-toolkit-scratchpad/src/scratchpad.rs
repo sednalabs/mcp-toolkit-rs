@@ -27,6 +27,7 @@ const DEFAULT_QUERY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_MAX_SQL_BYTES: usize = 65_536;
 const DEFAULT_INTERRUPT_POLL_INTERVAL_MS: u64 = 5;
 const MAX_TABLE_SCHEMA_COLUMNS_PREVIEW: usize = 32;
+static SESSION_MANAGER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
 pub struct SessionDatabaseConfig {
@@ -109,6 +110,7 @@ pub struct ScratchpadSessionConfig {
     pub query_timeout: Duration,
     pub max_sql_bytes: usize,
     pub root_dir: PathBuf,
+    pub create_root_dir: bool,
 }
 
 impl ScratchpadSessionConfig {
@@ -128,11 +130,13 @@ impl ScratchpadSessionConfig {
             query_timeout: Duration::from_millis(DEFAULT_QUERY_TIMEOUT_MS),
             max_sql_bytes: DEFAULT_MAX_SQL_BYTES,
             root_dir: default_root_dir(),
+            create_root_dir: true,
         }
     }
 
     pub fn with_root_dir(mut self, root_dir: PathBuf) -> Self {
         self.root_dir = root_dir;
+        self.create_root_dir = false;
         self
     }
 
@@ -198,21 +202,94 @@ fn default_root_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
-fn prepare_scratchpad_root_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
+fn prepare_scratchpad_root_dir(
+    root_dir: &Path,
+    create_if_missing: bool,
+) -> Result<PathBuf, ScratchpadError> {
     let root_dir = validate_scratchpad_root_dir(root_dir)?;
+    if create_if_missing {
+        let parent = canonical_existing_scratchpad_dir(
+            &root_dir,
+            "default scratchpad parent directory must already exist and be readable",
+        )?;
+        return create_private_default_root(&parent);
+    }
+    canonical_existing_scratchpad_dir(
+        &root_dir,
+        "custom scratchpad root directory must already exist and be readable",
+    )
+}
+
+fn canonical_existing_scratchpad_dir(
+    root_dir: &Path,
+    read_error: &'static str,
+) -> Result<PathBuf, ScratchpadError> {
     let canonical = root_dir.canonicalize().map_err(|err| {
-        ScratchpadError::invalid(
-            "scratchpad_root_dir",
-            format!("custom scratchpad root directory must already exist and be readable: {err}"),
-        )
+        ScratchpadError::invalid("scratchpad_root_dir", format!("{read_error}: {err}"))
     })?;
     if !canonical.is_dir() {
         return Err(ScratchpadError::invalid(
             "scratchpad_root_dir",
-            "custom scratchpad root directory must be a directory",
+            "scratchpad root directory must be a directory",
         ));
     }
     validate_scratchpad_root_dir(&canonical)
+}
+
+fn create_private_default_root(parent: &Path) -> Result<PathBuf, ScratchpadError> {
+    let mut builder = tempfile::Builder::new();
+    let prefix = format!("mcp-toolkit-scratchpad-{}-", std::process::id());
+    builder.prefix(&prefix);
+    set_private_tempdir_permissions(&mut builder);
+
+    let tempdir = builder.tempdir_in(parent).map_err(|err| {
+        ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            format!("failed to create private default scratchpad root directory: {err}"),
+        )
+    })?;
+    let root_dir = tempdir.keep();
+    set_private_dir_permissions(&root_dir)?;
+    canonical_existing_scratchpad_dir(
+        &root_dir,
+        "default scratchpad root directory must be readable after creation",
+    )
+}
+
+#[cfg(unix)]
+fn set_private_tempdir_permissions(builder: &mut tempfile::Builder) {
+    use std::os::unix::fs::PermissionsExt;
+
+    builder.permissions(fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn set_private_tempdir_permissions(_builder: &mut tempfile::Builder) {}
+
+#[cfg(unix)]
+fn set_private_dir_permissions(root_dir: &Path) -> Result<(), ScratchpadError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(root_dir)
+        .map_err(|err| {
+            ScratchpadError::invalid(
+                "scratchpad_root_dir",
+                format!("failed to inspect default scratchpad root directory: {err}"),
+            )
+        })?
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(root_dir, permissions).map_err(|err| {
+        ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            format!("failed to restrict default scratchpad root directory permissions: {err}"),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn set_private_dir_permissions(_root_dir: &Path) -> Result<(), ScratchpadError> {
+    Ok(())
 }
 
 fn validate_scratchpad_root_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
@@ -379,6 +456,7 @@ pub struct ScratchpadSessionManager {
     config: ScratchpadSessionConfig,
     runtime_max_sessions: Arc<AtomicUsize>,
     runtime_max_tables_per_session: Arc<AtomicUsize>,
+    database_namespace: usize,
     state: Arc<Mutex<SessionState>>,
 }
 
@@ -388,8 +466,9 @@ impl ScratchpadSessionManager {
         mut config: ScratchpadSessionConfig,
     ) -> Result<Self, ScratchpadError> {
         config.validate()?;
-        let root_dir = prepare_scratchpad_root_dir(&config.root_dir)?;
+        let root_dir = prepare_scratchpad_root_dir(&config.root_dir, config.create_root_dir)?;
         config.root_dir = root_dir;
+        let database_namespace = SESSION_MANAGER_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         Ok(Self {
             engine,
@@ -397,6 +476,7 @@ impl ScratchpadSessionManager {
             runtime_max_tables_per_session: Arc::new(AtomicUsize::new(
                 config.max_tables_per_session,
             )),
+            database_namespace,
             config,
             state: Arc::new(Mutex::new(SessionState::default())),
         })
@@ -1146,7 +1226,11 @@ impl ScratchpadSessionManager {
             .sessions
             .entry(session_id.to_string())
             .or_insert_with(|| SessionEntry {
-                db_path: session_db_path(&self.config.root_dir, session_id),
+                db_path: session_db_path(
+                    &self.config.root_dir,
+                    session_id,
+                    self.database_namespace,
+                ),
                 last_touched: now,
                 tables_used: 0,
                 rows_used: 0,
@@ -2038,10 +2122,11 @@ fn normalize_session_id(raw: &str) -> Result<String, ScratchpadError> {
     Ok(session_id.to_string())
 }
 
-fn session_db_path(root_dir: &Path, session_id: &str) -> PathBuf {
+fn session_db_path(root_dir: &Path, session_id: &str, database_namespace: usize) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     session_id.hash(&mut hasher);
     std::process::id().hash(&mut hasher);
+    database_namespace.hash(&mut hasher);
     root_dir.join(format!("session-{:016x}.duckdb", hasher.finish()))
 }
 
@@ -2144,6 +2229,7 @@ fn contract_elapsed_ms(elapsed_millis: u128) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::SystemTime;
 
     use super::*;
@@ -2163,6 +2249,116 @@ mod tests {
     fn test_config(name: &str) -> ScratchpadSessionConfig {
         ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128)
             .with_root_dir(test_root_dir(name))
+    }
+
+    #[test]
+    fn default_session_config_creates_private_scratchpad_root() {
+        let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let config = ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128);
+
+        let manager = ScratchpadSessionManager::new(engine, config).expect("manager");
+        let root = &manager.config().root_dir;
+        let temp_root = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp root");
+        assert!(root.is_dir(), "default root should be created");
+        assert_eq!(
+            root.parent(),
+            Some(temp_root.as_path()),
+            "default root should live below the process temp directory"
+        );
+        assert!(
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("mcp-toolkit-scratchpad-"))
+                .unwrap_or(false),
+            "default root should be namespaced"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = fs::metadata(root)
+                .expect("default root metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "default root should be owner-only");
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn default_session_configs_create_distinct_scratchpad_roots() {
+        let engine_a: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let engine_b: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let manager_a = ScratchpadSessionManager::new(
+            engine_a,
+            ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128),
+        )
+        .expect("manager a");
+        let manager_b = ScratchpadSessionManager::new(
+            engine_b,
+            ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128),
+        )
+        .expect("manager b");
+
+        assert_ne!(
+            manager_a.config().root_dir,
+            manager_b.config().root_dir,
+            "default scratchpad roots should be exclusively allocated"
+        );
+
+        let _ = fs::remove_dir_all(&manager_a.config().root_dir);
+        let _ = fs::remove_dir_all(&manager_b.config().root_dir);
+    }
+
+    #[test]
+    fn managers_with_same_custom_root_do_not_reuse_session_database_paths() {
+        let root = test_root_dir("manager-namespace");
+        let engine_a: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let engine_b: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let manager_a = ScratchpadSessionManager::new(
+            engine_a,
+            ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128)
+                .with_root_dir(root.clone()),
+        )
+        .expect("manager a");
+        let manager_b = ScratchpadSessionManager::new(
+            engine_b,
+            ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128)
+                .with_root_dir(root.clone()),
+        )
+        .expect("manager b");
+
+        drop(
+            manager_a
+                .open_connection("same_session")
+                .expect("manager a session"),
+        );
+        drop(
+            manager_b
+                .open_connection("same_session")
+                .expect("manager b session"),
+        );
+
+        let databases = fs::read_dir(&root)
+            .expect("read scratchpad root")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(|extension| extension == "duckdb")
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(databases, 2, "manager namespace should avoid DB collisions");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
