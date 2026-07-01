@@ -49,12 +49,20 @@ impl ServerHandler for TestMcp {
 const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
 
 fn init_body() -> String {
-    let protocol_version =
-        serde_json::to_string(&mcp_toolkit_server::rmcp::model::ProtocolVersion::LATEST)
-            .expect("protocol");
-    format!(
-        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":{protocol_version},"capabilities":{{}},"clientInfo":{{"name":"test","version":"1.0"}}}}}}"#
-    )
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": mcp_toolkit_server::rmcp::model::ProtocolVersion::LATEST,
+            "capabilities": {},
+            "clientInfo": {
+                "name": "test",
+                "version": "1.0"
+            }
+        }
+    })
+    .to_string()
 }
 
 #[tokio::test]
