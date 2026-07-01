@@ -9,7 +9,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn health_is_public_and_host_guarded() {
+async fn health_is_public_and_host_origin_guarded() {
     let router = build_router(HostedHttpConfig::local_dev()).expect("router");
 
     let health = router
@@ -27,6 +27,7 @@ async fn health_is_public_and_host_guarded() {
     assert_eq!(health.status(), StatusCode::OK);
 
     let bad_host = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -38,6 +39,20 @@ async fn health_is_public_and_host_guarded() {
         .await
         .expect("bad-host health response");
     assert_eq!(bad_host.status(), StatusCode::FORBIDDEN);
+
+    let bad_origin = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "127.0.0.1")
+                .header("origin", "https://example.com")
+                .body(Body::empty())
+                .expect("bad-origin health request"),
+        )
+        .await
+        .expect("bad-origin health response");
+    assert_eq!(bad_origin.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

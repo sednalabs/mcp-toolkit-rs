@@ -13,7 +13,7 @@
 //!   configured auth posture.
 //!
 //! ## References
-//! * **MCP Transport**: <https://modelcontextprotocol.io/docs/concepts/transports>
+//! * **MCP Transport**: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
 
 use std::fmt;
 

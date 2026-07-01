@@ -30,6 +30,8 @@ pub mod auth;
 pub mod http;
 #[cfg(feature = "stdio")]
 pub mod stdio;
+#[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
+pub mod tools;
 
 #[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
 pub use rmcp;

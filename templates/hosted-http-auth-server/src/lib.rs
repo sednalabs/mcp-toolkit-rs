@@ -18,6 +18,7 @@ use mcp_toolkit::rmcp::{
 use mcp_toolkit::server::{
     auth::{AuthSurfaceBuilder, IssuerEntry},
     http::{HttpBindSafety, LocalMcpHttpServerBuilder},
+    tools::list_tools_result,
 };
 use mcp_toolkit_auth::surface::AuthorizationServerMetadataSource;
 use mcp_toolkit_auth::{AuthConfig, AuthMode, Authenticator, AuthorizationServerMetadata};
@@ -247,16 +248,13 @@ impl ServerHandler for HostedHttpServer {
 
     async fn list_tools(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
+        request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-        Ok(ListToolsResult {
-            tools: self
-                .tool_schema_snapshot_for_profile(&self.tool_profile)
-                .map_err(profile_error)?,
-            meta: None,
-            next_cursor: None,
-        })
+        let tools = self
+            .tool_schema_snapshot_for_profile(&self.tool_profile)
+            .map_err(profile_error)?;
+        list_tools_result(tools, request.as_ref())
     }
 }
 

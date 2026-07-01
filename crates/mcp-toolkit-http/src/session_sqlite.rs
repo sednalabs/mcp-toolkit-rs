@@ -25,7 +25,7 @@
 //! * Providing a consistent path for the SQLite database.
 //!
 //! ## References
-//! * [MCP HTTP Transport](https://modelcontextprotocol.io/docs/concepts/transports#http-sse)
+//! * [MCP Streamable HTTP Transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

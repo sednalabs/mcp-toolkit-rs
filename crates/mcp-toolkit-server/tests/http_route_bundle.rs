@@ -194,6 +194,29 @@ async fn route_bundle_rejects_unknown_host() {
 }
 
 #[tokio::test]
+async fn route_bundle_rejects_unknown_origin() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["127.0.0.1"])
+        .build(|| Ok(TestMcp::new()));
+    let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "127.0.0.1")
+                .header("origin", "https://example.com")
+                .body(Body::empty())
+                .expect("health request"),
+        )
+        .await
+        .expect("health response");
+
+    assert_eq!(response.status(), 403);
+}
+
+#[tokio::test]
 async fn route_bundle_preserves_port_qualified_host_allowlist() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["example.com:8080"])

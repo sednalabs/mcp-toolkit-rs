@@ -1,7 +1,7 @@
 //! # Tool List Change Helpers
 //!
-//! Tracks tool list fingerprints to detect session-specific changes so server
-//! code can decide when to emit `notifications/tools/list_changed`.
+//! Tracks tool list fingerprints to detect controlled tool-list changes so
+//! server code can decide when to emit `notifications/tools/list_changed`.
 //!
 //! ## Ownership
 //! This module owns the fingerprinting logic and the in-memory state tracker for
@@ -12,10 +12,11 @@
 //! memory-based state tracking for notification triggers.
 //!
 //! ## When to use
-//! Use this when your `tools/list` surface is stable within a session but may
-//! change across sessions, capability refreshes, or deferred-loading phases.
-//! It is a fit for session-aware MCP servers that need to detect "same tools"
-//! versus "tool list changed" without storing a full copy of the registry.
+//! Use this when your `tools/list` surface is stable for a negotiated session
+//! but may change after an explicit capability refresh, profile switch, or
+//! deferred-loading phase. It is a fit for session-aware MCP servers that need
+//! to detect "same tools" versus "tool list changed" without storing a full
+//! copy of the registry.
 //!
 //! ## Policy & Guarantees
 //! * **Change Detection**: Generates stable fingerprints based on tool set, allowing
@@ -29,7 +30,7 @@
 //! * Translating `ToolListUpdate` states into actual transport-level notifications.
 //!
 //! ## References
-//! * [MCP Transport] https://modelcontextprotocol.io/docs/concepts/transports#http-sse
+//! * [MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
 
 use std::collections::HashMap;
 use std::sync::Mutex;

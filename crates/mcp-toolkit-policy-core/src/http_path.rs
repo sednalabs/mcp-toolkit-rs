@@ -22,7 +22,7 @@
 //! * Ensuring that the returned `Decision` is applied at the correct architectural gate.
 //!
 //! ## References
-//! * [MCP HTTP Transport](https://modelcontextprotocol.io/docs/concepts/transports#http-sse)
+//! * [MCP Streamable HTTP Transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 
 use crate::{string_within_boundary_limit, Decision, DecisionCode};
 
