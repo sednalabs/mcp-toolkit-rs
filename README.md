@@ -46,11 +46,13 @@ when you need the machine-readable pattern shape and the implementation recipe
 that goes with it. For a copyable checklist that turns that route into a
 repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
 exact generator commands, flags, generated files, and customization points, use
-`docs/new-server-cli-reference.md`. For the operator-facing details that make a
-server easy to try and debug, use `docs/easy-server-ergonomics.md`. For legacy
-systems with partial APIs, admin HTML, scheduled jobs, or private exports, use
-`docs/legacy-system-adapter-pattern.md` before exposing any generic HTTP, SQL,
-or browser-style tool. For auth failure handling, use
+`docs/new-server-cli-reference.md`. For the longer direction on turning API
+specs and docs into safe server scaffolds, use
+`docs/instant-server-generation.md`. For the operator-facing details that make
+a server easy to try and debug, use `docs/easy-server-ergonomics.md`. For
+legacy systems with partial APIs, admin HTML, scheduled jobs, or private
+exports, use `docs/legacy-system-adapter-pattern.md` before exposing any
+generic HTTP, SQL, or browser-style tool. For auth failure handling, use
 `docs/auth-error-contracts.md`.
 
 ### Create A Server From A Maintained Template
@@ -74,6 +76,21 @@ cargo run -- --print-tool-schema
 cargo run -- --print-client-config
 cargo test --all-targets --all-features
 ```
+
+If you already have an API description, draft the first tool surface before
+generating or editing provider code:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- draft-tools ./openapi.json
+cargo run -p mcp-toolkit --bin mcp-toolkit -- draft-tools ./openapi.json --json
+```
+
+`draft-tools` reads a local OpenAPI JSON file, standalone JSON Schema, or
+endpoint-shaped markdown/text and prints a conservative review report. It does
+not fetch remote references, call the upstream API, or generate a generic
+endpoint proxy. Read operations are proposed for the `read_only` profile;
+write, destructive, and uncertain operations stay disabled by default under
+`operator` review.
 
 For a portable service repository, generate outside the toolkit checkout and
 rewrite toolkit dependencies to public Git sources immediately:
@@ -177,44 +194,48 @@ cargo test --workspace --all-targets --all-features
 For a new Rust MCP server, start with the smallest slice that gives you a
 stable public surface:
 
-1. Use `mcp-toolkit-core::tool_inventory::ToolCatalog` to declare the tools,
+1. Optionally run `mcp-toolkit draft-tools <openapi-or-docs>` to turn an
+   existing OpenAPI JSON file, JSON Schema, or endpoint notes into a reviewable
+   catalog draft. Treat this as input to design review, not as an exposed tool
+   surface.
+2. Use `mcp-toolkit-core::tool_inventory::ToolCatalog` to declare the tools,
    schemas, examples, handler symbols, and inventory metadata your server can
    expose.
-2. Register the standard generated profiles with
+3. Register the standard generated profiles with
    `ToolCatalog::with_standard_profiles(["read"])` when the server may grow
    beyond a pure read-only surface. This adds a default `read_only` profile and
    an explicit `operator` profile; gate mutation tools with
    `ToolCatalogEntry::with_operator_profile_gate()` so they can ship in the
    binary without appearing in the default profile.
-3. Define additional native catalog profiles with `ToolCatalogProfile` when a
+4. Define additional native catalog profiles with `ToolCatalogProfile` when a
    server has large or role-shaped tool surfaces. Emit `ToolCatalogContract`
    artifacts from the same catalog-derived inventory and validate them with
    `mcp_toolkit_testing::catalog_profile_contract` so required tools and groups
    are probe-visible without adding production `find_tools` workarounds.
-4. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
+5. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
    `tools/list` contract.
-5. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
+6. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
    catalogs should publish a reusable `defer_loading` plus `tool_search`
    request fragment, a richer documentation/resource template, and a local
    `allowed_tools` discovery envelope.
-6. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
+7. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery, Protected Resource Metadata, and
    device-authorization metadata for headless MCP client login.
-7. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+8. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle. Server authors can import the underlying
    `rmcp` authoring surface through `mcp_toolkit::rmcp` or
    `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
-8. Use `mcp-toolkit-scratchpad` when a read-only or analytics server needs to
+9. Use `mcp-toolkit-scratchpad` when a read-only or analytics server needs to
    keep large rowsets out of chat while still giving agents bounded DuckDB SQL,
    table inventory, query projections, and cleanup/export affordances. Keep
    provider-specific ingest and evidence wording in the service repository.
-9. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+10. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-10. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+11. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.
-11. Add policy crates only when the service has an authorization, SQL
+12. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a legacy backend, first map source authority and blocked operations using

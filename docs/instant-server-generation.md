@@ -3,15 +3,21 @@
 This note describes the toolkit direction for spinning up secure, useful MCP
 servers in moments from existing API descriptions and documentation.
 
-The target is a helper workflow, and eventually a small toolkit CLI, that can
+The target is a helper workflow, and eventually a fuller toolkit CLI, that can
 turn OpenAPI, JSON Schema, documented endpoints, example requests, and service
-README material into a reviewable Rust MCP server scaffold.
+README material into a reviewable Rust MCP server scaffold. The first useful
+CLI slice exists today as `mcp-toolkit draft-tools`: it produces a conservative
+tool-catalog review report from a local OpenAPI JSON file, standalone JSON
+Schema, or endpoint-shaped markdown/text. JSON output uses the stable
+`mcp_toolkit_draft_tools_report` marker so PRs and Ops work items can link to a
+predictable artifact.
 
 ## Goal
 
 Make the fast path feel like this:
 
 ```bash
+mcp-toolkit draft-tools ./openapi.json --format json
 mcp-toolkit generate server \
   --name example-api-mcp \
   --openapi ./openapi.yaml \
@@ -38,6 +44,8 @@ The generated output should include:
 
 The dream is instant scaffolding with secure defaults, followed by a short
 human review pass to decide which generated tools deserve to be public.
+`draft-tools` is intentionally only the review-report step. It does not expose tools.
+It also does not create a generic endpoint proxy.
 
 ## Inputs
 
@@ -120,8 +128,10 @@ work item.
 
 This direction likely wants these reusable pieces:
 
-- `mcp-toolkit-generate`: CLI entrypoint for scaffold generation;
-- OpenAPI/JSON Schema parser and operation classifier;
+- `mcp-toolkit draft-tools`: first deterministic review-report slice for local
+  OpenAPI JSON, JSON Schema, and endpoint notes;
+- `mcp-toolkit-generate`: future CLI entrypoint for scaffold generation;
+- richer OpenAPI/JSON Schema parser and operation classifier;
 - intent-tool proposal engine with allowlist output;
 - auth-profile templates for common upstream schemes;
 - upstream OAuth setup templates that produce status, login, reauth, logout,
@@ -138,15 +148,21 @@ service owns its domain model and final tool decisions.
 
 ## First Useful Slice
 
-The smallest valuable slice is not a full AI code generator. It is a deterministic
-scaffold helper that accepts:
+The smallest valuable slice is not a full AI code generator. It is the
+deterministic `mcp-toolkit draft-tools` command, which accepts:
 
-- an OpenAPI file;
-- a server name;
-- a transport choice;
-- an explicit list of operations to expose;
-- a read-only or operator profile.
+- a local OpenAPI JSON file;
+- a standalone JSON Schema or schema-like JSON object;
+- endpoint-shaped markdown/text such as `GET /items List items`;
+- text or JSON output for PR and Ops review.
 
-That slice can produce a compiling server with placeholder fake fixtures,
-tool-schema snapshots, and a review report. Later slices can add documentation
-mining, intent grouping, and richer operation classification.
+It emits a short report with proposed tool names, source references, input and
+output schemas where available, read/write/destructive classification, profile
+gates, and review tasks. Read operations are the only enabled-by-default
+drafts. Write, destructive, and uncertain operations stay as
+disabled-by-default `operator` drafts.
+
+The next slice can turn approved report entries into a compiling server with
+placeholder fake fixtures, tool-schema snapshots, and generated catalog-profile
+tests. Later slices can add documentation mining, intent grouping, typed models,
+and richer operation classification.

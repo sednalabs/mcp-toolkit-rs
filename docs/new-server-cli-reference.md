@@ -28,6 +28,7 @@ mcp-toolkit <command>
 | `mcp-toolkit patterns` | List maintained archetypes and their recommended templates. | Use `patterns <id>` before generating from a pattern. |
 | `mcp-toolkit patterns <id>` | Show manifest evidence for one archetype. | Record the recipe and reference manifests in the review evidence. |
 | `mcp-toolkit pattern <id>` | Alias for `patterns <id>`. | Same as above. |
+| `mcp-toolkit draft-tools <source>` | Draft a conservative MCP tool report from local OpenAPI JSON, JSON Schema, or endpoint notes. | Review names, profiles, auth, pagination, and tests before copying approved entries into code. |
 | `mcp-toolkit new --name <package>` | Generate a new server from a maintained template. | Run `doctor`, inspect generated files, then run generated tests. |
 | `mcp-toolkit doctor [generated-server-dir]` | Check generated source, proof files, probe files, and baseline workflow. | Fix missing scaffold files or continue to validation. |
 | `mcp-toolkit release-preflight [generated-server-dir]` | Check public-readiness files, workflows, release proof scaffolding, and high-confidence secret markers. | Fix missing public repository evidence before publishing or installing. |
@@ -39,11 +40,40 @@ The top-level help is deliberately short:
 ```bash
 mcp-toolkit --help
 mcp-toolkit new --help
+mcp-toolkit draft-tools --help
 mcp-toolkit doctor --help
 mcp-toolkit release-preflight --help
 mcp-toolkit client-config --help
 mcp-toolkit conformance --help
 ```
+
+## Draft Tools
+
+Use `draft-tools` when an existing API description or provider docs can seed
+the first catalog discussion:
+
+```bash
+mcp-toolkit draft-tools ./openapi.json
+mcp-toolkit draft-tools ./openapi.json --format json
+mcp-toolkit draft-tools ./endpoints.md --json
+```
+
+Supported inputs are deliberately local and deterministic:
+
+- OpenAPI JSON with a top-level `paths` object;
+- standalone JSON Schema or schema-like JSON objects;
+- markdown or text lines shaped like `GET /items List items`.
+
+The command emits a review report with the stable JSON schema marker
+`mcp_toolkit_draft_tools_report`. It does not execute generated code, fetch
+remote `$ref` targets, call upstream APIs, or expose tools. Read-like operations
+are proposed for the `read_only` profile; write, destructive, and uncertain
+operations are proposed as disabled-by-default `operator` work.
+
+Treat the report as planning input. Before copying a proposed entry into a real
+`ToolCatalogEntry`, confirm user-intent naming, auth scopes, pagination,
+rate-limit behavior, timeout/error mapping, fake-adapter fixtures, schema
+snapshots, and catalog-profile tests.
 
 ## Generator Options
 

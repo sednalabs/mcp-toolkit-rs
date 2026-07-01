@@ -1,5 +1,7 @@
 const LANE_DOC: &str = include_str!("../../../docs/new-server-delivery-lane.md");
 const CLI_REFERENCE_DOC: &str = include_str!("../../../docs/new-server-cli-reference.md");
+const INSTANT_SERVER_GENERATION_DOC: &str =
+    include_str!("../../../docs/instant-server-generation.md");
 const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-atlas.md");
 const PATTERN_MANIFESTS_DOC: &str = include_str!("../../../docs/pattern-manifests.md");
 const PATTERN_RECIPES_DOC: &str = include_str!("../../../docs/pattern-recipes.md");
@@ -113,6 +115,7 @@ fn cli_reference_pins_command_and_file_surface() {
         "mcp-toolkit templates",
         "mcp-toolkit patterns",
         "mcp-toolkit patterns <id>",
+        "mcp-toolkit draft-tools <source>",
         "mcp-toolkit new --name <package>",
         "mcp-toolkit doctor [generated-server-dir]",
         "mcp-toolkit release-preflight [generated-server-dir]",
@@ -137,6 +140,23 @@ fn cli_reference_pins_command_and_file_surface() {
         assert!(
             CLI_REFERENCE_DOC.contains(needle),
             "CLI reference is missing `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn instant_server_generation_doc_tracks_draft_tools_boundary() {
+    for needle in [
+        "mcp-toolkit draft-tools",
+        "mcp_toolkit_draft_tools_report",
+        "local OpenAPI JSON",
+        "endpoint-shaped markdown/text",
+        "disabled-by-default `operator`",
+        "does not expose tools",
+    ] {
+        assert!(
+            INSTANT_SERVER_GENERATION_DOC.contains(needle),
+            "instant server generation doc is missing `{needle}`"
         );
     }
 }

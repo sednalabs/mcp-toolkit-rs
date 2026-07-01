@@ -7,6 +7,7 @@ use mcp_toolkit::client_config::{
     render_client_config, ClientConfigOptions, ClientConfigTransport,
 };
 use mcp_toolkit::doctor::inspect_project;
+use mcp_toolkit::draft_generator::{inspect_draft_source, DraftGeneratorOptions};
 use mcp_toolkit::new_server::{
     default_template_id, default_toolkit_git_url, default_toolkit_root, generate_new_server,
     templates, NewServerOptions, ToolkitDependencySource,
@@ -31,6 +32,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
         Some("release-preflight") | Some("release_preflight") | Some("preflight") => {
             run_release_preflight(&args[1..])
         }
+        Some("draft-tools")
+        | Some("draft_tools")
+        | Some("draft-catalog")
+        | Some("draft")
+        | Some("from-openapi") => run_draft_tools(&args[1..]),
         Some("client-config") | Some("client_config") => run_client_config(&args[1..]),
         Some("templates") | Some("list-templates") => {
             print_templates();
@@ -319,6 +325,78 @@ fn run_release_preflight(args: &[String]) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DraftOutputFormat {
+    Text,
+    Json,
+}
+
+fn run_draft_tools(args: &[String]) -> Result<(), String> {
+    let mut source: Option<PathBuf> = None;
+    let mut format = DraftOutputFormat::Text;
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.as_str() {
+            "--format" => {
+                let value = take_value(args, &mut index, "--format")?;
+                format = match value.as_str() {
+                    "text" => DraftOutputFormat::Text,
+                    "json" => DraftOutputFormat::Json,
+                    _ => return Err(format!("unknown draft-tools format `{value}`")),
+                };
+            }
+            "--json" => {
+                format = DraftOutputFormat::Json;
+            }
+            "--help" | "-h" => {
+                print_draft_tools_help();
+                return Ok(());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown draft-tools option `{value}`"));
+            }
+            value => {
+                if source.is_some() {
+                    return Err(
+                        "usage: mcp-toolkit draft-tools <source> [--format text|json]".to_string(),
+                    );
+                }
+                source = Some(PathBuf::from(value));
+            }
+        }
+        index += 1;
+    }
+
+    let source = source.ok_or_else(|| {
+        "missing source path; use `mcp-toolkit draft-tools openapi.json`".to_string()
+    })?;
+    if !source.exists() {
+        return Err(format!(
+            "draft source `{}` does not exist",
+            source.display()
+        ));
+    }
+    if !source.is_file() {
+        return Err(format!("draft source `{}` is not a file", source.display()));
+    }
+
+    let report = inspect_draft_source(&DraftGeneratorOptions { source })
+        .map_err(|error| error.to_string())?;
+    match format {
+        DraftOutputFormat::Text => print!("{}", report.render_text()),
+        DraftOutputFormat::Json => {
+            let json = report
+                .render_json()
+                .map_err(|error| format!("failed to render draft report JSON: {error}"))?;
+            println!("{json}");
+        }
+    }
+
+    Ok(())
+}
+
 fn run_conformance(args: &[String]) -> Result<(), String> {
     let mut strict = false;
     let mut server: Option<String> = None;
@@ -605,13 +683,15 @@ fn print_help() {
     println!("  mcp-toolkit new --name <package> [--template <id>] [--output <relative-dir>]");
     println!("  mcp-toolkit doctor [generated-server-dir]");
     println!("  mcp-toolkit release-preflight [generated-server-dir]");
+    println!("  mcp-toolkit draft-tools <openapi-or-docs> [--format text|json]");
     println!("  mcp-toolkit client-config [generated-server-dir]");
     println!("  mcp-toolkit templates");
     println!("  mcp-toolkit conformance [--server <name>|--pattern <id>] [--strict]");
     println!("  mcp-toolkit patterns [pattern-id]");
     println!();
     println!("Run `mcp-toolkit new --help`, `mcp-toolkit doctor --help`,");
-    println!("`mcp-toolkit release-preflight --help`, or `mcp-toolkit client-config --help` for options.");
+    println!("`mcp-toolkit release-preflight --help`, `mcp-toolkit draft-tools --help`,");
+    println!("or `mcp-toolkit client-config --help` for options.");
 }
 
 fn print_new_help() {
@@ -651,6 +731,21 @@ fn print_release_preflight_help() {
     println!("Checks a generated Rust MCP server for public-ready README, license,");
     println!("CI, CodeQL, dependency governance, schema/probe proof, and obvious");
     println!("high-confidence secret markers without executing generated code.");
+}
+
+fn print_draft_tools_help() {
+    println!("Usage:");
+    println!("  mcp-toolkit draft-tools <source> [--format text|json]");
+    println!();
+    println!("Reads a local OpenAPI JSON file, standalone JSON Schema, or markdown/text");
+    println!("endpoint notes and prints a conservative MCP tool-catalog draft for human");
+    println!("review. The command does not call upstream APIs, fetch remote refs, or expose");
+    println!("write/destructive operations by default.");
+    println!();
+    println!("Options:");
+    println!("      --format <kind>      text or json (default: text)");
+    println!("      --json               Shortcut for --format json");
+    println!("  -h, --help               Show this help");
 }
 
 fn print_client_config_help() {
