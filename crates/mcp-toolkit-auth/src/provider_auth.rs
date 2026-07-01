@@ -319,7 +319,13 @@ impl GoogleProviderAuthConfig {
 
     /// Adds the Google API service name used by `gcloud services enable`.
     pub fn with_api_service_name(mut self, api_service_name: impl Into<String>) -> Self {
-        self.api_service_name = Some(api_service_name.into());
+        let api_service_name = api_service_name.into();
+        let trimmed = api_service_name.trim();
+        if trimmed.is_empty() {
+            self.api_service_name = None;
+        } else {
+            self.api_service_name = Some(trimmed.to_string());
+        }
         self
     }
 
@@ -362,6 +368,8 @@ impl GoogleProviderAuthConfig {
     pub fn api_enable_command(&self) -> Option<Vec<String>> {
         self.api_service_name
             .as_deref()
+            .map(str::trim)
+            .filter(|service| !service.is_empty())
             .map(|service| google_api_enable_command(service, &self.quota_project_placeholder))
     }
 
@@ -496,7 +504,10 @@ pub fn google_adc_login_command_with_client_id_file<'a>(
     headless: bool,
     client_id_file: &str,
 ) -> Vec<String> {
-    let mut command = google_adc_login_command(provider_scopes, headless);
+    let mut command = google_adc_login_command(provider_scopes, false);
+    if headless {
+        command.push("--no-browser".to_string());
+    }
     command.push("--client-id-file".to_string());
     command.push(client_id_file_or_default(client_id_file).to_string());
     command
@@ -927,14 +938,14 @@ mod tests {
                 "application-default".to_string(),
                 "login".to_string(),
                 "--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/analytics.readonly".to_string(),
-                "--no-launch-browser".to_string(),
+                "--no-browser".to_string(),
                 "--client-id-file".to_string(),
                 "/tmp/google oauth client.json".to_string(),
             ]
         );
         assert_eq!(
             rendered,
-            "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/analytics.readonly --no-launch-browser --client-id-file '/tmp/google oauth client.json'"
+            "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/analytics.readonly --no-browser --client-id-file '/tmp/google oauth client.json'"
         );
     }
 
@@ -969,7 +980,7 @@ mod tests {
         assert!(plan
             .headless_login_with_client_id_file
             .shell
-            .contains("--no-launch-browser --client-id-file /path/to/client_id.json"));
+            .contains("--no-browser --client-id-file /path/to/client_id.json"));
         assert_eq!(
             plan.quota_project.shell,
             "gcloud auth application-default set-quota-project YOUR_PROJECT"
@@ -986,6 +997,20 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("client-id-file")));
+    }
+
+    #[test]
+    fn google_adc_setup_plan_omits_blank_api_enable_command() {
+        let config =
+            GoogleProviderAuthConfig::new("Example API", Vec::new()).with_api_service_name("  ");
+
+        let plan = config.adc_setup_plan();
+
+        assert!(plan.api_enable.is_none());
+        assert!(plan
+            .next_steps
+            .iter()
+            .all(|step| !step.contains("enable the required Google API")));
     }
 
     #[test]
