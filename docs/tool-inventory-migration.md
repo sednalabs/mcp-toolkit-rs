@@ -21,7 +21,10 @@ tool capability composition without changing your auth authority model.
    - create `ToolCatalog` from `ToolCatalogEntry` values
    - attach discovery metadata, schemas, examples, tags, and handler symbols
    - derive `ToolInventory` from the catalog with `catalog.inventory()`
-   - set `ToolInventoryPolicy` (`strict()` recommended once registrations are complete)
+   - keep `ToolInventoryPolicy::default()` or `strict()` for fail-closed
+     behavior once registrations are complete
+   - use `ToolInventoryPolicy::permissive()` only as a temporary migration
+     bridge while legacy registrations are incomplete
    - call `catalog.with_standard_profiles(["read"])` or
      `catalog.register_standard_profiles(["read"])` for generated servers that
      should default to `read_only` while still supporting an explicit
@@ -53,6 +56,11 @@ A server using this pattern should register each exported tool explicitly:
   deferred-loading search responses;
 - standard `read_only` and `operator` profiles for production behavior;
 - a deliberately reviewed fallback only if registration initialization fails.
+
+`ToolInventoryPolicy::default()` is intentionally fail-closed for unknown tools.
+If a migration needs to expose legacy tools before every registration is
+complete, make that explicit with `ToolInventoryPolicy::permissive()` and remove
+it before treating the catalog as generator or public-server evidence.
 
 ## Design boundary
 

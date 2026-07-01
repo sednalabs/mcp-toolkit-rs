@@ -446,7 +446,7 @@ fn tool_search_result_value(result: &ToolSearchResult) -> Value {
 }
 
 /// Filtering policy for inventory-based capability composition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolInventoryPolicy {
     /// Optional allowlist of tool groups. `None` means all groups are allowed.
     pub allowed_groups: Option<HashSet<String>>,
@@ -458,22 +458,23 @@ pub struct ToolInventoryPolicy {
     pub include_unregistered: bool,
 }
 
-impl Default for ToolInventoryPolicy {
-    fn default() -> Self {
-        Self {
-            allowed_groups: None,
-            read_only_only: false,
-            enabled_feature_flags: HashSet::new(),
-            include_unregistered: true,
-        }
-    }
-}
-
 impl ToolInventoryPolicy {
     /// Create a strict policy that denies unknown/unregistered tools.
     pub fn strict() -> Self {
         Self {
             include_unregistered: false,
+            ..Self::default()
+        }
+    }
+
+    /// Create a permissive policy that allows unknown/unregistered tools.
+    ///
+    /// Use this only while migrating legacy servers whose tool registrations
+    /// are not complete yet. Generated and public-facing servers should keep
+    /// the default fail-closed behavior.
+    pub fn permissive() -> Self {
+        Self {
+            include_unregistered: true,
             ..Self::default()
         }
     }
@@ -1319,8 +1320,31 @@ impl ToolCatalog {
 
     /// Build a schema object keyed by tool name.
     pub fn schemas_by_tool(&self) -> Value {
+        self.schemas_for_entries(self.entries.iter())
+    }
+
+    fn schemas_by_tool_names<'a>(&self, tool_names: impl IntoIterator<Item = &'a str>) -> Value {
+        let wanted = tool_names
+            .into_iter()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect::<HashSet<_>>();
+        if wanted.is_empty() {
+            return Value::Object(Map::new());
+        }
+        self.schemas_for_entries(
+            self.entries
+                .iter()
+                .filter(|entry| wanted.contains(entry.name())),
+        )
+    }
+
+    fn schemas_for_entries<'a>(
+        &self,
+        entries: impl IntoIterator<Item = &'a ToolCatalogEntry>,
+    ) -> Value {
         let mut schemas = Map::new();
-        for entry in &self.entries {
+        for entry in entries {
             let mut schema = Map::new();
             if let Some(input_schema) = &entry.input_schema {
                 schema.insert("input".to_string(), input_schema.clone());
@@ -1343,13 +1367,14 @@ impl ToolCatalog {
         policy: &ToolInventoryPolicy,
     ) -> ToolSearchResponse {
         let results = self.inventory().search(filter, operation, policy);
+        let schemas = self.schemas_by_tool_names(results.iter().map(|result| result.name.as_str()));
         ToolSearchResponse::find_tools(
             filter.query.clone(),
             filter.group.clone(),
             filter.read_only,
             results,
         )
-        .with_schemas(Some(self.schemas_by_tool()))
+        .with_schemas(Some(schemas))
     }
 
     /// Search catalog inventory through a named catalog profile.
@@ -1850,9 +1875,16 @@ mod tests {
     }
 
     #[test]
-    fn permissive_policy_allows_unregistered_tools() {
+    fn default_policy_blocks_unregistered_tools() {
         let inventory = ToolInventory::new();
         let policy = ToolInventoryPolicy::default();
+        assert!(!inventory.is_allowed("unknown.tool", ToolOperation::Call, &policy));
+    }
+
+    #[test]
+    fn permissive_policy_allows_unregistered_tools() {
+        let inventory = ToolInventory::new();
+        let policy = ToolInventoryPolicy::permissive();
         assert!(inventory.is_allowed("unknown.tool", ToolOperation::Call, &policy));
     }
 
@@ -2174,7 +2206,14 @@ mod tests {
             .with_discovery(ToolDiscoveryMetadata::new(
                 "Update an item record.",
                 ["items", "update", "write"],
-            ));
+            ))
+            .with_input_schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"}
+                },
+                "required": ["id"]
+            }));
         let profile = ToolCatalogProfile::new(
             "read-default",
             "Read Default",
@@ -2218,6 +2257,23 @@ mod tests {
             response["schemas"]["items.search"]["input"]["properties"]["query"]["type"],
             json!("string")
         );
+        let response_schemas = response["schemas"].as_object().expect("schemas object");
+        assert!(!response_schemas.contains_key("items.update"));
+
+        let empty_response = catalog
+            .search_response_for_profile(
+                &ToolSearchFilter {
+                    query: Some("missing".to_string()),
+                    group: Some("items".to_string()),
+                    read_only: Some(true),
+                    limit: None,
+                },
+                ToolOperation::List,
+                &catalog.profiles()[0],
+            )
+            .to_value();
+        assert_eq!(empty_response["openai_allowed_tools"], json!([]));
+        assert_eq!(empty_response["schemas"], json!({}));
 
         let contracts = catalog.profile_contracts(ToolOperation::List);
         assert_eq!(contracts.len(), 1);
@@ -2232,6 +2288,10 @@ mod tests {
             json!([])
         );
         assert_eq!(snapshot["tools"][1]["name"], json!("items.update"));
+        assert_eq!(
+            snapshot["schemas"]["items.update"]["input"]["properties"]["id"]["type"],
+            json!("string")
+        );
         assert_eq!(snapshot["profiles"][0]["key"], json!("read-default"));
     }
 

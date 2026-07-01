@@ -98,6 +98,8 @@ or server-authoring policy:
 | `tools/list` | Templates filter tools by profile and now delegate cursor mechanics to `server::tools::list_tools_result`. | Keep. Custom visibility is service policy; pagination is centralized protocol hygiene. |
 | Tool-call denial | Hidden or profile-denied tools return `CallToolResult::error` with a caller-facing message. | Keep for profile denials. Unknown tool/protocol-shape errors should continue to use `rmcp` protocol errors where the tool router sees them. |
 | Tool annotations and schemas | `mcp-toolkit-core::capability` projects safety hints, input schemas, output schemas, and metadata into `rmcp::model::Tool`. | Keep. Tool annotations are hints, not authorization. Runtime policy must still enforce scopes and risk posture. |
+| Tool inventory defaults | `ToolInventoryPolicy::default()` is fail-closed for unknown tools, with an explicit `permissive()` migration helper for incomplete legacy catalogs. | Keep. Generated and public-facing servers should not list or call unregistered tools by accident. |
+| Profile-filtered schema discovery | Catalog `search_response` attaches schemas only for the tools visible in the filtered result set. Full catalog snapshots may still include all registered schemas. | Keep. Deferred discovery must not leak hidden operator or profile-specific tool schemas through a profile-filtered search response. |
 | Tool list changes | `ToolListTracker` fingerprints stable tool names and exposes `notifications/tools/list_changed` method metadata. | Keep with invariant: a negotiated session's tool list must not vary as an incidental side effect of ordinary requests. Emit list-changed only for explicit refresh/profile changes. |
 | Streamable HTTP session routing | Route bundles use `rmcp` Streamable HTTP services plus bounded local session management and optional stateless fallback for sessionless POSTs. Requests that carry an unknown or expired `MCP-Session-Id` return HTTP 404 instead of falling back to stateless handling. | Keep. This is deployment assembly, not protocol reimplementation. |
 | DNS rebinding defense | Route bundles validate Host/authority and validate present `Origin` headers. Explicit `allowed_origins` are now wired through to the underlying `rmcp` stateful and stateless services and use full origin tuple matching in the outer route guard. When explicit origins are not configured, the toolkit keeps the older host-derived Origin guard for safer local defaults. | Keep for route-bundle preflight and endpoint-ready hints. Do not add more custom parsing here when an `rmcp` configuration surface exists. Public browser-facing deployments should configure explicit `allowed_origins`. |
@@ -137,6 +139,9 @@ or server-authoring policy:
    construction. Loopback development still works with scaffold values, but
    non-loopback serving rejects the development delegation secret, placeholder
    issuer, and non-HTTPS public metadata URLs.
+10. Tool inventory policy now fails closed by default for unknown tools, keeps
+    permissive fallback behind an explicit migration helper, and profile-filtered
+    tool search now returns schemas only for visible search results.
 
 ## Current Risk Notes
 
@@ -174,6 +179,10 @@ or server-authoring policy:
   after applying service-owned visibility filtering.
 - Treat `ToolAnnotations` as client-facing hints. Do not rely on annotations as
   authorization or safety enforcement.
+- Keep default inventory policy fail-closed. Use `ToolInventoryPolicy::permissive()`
+  only as a reviewed migration bridge while completing legacy registrations.
+- When publishing profile-filtered tool search, include schemas only for tools
+  visible in that response.
 - Keep generated `tools/list` surfaces stable for a negotiated session. If an
   explicit profile or capability refresh changes the surface, emit
   `notifications/tools/list_changed` when the server declared that capability.
