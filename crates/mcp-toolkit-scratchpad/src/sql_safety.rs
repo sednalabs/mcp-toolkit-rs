@@ -115,9 +115,7 @@ pub fn validate_scratchpad_sql(
         Ok(()) => {}
         Err(err) => {
             let allow_duckdb_prefix = matches!(err.code, RestrictedSqlErrorCode::NotReadOnlyPrefix)
-                && DUCKDB_ALLOWED_PREFIXES
-                    .iter()
-                    .any(|prefix| upper.starts_with(prefix));
+                && has_allowed_duckdb_prefix(&upper);
             if !allow_duckdb_prefix {
                 return Err(map_core_error(err));
             }
@@ -163,6 +161,18 @@ fn contains_forbidden_keyword(surface_upper: &str) -> bool {
         .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
         .filter(|token| !token.is_empty())
         .any(|token| DUCKDB_FORBIDDEN_KEYWORDS.contains(&token))
+}
+
+fn has_allowed_duckdb_prefix(surface_upper: &str) -> bool {
+    DUCKDB_ALLOWED_PREFIXES.iter().any(|prefix| {
+        if !surface_upper.starts_with(prefix) {
+            return false;
+        }
+        match surface_upper.as_bytes().get(prefix.len()) {
+            Some(byte) => byte.is_ascii_whitespace(),
+            None => true,
+        }
+    })
 }
 
 fn contains_forbidden_function_call(surface_upper: &str) -> bool {
@@ -308,7 +318,7 @@ pub(crate) fn lexical_sql_surface(sql: &str) -> Result<String, ScratchpadSqlPoli
                     continue;
                 }
 
-                out.push(mask_hidden_byte(bytes[i]));
+                out.push(mask_byte(bytes[i]));
                 i += 1;
             }
             State::LineComment => {
@@ -431,8 +441,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duckdb_external_scan_function_as_delimited_identifier() {
+        let err = must_err(validate_scratchpad_sql(
+            "SELECT * FROM \"read_csv_auto\"('a.csv')",
+            1024,
+        ));
+        assert_eq!(err.code, ScratchpadSqlPolicyCode::DuckDbForbiddenFunction);
+    }
+
+    #[test]
     fn allows_describe_prefix() {
         assert!(validate_scratchpad_sql("DESCRIBE SELECT 1", 1024).is_ok());
+    }
+
+    #[test]
+    fn rejects_allowed_duckdb_prefix_inside_larger_identifier() {
+        let err = must_err(validate_scratchpad_sql("DESCRIBE_SOMETHING SELECT 1", 1024));
+        assert_eq!(err.code, ScratchpadSqlPolicyCode::NotReadOnlyPrefix);
     }
 
     #[test]
