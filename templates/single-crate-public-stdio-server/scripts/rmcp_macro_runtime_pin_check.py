@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure any direct rmcp macro pins stay aligned with the rmcp runtime."""
+"""Ensure direct RMCP SDK pins stay aligned across the workspace."""
 
 from __future__ import annotations
 
@@ -82,19 +82,65 @@ def check_manifest(path: Path) -> list[str]:
     return errors
 
 
+def collect_rmcp_pins(path: Path) -> tuple[list[tuple[Path, str, str]], list[str]]:
+    manifest = load_manifest(path)
+    pins: list[tuple[Path, str, str]] = []
+    errors: list[str] = []
+
+    for section_name in DEPENDENCY_SECTIONS:
+        section = manifest.get(section_name, {})
+        if not isinstance(section, dict):
+            continue
+
+        rmcp = section.get("rmcp")
+        if rmcp is None:
+            continue
+
+        rel = path.relative_to(ROOT)
+        version = dependency_version(rmcp)
+        if version is None:
+            errors.append(
+                f"{rel}: {section_name}.rmcp must use a concrete exact version pin"
+            )
+            continue
+        if not version.startswith("="):
+            errors.append(
+                f"{rel}: {section_name}.rmcp must use an exact version pin, got {version}"
+            )
+            continue
+        pins.append((rel, section_name, version))
+
+    return pins, errors
+
+
 def main() -> int:
     manifests = sorted(path for path in ROOT.rglob("Cargo.toml") if is_repo_manifest(path))
     errors: list[str] = []
+    rmcp_pins: list[tuple[Path, str, str]] = []
     for manifest in manifests:
         errors.extend(check_manifest(manifest))
+        pins, pin_errors = collect_rmcp_pins(manifest)
+        rmcp_pins.extend(pins)
+        errors.extend(pin_errors)
+
+    versions = sorted({version for _, _, version in rmcp_pins})
+    if len(versions) > 1:
+        errors.append(
+            "direct rmcp dependencies must use one exact SDK version across the workspace:"
+        )
+        for rel, section_name, version in rmcp_pins:
+            errors.append(f"  {rel}: {section_name}.rmcp -> {version}")
 
     if errors:
-        print("rmcp macro/runtime pin check failed:", file=sys.stderr)
+        print("rmcp SDK pin check failed:", file=sys.stderr)
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
 
-    print("rmcp macro/runtime pin check passed")
+    if rmcp_pins:
+        print(f"rmcp SDK pin check passed ({versions[0]})")
+    else:
+        print("rmcp SDK pin check passed (no direct rmcp dependencies)")
     return 0
 
 

@@ -2,6 +2,7 @@ const LANE_DOC: &str = include_str!("../../../docs/new-server-delivery-lane.md")
 const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-atlas.md");
 const PATTERN_MANIFESTS_DOC: &str = include_str!("../../../docs/pattern-manifests.md");
 const PATTERN_RECIPES_DOC: &str = include_str!("../../../docs/pattern-recipes.md");
+const SCRATCHPAD_DOC: &str = include_str!("../../../docs/scratchpad.md");
 const PATTERN_MANIFEST_SCHEMA: &str = include_str!("../../../docs/pattern-manifest.schema.json");
 const PATTERN_MANIFEST_FILES: [(&str, &str); 6] = [
     (
@@ -91,6 +92,7 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         "templates/hosted-http-auth-server",
         "mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list",
         "mcp-toolkit-server::http::LocalMcpHttpServerBuilder",
+        "docs/scratchpad.md",
         "Protected Resource Metadata",
         "GitHub Actions",
         "reviewer sidecar",
@@ -99,6 +101,23 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         assert!(
             LANE_DOC.contains(surface),
             "delivery lane does not mention `{surface}`"
+        );
+    }
+}
+
+#[test]
+fn scratchpad_doc_sets_toolkit_boundary() {
+    for needle in [
+        "mcp-toolkit-scratchpad",
+        "DuckDB-backed local sessions",
+        "restricted read-only SQL",
+        "provider-specific ingest tools",
+        "profile tests",
+        "handles, summaries, and bounded projections",
+    ] {
+        assert!(
+            SCRATCHPAD_DOC.contains(needle),
+            "scratchpad guide does not mention `{needle}`"
         );
     }
 }

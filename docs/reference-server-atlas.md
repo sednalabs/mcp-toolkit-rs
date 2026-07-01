@@ -98,8 +98,9 @@ Do not extract:
 
 - GA4 dimensions, metrics, report semantics, or analytics-specific output
   contracts.
-- A generic scratchpad crate until the API is proven against at least one
-  second service.
+- Provider-specific ingest or evidence wording. Generic DuckDB session,
+  bounded SQL, and table lifecycle behavior now belongs in
+  `mcp-toolkit-scratchpad`.
 
 ### `sednalabs/google-search-console-mcp`
 
@@ -128,8 +129,8 @@ Source landmarks:
 Do not extract:
 
 - Search Console site, sitemap, or URL Inspection semantics.
-- A toolkit scratchpad dependency assumption until the toolkit crate exists on
-  the current public toolkit branch.
+- Search Console-specific ingest, metric, or evidence-bundle wording into the
+  generic scratchpad crate.
 
 ### `sednalabs/cloudflare-mcp`
 

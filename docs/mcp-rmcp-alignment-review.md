@@ -36,6 +36,23 @@ workspace to a 2.x SDK, re-run this alignment review and specifically compare:
 - feature flags needed by the facade versus template dependencies;
 - migration guidance from the official SDK release notes.
 
+## Automated Guardrails
+
+The dependency-governance workflow now treats rmcp alignment as a workspace-wide
+SDK pin rule, not only a macro/runtime rule:
+
+- every direct `rmcp` dependency must use a concrete exact version pin;
+- every direct `rmcp` dependency must use the same version across workspace
+  crates;
+- any direct `rmcp-macros` dependency must match the direct `rmcp` runtime pin;
+- starter-template integrity tests keep generated templates importing the
+  authoring surface through `mcp_toolkit::rmcp`.
+
+This means the intended shape is enforced in CI: shared toolkit crates may bind
+to the SDK deliberately, generated services consume the facade, and a future
+SDK major upgrade is a single coordinated review instead of gradual service
+drift.
+
 ## Current Posture
 
 The toolkit should stay a thin policy and ergonomics layer over `rmcp`, not a
@@ -69,7 +86,7 @@ or server-authoring policy:
 | DNS rebinding defense | Route bundles validate Host/authority and now validate present `Origin` headers against the same allowlist. | Keep. MCP Streamable HTTP requires Origin validation when Origin is present; Host validation remains useful for non-browser and proxy paths. |
 | Session errors | Toolkit route bundles return HTTP errors for missing/invalid sessions before forwarding to `rmcp`. | Keep, but periodically compare with `rmcp` Streamable HTTP behavior when upgrading the SDK. |
 | Auth metadata | Toolkit auth helpers generate protected-resource and authorization-server metadata. | Keep. Resource URL, issuer, scopes, and challenges are deployment-owned configuration. |
-| SDK pin guardrails | The umbrella crate re-exports `rmcp`, templates avoid direct `rmcp` and `rmcp-macros` dependencies, and template checks keep macro/runtime pins aligned. | Keep. Extend this into a workspace-level upgrade checklist before adopting the next SDK major. |
+| SDK pin guardrails | The umbrella crate re-exports `rmcp`, templates avoid direct `rmcp` and `rmcp-macros` dependencies, and dependency governance enforces one exact direct `rmcp` pin across the workspace. | Keep. Use this as the workspace-level upgrade checkpoint before adopting the next SDK major. |
 
 ## Drift Fixed In This Review
 
@@ -81,6 +98,21 @@ or server-authoring policy:
    security guidance.
 3. Stale documentation links that pointed at draft or old concepts pages now
    point at the versioned 2025-11-25 specification pages.
+4. Dependency governance now fails if direct `rmcp` dependencies drift to
+   different SDK versions across the workspace.
+
+## Current Risk Notes
+
+- The toolkit intentionally carries custom session-bounding and optional SSE
+  replay layers around `rmcp`'s Streamable HTTP service. Keep these layers only
+  as deployment policy; do not add JSON-RPC envelope handling or standard
+  transport parsing here when an `rmcp` hook exists.
+- The stdio test harness still defaults to protocol version `2024-11-05` for
+  compatibility smoke tests. That is acceptable while templates negotiate via
+  `rmcp`, but the harness should be reviewed during the next SDK-major upgrade.
+- HTTP route bundles rely on `rmcp` to process accepted JSON-RPC requests after
+  local preflight checks. When `rmcp` 2.x is adopted, compare accepted/missing
+  `MCP-Protocol-Version`, session-id, and SSE-resume behavior before landing.
 
 ## Invariants For New Servers
 

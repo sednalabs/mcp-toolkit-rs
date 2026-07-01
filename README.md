@@ -25,6 +25,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-policy-kernel-adapters` | Compatibility adapters for exact external policy-kernel parity work. |
 | `mcp-toolkit-postgres` | PostgreSQL connection and TLS helpers. |
 | `mcp-toolkit-process` | Process and signal helpers. |
+| `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions for large analytical result sets, bounded read-only SQL, table inventory, and evidence handles. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract test helpers. |
 | `mcp-toolkit-docs` | Documentation and tool metadata helpers. |
@@ -142,6 +143,9 @@ mcp-toolkit = {
 }
 ```
 
+Add `scratchpad` to the umbrella feature list only when the server needs local
+DuckDB sessions for large-result workflows.
+
 Commit the consumer `Cargo.lock` after resolution. The lockfile records the
 exact toolkit SHA; manifest `rev` pins are only needed for special cases where a
 consumer intentionally wants a long-lived frozen toolkit ref.
@@ -192,12 +196,16 @@ stable public surface:
    the default MCP route bundle. Server authors can import the underlying
    `rmcp` authoring surface through `mcp_toolkit::rmcp` or
    `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
-8. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+8. Use `mcp-toolkit-scratchpad` when a read-only or analytics server needs to
+   keep large rowsets out of chat while still giving agents bounded DuckDB SQL,
+   table inventory, query projections, and cleanup/export affordances. Keep
+   provider-specific ingest and evidence wording in the service repository.
+9. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-9. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+10. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.
-10. Add policy crates only when the service has an authorization, SQL
+11. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a legacy backend, first map source authority and blocked operations using

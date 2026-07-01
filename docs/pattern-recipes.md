@@ -98,9 +98,12 @@ Required proof:
 - output contract tests that prove chat responses return handles and summaries,
   not unbounded result dumps.
 
-Toolkit owner: future scratchpad crate after the generic API is proven,
-`mcp-toolkit-testing` for safety/conformance fixtures, and `mcp-toolkit-core`
-for response metadata helpers.
+Toolkit owner: `mcp-toolkit-scratchpad` for DuckDB session lifecycle,
+restricted SQL, table inventory, append/drop helpers, and query projections;
+`mcp-toolkit-testing` for safety/conformance fixtures; and
+`mcp-toolkit-core` for response metadata helpers. Provider-specific ingest,
+evidence bundle wording, and upstream query semantics stay in the service
+repository.
 
 Reference manifests:
 

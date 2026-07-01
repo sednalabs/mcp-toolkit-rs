@@ -14,7 +14,7 @@ usage() {
 Usage: ./scripts/dependency_governance_check.sh [--bootstrap-tools]
 
 Checks:
-  1) rmcp macro/runtime pinning
+  1) rmcp SDK pinning
   2) cargo deny (advisories + licenses + bans + sources)
   3) cargo audit (RustSec)
   4) cargo outdated (direct dependency stale-risk)
@@ -84,7 +84,7 @@ if [[ "${missing_tools}" -ne 0 ]]; then
   exit 2
 fi
 
-echo "[1/4] rmcp macro/runtime pin check"
+echo "[1/4] rmcp SDK pin check"
 (cd "${ROOT_DIR}" && python3 ./scripts/rmcp_macro_runtime_pin_check.py)
 
 echo "[2/4] cargo deny"
