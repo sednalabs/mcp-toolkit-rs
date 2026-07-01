@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::providers::read_body_limited;
 use crate::AuthError;
+use mcp_toolkit_http::oauth::authorization_server_discovery_urls;
 
 const OIDC_DISCOVERY_MAX_BYTES: usize = 1024 * 1024;
 
@@ -183,10 +184,38 @@ pub async fn discover_oidc_metadata(
     if issuer.is_empty() {
         return Err(AuthError::new("OIDC issuer URL is empty"));
     }
-    let well_known = format!("{issuer}/.well-known/openid-configuration");
+    let discovery_urls = authorization_server_discovery_urls(issuer).map_err(|e| {
+        AuthError::new(format!("Discovery issuer URL is invalid: {e}"))
+            .with_reason("invalid_issuer_url")
+            .with_status(400)
+    })?;
     let http = client.cloned().unwrap_or_else(Client::new);
+
+    let mut failures = Vec::new();
+    for discovery_url in discovery_urls {
+        match fetch_oidc_metadata(&http, issuer, &discovery_url).await {
+            Ok(metadata) => return Ok(metadata),
+            Err(err) => failures.push(format!("{discovery_url}: {err}")),
+        }
+    }
+
+    let detail = if failures.is_empty() {
+        "no discovery endpoints were derived".to_string()
+    } else {
+        failures.join("; ")
+    };
+    Err(AuthError::new(format!(
+        "Discovery failed for all metadata endpoints: {detail}"
+    )))
+}
+
+async fn fetch_oidc_metadata(
+    http: &Client,
+    issuer: &str,
+    discovery_url: &str,
+) -> Result<OidcDiscovery, AuthError> {
     let response = http
-        .get(&well_known)
+        .get(discovery_url)
         .timeout(Duration::from_secs(5))
         .send()
         .await
@@ -301,7 +330,21 @@ impl Default for AuthConfig {
 
 #[cfg(test)]
 mod profile_tests {
-    use super::{validate_oidc_metadata, AuthConfig, AuthMode, AuthSecurityProfile, OidcDiscovery};
+    use std::sync::Arc;
+
+    use axum::{
+        extract::{Request, State},
+        response::{IntoResponse, Response},
+        routing::any,
+        Json, Router,
+    };
+    use http::StatusCode;
+    use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
+
+    use super::{
+        discover_oidc_metadata, validate_oidc_metadata, AuthConfig, AuthMode, AuthSecurityProfile,
+        OidcDiscovery,
+    };
 
     #[test]
     fn l1_profile_defaults() {
@@ -404,5 +447,104 @@ mod profile_tests {
         metadata.jwks_uri = "http://127.0.0.1:8080/jwks".to_string();
         validate_oidc_metadata("http://127.0.0.1:8080", &metadata)
             .expect("loopback http metadata should pass");
+    }
+
+    #[tokio::test]
+    async fn discover_oidc_metadata_tries_pathful_issuer_order_before_appended_fallback() {
+        let fixture = DiscoveryFixture::spawn("/tenant/.well-known/openid-configuration").await;
+        let metadata = discover_oidc_metadata(&fixture.issuer, None)
+            .await
+            .expect("discovery should fall back to appended OIDC metadata");
+
+        assert_eq!(metadata.issuer.as_deref(), Some(fixture.issuer.as_str()));
+        assert_eq!(
+            fixture.observed_paths().await,
+            vec![
+                "/.well-known/oauth-authorization-server/tenant".to_string(),
+                "/.well-known/openid-configuration/tenant".to_string(),
+                "/tenant/.well-known/openid-configuration".to_string(),
+            ]
+        );
+        fixture.shutdown();
+    }
+
+    #[tokio::test]
+    async fn discover_oidc_metadata_accepts_path_inserted_authorization_metadata() {
+        let fixture =
+            DiscoveryFixture::spawn("/.well-known/oauth-authorization-server/tenant").await;
+        let metadata = discover_oidc_metadata(&fixture.issuer, None)
+            .await
+            .expect("discovery should accept first path-inserted endpoint");
+
+        assert_eq!(metadata.issuer.as_deref(), Some(fixture.issuer.as_str()));
+        assert_eq!(
+            fixture.observed_paths().await,
+            vec!["/.well-known/oauth-authorization-server/tenant".to_string()]
+        );
+        fixture.shutdown();
+    }
+
+    struct DiscoveryFixture {
+        issuer: String,
+        observed_paths: Arc<Mutex<Vec<String>>>,
+        server: JoinHandle<()>,
+    }
+
+    impl DiscoveryFixture {
+        async fn spawn(success_path: &'static str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind discovery fixture");
+            let base_url = format!("http://{}", listener.local_addr().expect("local addr")); // DevSkim: ignore DS137138 loopback test fixture
+            let issuer = format!("{base_url}/tenant");
+            let observed_paths = Arc::new(Mutex::new(Vec::new()));
+            let state = DiscoveryState {
+                issuer: issuer.clone(),
+                success_path,
+                observed_paths: observed_paths.clone(),
+            };
+            let app = Router::new()
+                .route("/{*path}", any(discovery_handler))
+                .with_state(state);
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            Self {
+                issuer,
+                observed_paths,
+                server,
+            }
+        }
+
+        async fn observed_paths(&self) -> Vec<String> {
+            self.observed_paths.lock().await.clone()
+        }
+
+        fn shutdown(self) {
+            self.server.abort();
+        }
+    }
+
+    #[derive(Clone)]
+    struct DiscoveryState {
+        issuer: String,
+        success_path: &'static str,
+        observed_paths: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn discovery_handler(State(state): State<DiscoveryState>, req: Request) -> Response {
+        let path = req.uri().path().to_string();
+        state.observed_paths.lock().await.push(path.clone());
+        if path != state.success_path {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+
+        Json(serde_json::json!({
+            "issuer": state.issuer,
+            "authorization_endpoint": format!("{}/authorize", state.issuer),
+            "token_endpoint": format!("{}/token", state.issuer),
+            "jwks_uri": format!("{}/jwks", state.issuer)
+        }))
+        .into_response()
     }
 }

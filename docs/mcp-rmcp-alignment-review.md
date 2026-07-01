@@ -25,6 +25,12 @@ stay in one of two categories: thin deployment assembly around those SDK
 surfaces, or explicit server-authoring policy that the SDK intentionally does
 not own.
 
+Third-pass review note: the OAuth/OIDC discovery helpers were rechecked against
+the MCP 2025-11-25 authorization discovery order. Toolkit auth discovery now
+tries OAuth path-insertion, OIDC path-insertion, then path-appended OIDC for
+issuer URLs with path components, and validates the returned issuer and endpoint
+metadata before accepting a result.
+
 ## SDK Version Posture
 
 As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
@@ -97,6 +103,7 @@ or server-authoring policy:
 | DNS rebinding defense | Route bundles validate Host/authority and validate present `Origin` headers. Explicit `allowed_origins` are now wired through to the underlying `rmcp` stateful and stateless services and use full origin tuple matching in the outer route guard. When explicit origins are not configured, the toolkit keeps the older host-derived Origin guard for safer local defaults. | Keep for route-bundle preflight and endpoint-ready hints. Do not add more custom parsing here when an `rmcp` configuration surface exists. Public browser-facing deployments should configure explicit `allowed_origins`. |
 | Session errors | Toolkit route bundles return HTTP errors for missing/invalid sessions before forwarding to `rmcp`. | Keep, but periodically compare with `rmcp` Streamable HTTP behavior when upgrading the SDK. |
 | Auth metadata | Toolkit auth helpers generate protected-resource and authorization-server metadata. | Keep. Resource URL, issuer, scopes, and challenges are deployment-owned configuration. |
+| OAuth/OIDC issuer discovery | Toolkit auth helpers fetch and validate authorization-server metadata for configured issuers. | Keep centrally. Discovery must follow MCP 2025-11-25 order for pathful issuers and must validate issuer/endpoint metadata before accepting fallback results. |
 | SDK pin guardrails | The umbrella crate re-exports `rmcp`, templates avoid direct `rmcp` and `rmcp-macros` dependencies, and dependency governance enforces one exact direct `rmcp` pin across the workspace. | Keep. Use this as the workspace-level upgrade checkpoint before adopting the next SDK major. |
 
 ## Drift Fixed In This Review
@@ -118,6 +125,10 @@ or server-authoring policy:
 6. The optional SSE event-store parser now accepts only the SDK-shaped
    non-negative `index` or `index/request_id` event IDs. Malformed IDs such as
    `1/` or negative indexes no longer get treated as valid replay positions.
+7. OIDC issuer discovery no longer relies only on the older
+   `{issuer}/.well-known/openid-configuration` shape. It now follows the
+   MCP 2025-11-25 OAuth/OIDC discovery order for pathful issuers, while keeping
+   the path-appended OIDC endpoint as the compatibility fallback.
 
 ## Current Risk Notes
 
@@ -171,6 +182,9 @@ or server-authoring policy:
   errors small and compatible.
 - Re-check `RecordingSessionManager` whenever `rmcp` changes SSE event IDs,
   resume behavior, or Streamable HTTP session-manager trait contracts.
+- Re-check OAuth/OIDC discovery helpers whenever the MCP authorization section
+  changes discovery ordering, Client ID Metadata Document requirements, or
+  PKCE metadata requirements.
 - Re-check facade feature flags and generated template imports before adopting
   the next `rmcp` major release.
 - Re-check whether route-bundle Host/Origin preflight can delegate to a public
