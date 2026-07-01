@@ -174,7 +174,9 @@ fn release_preflight_accepts_public_stdio_generated_project() {
         template: "single-crate-public-stdio".to_string(),
         package_name: "public-mcp".to_string(),
         output_dir: output.clone(),
-        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
         overwrite: false,
     })
     .expect("generate public stdio template");
@@ -200,7 +202,218 @@ fn release_preflight_accepts_public_stdio_generated_project() {
     assert!(stdout.contains("Public ready: yes"));
     assert!(stdout.contains("CodeQL workflow"));
     assert!(stdout.contains("Dependency governance workflow"));
+    assert!(stdout.contains("Portable toolkit dependencies"));
     assert!(stdout.contains("High-confidence secret marker scan"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_public_project_with_local_toolkit_paths() {
+    let root = temp_root("release-preflight-local-paths");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        !report.ready(),
+        "local toolkit path dependencies should not be public-ready"
+    );
+
+    let preflight = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("release-preflight")
+        .arg(&output)
+        .output()
+        .expect("run release-preflight for local-path public template");
+
+    assert!(!preflight.status.success());
+    let stdout = String::from_utf8_lossy(&preflight.stdout);
+    assert!(stdout.contains("Public ready: no"));
+    assert!(stdout.contains("[missing] Portable toolkit dependencies (Cargo.toml)"));
+    assert!(stdout.contains("replace local toolkit path dependencies with `--toolkit-git`"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_multiline_and_renamed_local_toolkit_paths() {
+    let root = temp_root("release-preflight-local-path-forms");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let manifest_path = output.join("Cargo.toml");
+    let manifest = read(&manifest_path)
+        .replace(
+            "mcp-toolkit = { git = \"https://github.com/sednalabs/mcp-toolkit-rs\", features = [\"server-stdio\"] }",
+            "mcp-toolkit = {\n  path = \"../mcp-toolkit\",\n  features = [\"server-stdio\"],\n}",
+        )
+        .replace(
+            "mcp-toolkit-core = { git = \"https://github.com/sednalabs/mcp-toolkit-rs\" }",
+            "toolkit_core = { package = \"mcp-toolkit-core\", path = \"../mcp-toolkit-core\" }",
+        );
+    fs::write(&manifest_path, manifest).expect("write local toolkit dependency forms");
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        !report.ready(),
+        "multiline or renamed local toolkit dependencies should not be public-ready"
+    );
+    let dependency_check = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Portable toolkit dependencies")
+        .expect("portable dependency check");
+    assert!(dependency_check.detail.contains("mcp-toolkit"));
+    assert!(dependency_check.detail.contains("toolkit_core"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_cargo_local_toolkit_overrides() {
+    let root = temp_root("release-preflight-cargo-overrides");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let manifest_path = output.join("Cargo.toml");
+    let mut manifest = read(&manifest_path);
+    manifest.push_str(
+        r#"
+[patch.crates-io]
+mcp-toolkit-testing = { path = "../mcp-toolkit-testing" }
+
+[replace]
+"mcp-toolkit-core:0.1.0" = { path = "../mcp-toolkit-core" }
+"#,
+    );
+    fs::write(&manifest_path, manifest).expect("write local Cargo overrides");
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        !report.ready(),
+        "local Cargo toolkit overrides should not be public-ready"
+    );
+    let dependency_check = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Portable toolkit dependencies")
+        .expect("portable dependency check");
+    assert!(dependency_check.detail.contains("mcp-toolkit-testing"));
+    assert!(dependency_check.detail.contains("mcp-toolkit-core"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_committed_cargo_path_overrides() {
+    let root = temp_root("release-preflight-cargo-config");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let cargo_config = output.join(".cargo/config.toml");
+    fs::create_dir_all(cargo_config.parent().expect("cargo config parent"))
+        .expect("create .cargo directory");
+    fs::write(
+        &cargo_config,
+        "paths = [\"../mcp-toolkit-rs/crates/mcp-toolkit-core\"]\n",
+    )
+    .expect("write Cargo path override");
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        !report.ready(),
+        "committed Cargo path overrides should not be public-ready"
+    );
+    let override_check = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Cargo local path overrides")
+        .expect("Cargo local path override check");
+    assert!(override_check.detail.contains("paths"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_uses_hosted_http_probe_for_hosted_projects() {
+    let root = temp_root("release-preflight-hosted");
+    let output = root.join("hosted-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "hosted-http-auth".to_string(),
+        package_name: "hosted-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate hosted HTTP template");
+    add_public_release_files(&output);
+    add_manifest_description(&output);
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        report.ready(),
+        "hosted public project should satisfy release preflight with HTTP probe: {:#?}",
+        report.checks
+    );
+    let probe_check = report
+        .checks
+        .iter()
+        .find(|check| check.label == "MCP probe scenario")
+        .expect("probe check");
+    assert_eq!(probe_check.target, "spec/mcp_probe_http_auth_smoke.v1.json");
+
+    fs::remove_file(output.join("spec/mcp_probe_http_auth_smoke.v1.json"))
+        .expect("remove hosted HTTP probe");
+    fs::write(output.join("spec/mcp_probe_stdio_smoke.v1.json"), "{}\n")
+        .expect("write irrelevant stdio probe");
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        !report.ready(),
+        "hosted public project should require the HTTP auth probe"
+    );
+    assert_eq!(report.shape.as_str(), "unknown");
 
     cleanup(root);
 }
@@ -214,7 +427,9 @@ fn release_preflight_accepts_workspace_inherited_package_metadata() {
         template: "single-crate-public-stdio".to_string(),
         package_name: "public-mcp".to_string(),
         output_dir: output.clone(),
-        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
         overwrite: false,
     })
     .expect("generate public stdio template");
@@ -282,7 +497,9 @@ fn release_preflight_rejects_high_confidence_secret_markers() {
         template: "single-crate-public-stdio".to_string(),
         package_name: "public-mcp".to_string(),
         output_dir: output.clone(),
-        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
         overwrite: false,
     })
     .expect("generate public stdio template");
@@ -928,6 +1145,39 @@ fn read(path: &Path) -> String {
 
 fn cleanup(path: PathBuf) {
     let _ = fs::remove_dir_all(path);
+}
+
+fn add_public_release_files(output: &Path) {
+    let public_template = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("templates/single-crate-public-stdio-server");
+    for relative in [
+        "LICENSE",
+        "deny.toml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/code-coverage.yml",
+        ".github/workflows/dependency-governance.yml",
+        ".github/workflows/codeql-query-tests.yml",
+        "scripts/dependency_governance_check.sh",
+        "docs/dependency-governance.md",
+    ] {
+        let target = output.join(relative);
+        fs::create_dir_all(target.parent().expect("target parent")).expect("create parent");
+        fs::copy(public_template.join(relative), target).expect("copy public release file");
+    }
+}
+
+fn add_manifest_description(output: &Path) {
+    let manifest_path = output.join("Cargo.toml");
+    let manifest = read(&manifest_path);
+    fs::write(
+        &manifest_path,
+        manifest.replace(
+            "publish = false\n",
+            "publish = false\ndescription = \"Hosted HTTP Rust MCP server starter with auth metadata and hosted validation.\"\n",
+        ),
+    )
+    .expect("write manifest description");
 }
 
 fn toml_path(path: &Path) -> String {

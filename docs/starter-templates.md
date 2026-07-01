@@ -50,9 +50,12 @@ the inferred transport, with `--transport`, `--name`, `--command`, `--url`, and
 
 Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
 installing a generated repository. It is stricter than doctor: the standalone
-public template is expected to pass, while smaller starters should fail until
-they add a license file, CodeQL or equivalent static analysis, dependency
-governance, coverage, release metadata, and public-ready docs.
+public template is expected to pass when generated with `--toolkit-git` or
+after local toolkit path dependencies are replaced, while smaller starters
+should fail until they add a license file, CodeQL or equivalent static analysis,
+dependency governance, coverage, release metadata, and public-ready docs. The
+checked-in templates use local path dependencies for toolkit development and
+are not the public-portability proof surface.
 
 ## Curated Stdio Intent Server
 
@@ -134,11 +137,11 @@ cargo fmt --manifest-path templates/single-crate-public-stdio-server/Cargo.toml 
 cargo clippy --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
 ./templates/single-crate-public-stdio-server/scripts/dependency_governance_check.sh
-mcp-toolkit release-preflight templates/single-crate-public-stdio-server
 ```
 
-Inside a copied standalone repository, inspect the active served surface before
-configuring an MCP client:
+Inside a copied standalone repository generated with `--toolkit-git`, or after
+replacing local toolkit path dependencies, inspect the active served surface
+before configuring an MCP client:
 
 ```bash
 cargo run -- --doctor

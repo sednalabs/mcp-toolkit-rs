@@ -68,7 +68,6 @@ cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
   --template curated-stdio-intent
 cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
 cargo run -p mcp-toolkit --bin mcp-toolkit -- client-config my-mcp-server
-cargo run -p mcp-toolkit --bin mcp-toolkit -- release-preflight my-mcp-server
 cd my-mcp-server
 cargo run -- --doctor
 cargo run -- --print-tools
@@ -96,10 +95,12 @@ For a portable service repository, generate outside the toolkit checkout and
 rewrite toolkit dependencies to public Git sources immediately:
 
 ```bash
-cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
+cd ..
+cargo run --manifest-path /path/to/mcp-toolkit-rs/crates/mcp-toolkit/Cargo.toml \
+  --bin mcp-toolkit -- new \
   --name my-mcp-server \
   --template single-crate-public-stdio \
-  --output ../my-mcp-server \
+  --output my-mcp-server \
   --toolkit-git https://github.com/sednalabs/mcp-toolkit-rs
 ```
 
@@ -130,7 +131,11 @@ hosted HTTP/auth starter it prints the local `/mcp` URL unless you pass
 Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
 installing a generated repository. It is stricter than `doctor`: it expects
 public-ready README, license, Cargo metadata, CI, CodeQL, coverage, dependency
-governance, schema/probe proof, and no high-confidence secret markers.
+governance, schema/probe proof, portable toolkit dependencies, no committed
+Cargo path overrides, and no high-confidence secret markers. The small curated
+starter is expected to report `Public ready: no` until those public release
+files are added; the standalone public stdio template is designed to satisfy
+this gate from generation when created with `--toolkit-git`.
 
 For stdio servers, build the binary and point your MCP client at the generated
 command path. The default served profile is `read_only`; add mutation tools

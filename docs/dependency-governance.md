@@ -144,6 +144,20 @@ that rely on `rmcp`'s built-in macro surface and carry no separate
 `rmcp-macros` entry. Treat a new upstream `rmcp` major as an explicit alignment
 review event, not as a reason for generated servers to bypass the facade.
 
+## Generated repository portability
+
+Generated service repositories should use toolkit Git dependencies from their
+first public commit unless they intentionally live inside the toolkit workspace.
+Local toolkit `path` dependencies are useful while developing templates, but
+they make copied repositories depend on a maintainer's filesystem layout.
+
+`mcp-toolkit release-preflight` parses the generated `Cargo.toml` and fails the
+public-readiness gate when any `mcp-toolkit*` dependency or Cargo override still
+points at a local path. It also rejects committed `.cargo/config.toml` path
+overrides. Regenerate portable repositories with `--toolkit-git`, or replace
+those dependencies with reviewed Git or crate-version sources before publishing,
+installing, or cutting release artifacts.
+
 ## License exceptions for transitive infrastructure crates
 
 `deny.toml` keeps the global license allowlist narrow. Transitive

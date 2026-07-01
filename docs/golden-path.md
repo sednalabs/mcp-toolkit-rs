@@ -60,14 +60,17 @@ cd my-mcp-server
 cargo test --all-targets --all-features
 ```
 
-For a standalone service repository, generate to a sibling directory and use
-public Git dependencies from the first commit:
+For a standalone service repository, run the generator from the parent directory
+that should contain the new repository and use public Git dependencies from the
+first commit:
 
 ```bash
-cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
+cd ..
+cargo run --manifest-path /path/to/mcp-toolkit-rs/crates/mcp-toolkit/Cargo.toml \
+  --bin mcp-toolkit -- new \
   --name my-mcp-server \
   --template single-crate-public-stdio \
-  --output ../my-mcp-server \
+  --output my-mcp-server \
   --toolkit-git https://github.com/sednalabs/mcp-toolkit-rs
 ```
 
