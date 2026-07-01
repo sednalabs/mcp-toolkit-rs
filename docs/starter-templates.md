@@ -9,6 +9,10 @@ Use this page with `docs/golden-path.md`: the templates show the first copyable
 server shape, while the golden path covers crate selection, review handoff,
 hosted validation, and release evidence.
 
+For exact generator command syntax, flags, generated file trees, client-config
+overrides, and safe customization points, see
+`docs/new-server-cli-reference.md`.
+
 ## Fast Generator
 
 Use the generator when starting from a maintained template:

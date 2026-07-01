@@ -5,6 +5,11 @@ with `mcp-toolkit-rs`. Use it when starting a new server or when an existing
 service is being reshaped enough that its MCP surface, tests, or release proof
 need a fresh gate.
 
+Use `docs/new-server-cli-reference.md` for exact command syntax, generated file
+layout, generator overwrite behavior, and generated-project customization
+points. This page defines the evidence gates; the CLI reference is the
+operator-facing command manual.
+
 The lane keeps rapid server creation disciplined. The toolkit should remove
 transport, auth, schema, and validation boilerplate; the service repository
 still owns product-specific tools, backend clients, policy, data fixtures,
@@ -85,6 +90,8 @@ Required evidence:
 
 - the reference atlas row used, or why no row fits;
 - the pattern manifest and recipe used, or why no manifest fits yet;
+- the generated command used, including `--template` or `--pattern` and
+  `--toolkit-git` or `--toolkit-root`;
 - the selected template or adoption helper;
 - the downstream conformance posture if a pattern manifest was used;
 - the transport and trust boundary;

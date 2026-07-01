@@ -1,4 +1,5 @@
 const LANE_DOC: &str = include_str!("../../../docs/new-server-delivery-lane.md");
+const CLI_REFERENCE_DOC: &str = include_str!("../../../docs/new-server-cli-reference.md");
 const REFERENCE_ATLAS_DOC: &str = include_str!("../../../docs/reference-server-atlas.md");
 const PATTERN_MANIFESTS_DOC: &str = include_str!("../../../docs/pattern-manifests.md");
 const PATTERN_RECIPES_DOC: &str = include_str!("../../../docs/pattern-recipes.md");
@@ -93,6 +94,7 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         "mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list",
         "mcp-toolkit-server::http::LocalMcpHttpServerBuilder",
         "docs/scratchpad.md",
+        "docs/new-server-cli-reference.md",
         "Protected Resource Metadata",
         "GitHub Actions",
         "reviewer sidecar",
@@ -101,6 +103,37 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         assert!(
             LANE_DOC.contains(surface),
             "delivery lane does not mention `{surface}`"
+        );
+    }
+}
+
+#[test]
+fn cli_reference_pins_command_and_file_surface() {
+    for needle in [
+        "mcp-toolkit templates",
+        "mcp-toolkit patterns",
+        "mcp-toolkit patterns <id>",
+        "mcp-toolkit new --name <package>",
+        "mcp-toolkit doctor [generated-server-dir]",
+        "mcp-toolkit client-config [generated-server-dir]",
+        "mcp-toolkit conformance",
+        "--toolkit-git <url>",
+        "--toolkit-root <dir>",
+        "--force",
+        "spec/tool_schema_snapshot.v1.json",
+        "spec/mcp_probe_stdio_smoke.v1.json",
+        "spec/mcp_probe_http_auth_smoke.v1.json",
+        ".github/workflows/rust-baseline.yml",
+        "src/lib.rs",
+        "src/main.rs",
+        "tests/catalog_profile_contract.rs",
+        "tests/tool_schema_snapshot.rs",
+        "Safe Customization Points",
+        "mcp-toolkit-scratchpad",
+    ] {
+        assert!(
+            CLI_REFERENCE_DOC.contains(needle),
+            "CLI reference is missing `{needle}`"
         );
     }
 }
