@@ -23,7 +23,7 @@ shape and give reviewers a concrete crate-ownership checklist.
 | Shape | Use when | Toolkit defaults |
 | --- | --- | --- |
 | Curated stdio | The MCP server is process-local and exposes a small intentional tool surface. | `mcp-toolkit-server::stdio::StdioServerBuilder`, `ToolCatalog`, schema snapshots, and stdio contract tests. |
-| Hosted HTTP/auth | The MCP server serves Streamable HTTP and must publish OAuth Protected Resource Metadata. | `LocalMcpHttpServerBuilder`, `AuthSurfaceBuilder`, `HttpBindSafety`, host guards, bearer challenges, and auth-surface contract tests. |
+| Hosted HTTP/auth | The MCP server serves Streamable HTTP and must publish OAuth Protected Resource Metadata. | `LocalMcpHttpServerBuilder`, `AuthSurfaceBuilder`, `HttpBindSafety`, host/origin guards, bearer challenges, and auth-surface contract tests. |
 | Analytics scratchpad | The MCP server can fetch more tabular data than should be returned through chat. | `mcp-toolkit-scratchpad::ScratchpadSessionManager`, DuckDB-backed bounded sessions, read-only SQL policy, table inventory, and concise handles. |
 | Service adoption | An existing server wants less runtime boilerplate. | Adopt the smallest helper that removes repeated wiring while preserving the service's public contract. |
 

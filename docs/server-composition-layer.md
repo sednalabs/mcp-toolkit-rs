@@ -118,7 +118,7 @@ Current public pieces:
 - `http::LocalMcpHttpRuntimeBuilder` for bounded Streamable HTTP sessions and
   optional stateless fallback;
 - `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
-  OAuth-not-configured placeholder discovery routes, and host guarding.
+  OAuth-not-configured placeholder discovery routes, and host/origin guarding.
 
 The guiding rule remains: keep the public API small and obviously reusable.
 Service-specific health payloads, attestation payloads, backend clients, tool
@@ -143,13 +143,14 @@ Maintained starter templates now cover the first adoption path:
   intent tools, explicit inventory metadata, tool-schema snapshots, and a real
   JSON-RPC stdio smoke test.
 - `templates/hosted-http-auth-server` shows hosted Streamable HTTP assembly,
-  host guarding, OAuth Protected Resource Metadata, bearer challenges, device
-  authorization metadata, tool-schema snapshots, and route-level contract tests.
+  host/origin guarding, OAuth Protected Resource Metadata, bearer challenges,
+  device authorization metadata, tool-schema snapshots, and route-level
+  contract tests.
 
 The remaining slices should build on this crate rather than copying old wiring:
 
-1. expand reusable contract tests for auth metadata, host rejection, sessions,
-   tool schema snapshots, and stdio callability;
+1. expand reusable contract tests for auth metadata, host/origin rejection,
+   sessions, tool schema snapshots, and stdio callability;
 2. prove the API in one reference server slice;
 3. keep route-bundle additions driven by repeated adopter code, not speculative
    framework growth.

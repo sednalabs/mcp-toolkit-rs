@@ -147,7 +147,7 @@ For hosted HTTP/auth servers:
 - assert Protected Resource Metadata;
 - assert authorization-server metadata when discovery is served;
 - assert missing-token bearer challenges;
-- assert pre-auth host rejection when host allowlists are configured.
+- assert pre-auth host and Origin rejection when allowlists are configured.
 
 Tests that call handlers directly are useful, but they do not satisfy this
 gate by themselves.

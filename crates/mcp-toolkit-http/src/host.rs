@@ -23,6 +23,7 @@
 //!
 //! ## References
 //! * RFC 3986: URI syntax (host/port formatting).
+//! * RFC 6454: Web Origin concept.
 
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
@@ -48,6 +49,22 @@ pub struct HostAuthority {
     pub host: String,
     /// Optional numeric port.
     pub port: Option<u16>,
+}
+
+/// Normalized browser origin for exact Origin allowlist matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BrowserOrigin {
+    /// The browser's opaque `Origin: null` value.
+    Null,
+    /// A scheme/host/port origin tuple.
+    Tuple {
+        /// Lowercase URI scheme.
+        scheme: String,
+        /// Lowercase hostname without IPv6 brackets.
+        host: String,
+        /// Optional numeric port.
+        port: Option<u16>,
+    },
 }
 
 /// Host header validation failures.
@@ -199,6 +216,47 @@ pub fn validate_origin_header(
     Ok(())
 }
 
+/// Validates a request `Origin` header against full browser origin allowlist entries.
+///
+/// This mirrors the `rmcp` Streamable HTTP `allowed_origins` semantics:
+/// * an empty allowlist permits all origins;
+/// * missing `Origin` is accepted;
+/// * entries include the scheme, such as `https://app.example.com`;
+/// * an allowlist entry without a port permits any port for that origin host;
+/// * `"null"` matches the browser's opaque `Origin: null`.
+///
+/// # Errors
+/// Returns `HostValidationError::InvalidOrigin` for malformed or duplicated
+/// `Origin` headers, and `HostValidationError::OriginNotAllowed` when a valid
+/// origin is not allowlisted.
+///
+/// # Security
+/// Use this for browser-facing Streamable HTTP routes configured with full
+/// origins. Missing `Origin` headers are accepted for non-browser MCP clients.
+pub fn validate_origin_header_against_allowed_origins(
+    headers: &HeaderMap,
+    allowed_origins: &[String],
+) -> Result<(), HostValidationError> {
+    if allowed_origins.is_empty() {
+        return Ok(());
+    }
+    let mut origins = headers.get_all(ORIGIN).iter();
+    let Some(origin) = origins.next() else {
+        return Ok(());
+    };
+    if origins.next().is_some() {
+        return Err(HostValidationError::InvalidOrigin);
+    }
+    let origin = origin
+        .to_str()
+        .map_err(|_| HostValidationError::InvalidOrigin)?;
+    let origin = parse_browser_origin(origin).ok_or(HostValidationError::InvalidOrigin)?;
+    if !browser_origin_is_allowed(&origin, allowed_origins) {
+        return Err(HostValidationError::OriginNotAllowed);
+    }
+    Ok(())
+}
+
 /// Derives the base URL from request headers with allowlist enforcement.
 pub fn base_url(
     headers: &HeaderMap,
@@ -247,9 +305,60 @@ fn host_authority_is_allowed(host: &HostAuthority, allowed_hosts: &[String]) -> 
         })
 }
 
+fn browser_origin_is_allowed(origin: &BrowserOrigin, allowed_origins: &[String]) -> bool {
+    if allowed_origins.is_empty() {
+        return true;
+    }
+    allowed_origins
+        .iter()
+        .filter_map(|allowed| parse_browser_origin(allowed))
+        .any(|allowed| match (&allowed, origin) {
+            (BrowserOrigin::Null, BrowserOrigin::Null) => true,
+            (
+                BrowserOrigin::Tuple {
+                    scheme: allowed_scheme,
+                    host: allowed_host,
+                    port: allowed_port,
+                },
+                BrowserOrigin::Tuple {
+                    scheme: origin_scheme,
+                    host: origin_host,
+                    port: origin_port,
+                },
+            ) => {
+                allowed_scheme == origin_scheme
+                    && allowed_host == origin_host
+                    && (allowed_port.is_none() || allowed_port == origin_port)
+            }
+            _ => false,
+        })
+}
+
 fn parse_host_authority(header: &str) -> Option<HostAuthority> {
     let authority = http::uri::Authority::try_from(header.trim()).ok()?;
     Some(normalize_authority(authority.host(), authority.port_u16()))
+}
+
+fn parse_browser_origin(origin: &str) -> Option<BrowserOrigin> {
+    let origin = origin.trim();
+    if origin.is_empty() {
+        return None;
+    }
+    if origin.eq_ignore_ascii_case("null") {
+        return Some(BrowserOrigin::Null);
+    }
+    let uri = origin.parse::<Uri>().ok()?;
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    if let Some(path_and_query) = uri.path_and_query() {
+        if path_and_query.as_str() != "/" {
+            return None;
+        }
+    }
+    uri.authority().map(|authority| BrowserOrigin::Tuple {
+        scheme,
+        host: normalize_authority_host(authority.host()),
+        port: authority.port_u16(),
+    })
 }
 
 fn parse_origin_authority(origin: &str) -> Option<HostAuthority> {
@@ -326,7 +435,8 @@ fn format_host(parsed: ParsedHost) -> String {
 mod tests {
     use super::{
         base_url, parse_host_header, validate_host_authority_header, validate_host_header,
-        validate_origin_header, HostValidationError,
+        validate_origin_header, validate_origin_header_against_allowed_origins,
+        HostValidationError,
     };
     use std::collections::HashSet;
 
@@ -467,6 +577,37 @@ mod tests {
         let err = validate_origin_header(&headers, &allowed).expect_err("origin rejection");
 
         assert_eq!(err, HostValidationError::InvalidOrigin);
+    }
+
+    #[test]
+    fn validate_origin_header_against_allowed_origins_honors_scheme() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "mcp-test://example.com".parse().expect("origin"));
+        let allowed = ["https://example.com".to_string()];
+
+        let err =
+            validate_origin_header_against_allowed_origins(&headers, &allowed).expect_err("scheme");
+
+        assert_eq!(err, HostValidationError::OriginNotAllowed);
+    }
+
+    #[test]
+    fn validate_origin_header_against_allowed_origins_allows_portless_entry() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://example.com:8443".parse().expect("origin"));
+        let allowed = ["https://example.com".to_string()];
+
+        validate_origin_header_against_allowed_origins(&headers, &allowed)
+            .expect("portless allowed origin");
+    }
+
+    #[test]
+    fn validate_origin_header_against_allowed_origins_supports_null_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "null".parse().expect("origin"));
+        let allowed = ["null".to_string()];
+
+        validate_origin_header_against_allowed_origins(&headers, &allowed).expect("null origin");
     }
 
     #[test]

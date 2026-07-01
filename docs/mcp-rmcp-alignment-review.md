@@ -13,6 +13,17 @@ Primary references:
 - MCP pagination: <https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination>
 - MCP transports: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
 - `rmcp` Rust SDK: <https://github.com/modelcontextprotocol/rust-sdk>
+- `rmcp` API docs: <https://docs.rs/rmcp>
+
+Second-pass review note: the custom layers below were rechecked against the
+current public MCP specification, the public `rmcp` docs, and the exact
+workspace-pinned `rmcp` `1.8.0` source. The pinned SDK already owns Host
+validation, optional full `Origin` validation, Streamable HTTP session routing,
+protocol-version header checks, `Mcp-Session-Id`, `Last-Event-Id`, SSE event-id
+formatting, and `SessionManager` restoration hooks. Toolkit code must therefore
+stay in one of two categories: thin deployment assembly around those SDK
+surfaces, or explicit server-authoring policy that the SDK intentionally does
+not own.
 
 ## SDK Version Posture
 
@@ -83,7 +94,7 @@ or server-authoring policy:
 | Tool annotations and schemas | `mcp-toolkit-core::capability` projects safety hints, input schemas, output schemas, and metadata into `rmcp::model::Tool`. | Keep. Tool annotations are hints, not authorization. Runtime policy must still enforce scopes and risk posture. |
 | Tool list changes | `ToolListTracker` fingerprints stable tool names and exposes `notifications/tools/list_changed` method metadata. | Keep with invariant: a negotiated session's tool list must not vary as an incidental side effect of ordinary requests. Emit list-changed only for explicit refresh/profile changes. |
 | Streamable HTTP session routing | Route bundles use `rmcp` Streamable HTTP services plus bounded local session management and optional stateless fallback. | Keep. This is deployment assembly, not protocol reimplementation. |
-| DNS rebinding defense | Route bundles validate Host/authority and now validate present `Origin` headers against the same allowlist. | Keep. MCP Streamable HTTP requires Origin validation when Origin is present; Host validation remains useful for non-browser and proxy paths. |
+| DNS rebinding defense | Route bundles validate Host/authority and validate present `Origin` headers. Explicit `allowed_origins` are now wired through to the underlying `rmcp` stateful and stateless services and use full origin tuple matching in the outer route guard. When explicit origins are not configured, the toolkit keeps the older host-derived Origin guard for safer local defaults. | Keep for route-bundle preflight and endpoint-ready hints. Do not add more custom parsing here when an `rmcp` configuration surface exists. Public browser-facing deployments should configure explicit `allowed_origins`. |
 | Session errors | Toolkit route bundles return HTTP errors for missing/invalid sessions before forwarding to `rmcp`. | Keep, but periodically compare with `rmcp` Streamable HTTP behavior when upgrading the SDK. |
 | Auth metadata | Toolkit auth helpers generate protected-resource and authorization-server metadata. | Keep. Resource URL, issuer, scopes, and challenges are deployment-owned configuration. |
 | SDK pin guardrails | The umbrella crate re-exports `rmcp`, templates avoid direct `rmcp` and `rmcp-macros` dependencies, and dependency governance enforces one exact direct `rmcp` pin across the workspace. | Keep. Use this as the workspace-level upgrade checkpoint before adopting the next SDK major. |
@@ -100,6 +111,13 @@ or server-authoring policy:
    point at the versioned 2025-11-25 specification pages.
 4. Dependency governance now fails if direct `rmcp` dependencies drift to
    different SDK versions across the workspace.
+5. Hosted route-bundle builders now expose explicit `allowed_origins`, copy
+   them into stateless fallback services, and validate full origin tuples in
+   the outer guard when configured. This keeps route-level hints aligned with
+   the SDK's native `StreamableHttpServerConfig::with_allowed_origins` posture.
+6. The optional SSE event-store parser now accepts only the SDK-shaped
+   non-negative `index` or `index/request_id` event IDs. Malformed IDs such as
+   `1/` or negative indexes no longer get treated as valid replay positions.
 
 ## Current Risk Notes
 
@@ -107,6 +125,16 @@ or server-authoring policy:
   replay layers around `rmcp`'s Streamable HTTP service. Keep these layers only
   as deployment policy; do not add JSON-RPC envelope handling or standard
   transport parsing here when an `rmcp` hook exists.
+- The toolkit's Host/Origin guard intentionally duplicates part of the pinned
+  SDK's DNS-rebinding protection so route-level health and endpoint-hint
+  responses receive the same preflight. Keep the helper aligned with `rmcp`
+  semantics, prefer explicit `allowed_origins` for browser-facing deployments,
+  and replace local parsing with a public SDK middleware if one becomes
+  available.
+- The optional `EventStore` records SDK-emitted SSE event IDs but is not wired
+  into default route-bundle replay. If a future server exposes persistent
+  replay through it, review that flow against the SDK's `EventId` parser and
+  session-store support before shipping.
 - The stdio test harness still defaults to protocol version `2024-11-05` for
   compatibility smoke tests. That is acceptable while templates negotiate via
   `rmcp`, but the harness should be reviewed during the next SDK-major upgrade.
@@ -131,8 +159,8 @@ or server-authoring policy:
   explicit profile or capability refresh changes the surface, emit
   `notifications/tools/list_changed` when the server declared that capability.
 - For Streamable HTTP, keep local binds loopback by default, configure allowed
-  hosts, keep Origin validation enabled, and require auth for non-loopback
-  exposure.
+  hosts, configure explicit allowed origins for browser-facing deployments,
+  keep Origin validation enabled, and require auth for non-loopback exposure.
 - Do not add bespoke JSON-RPC envelopes or transport behavior when an `rmcp`
   type or service hook already exists.
 
@@ -145,6 +173,8 @@ or server-authoring policy:
   resume behavior, or Streamable HTTP session-manager trait contracts.
 - Re-check facade feature flags and generated template imports before adopting
   the next `rmcp` major release.
+- Re-check whether route-bundle Host/Origin preflight can delegate to a public
+  `rmcp` middleware or hook instead of local parsing.
 - Add generated contract probes for cursor pagination once probe fixtures cover
   multi-page tool lists.
 - Review tool-name validation through the `rmcp` router during each SDK upgrade;
