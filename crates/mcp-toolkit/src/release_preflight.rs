@@ -357,25 +357,23 @@ fn scan_dir(root: &Path, dir: &Path, findings: &mut Vec<String>) {
             Ok(entry) => entry,
             Err(_) => continue,
         };
-        let path = entry.path();
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
             Err(_) => continue,
         };
-        if metadata.file_type().is_symlink() {
+        if file_type.is_symlink() {
             continue;
         }
-        if metadata.is_dir() {
+        let path = entry.path();
+        if file_type.is_dir() {
             if should_skip_dir(&path) {
                 continue;
             }
             if let Some(path) = canonical_child(root, &path) {
                 scan_dir(root, &path, findings);
             }
-        } else if metadata.is_file() && should_scan_text_file(&path) {
-            if let Some(path) = canonical_child(root, &path) {
-                scan_file(root, &path, findings);
-            }
+        } else if file_type.is_file() && should_scan_text_file(&path) {
+            scan_file(root, &path, findings);
         }
     }
 }
@@ -413,13 +411,17 @@ fn canonical_child(root: &Path, path: &Path) -> Option<PathBuf> {
 }
 
 fn scan_file(root: &Path, path: &Path, findings: &mut Vec<String>) {
-    let contents = match fs::read_to_string(path) {
+    let path = match canonical_child(root, path) {
+        Some(path) => path,
+        None => return,
+    };
+    let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(_) => return,
     };
     for (label, marker) in SECRET_MARKERS {
         if contents.contains(marker) {
-            let relative = path.strip_prefix(root).unwrap_or(path);
+            let relative = path.strip_prefix(root).unwrap_or(path.as_path());
             findings.push(format!("{} in {}", label, relative.display()));
         }
     }
