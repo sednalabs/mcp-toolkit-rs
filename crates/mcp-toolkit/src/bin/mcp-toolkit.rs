@@ -3,6 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
+use mcp_toolkit::client_config::{
+    render_client_config, ClientConfigOptions, ClientConfigTransport,
+};
 use mcp_toolkit::doctor::inspect_project;
 use mcp_toolkit::new_server::{
     default_template_id, default_toolkit_git_url, default_toolkit_root, generate_new_server,
@@ -21,6 +24,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("new") => run_new(&args[1..]),
         Some("doctor") => run_doctor(&args[1..]),
+        Some("client-config") | Some("client_config") => run_client_config(&args[1..]),
         Some("templates") | Some("list-templates") => {
             print_templates();
             Ok(())
@@ -158,6 +162,10 @@ fn run_new(args: &[String]) -> Result<(), String> {
     println!();
     println!("Next:");
     println!("  mcp-toolkit doctor {}", summary.output_dir.display());
+    println!(
+        "  mcp-toolkit client-config {}",
+        summary.output_dir.display()
+    );
     println!("  cd {}", summary.output_dir.display());
     println!("  cargo fmt --all --check");
     println!("  cargo test --all-targets --all-features");
@@ -167,6 +175,65 @@ fn run_new(args: &[String]) -> Result<(), String> {
         default_toolkit_git_url()
     );
 
+    Ok(())
+}
+
+fn run_client_config(args: &[String]) -> Result<(), String> {
+    let mut options = ClientConfigOptions::default();
+    let mut positional = Vec::new();
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.as_str() {
+            "--name" => {
+                options.server_name = Some(take_value(args, &mut index, "--name")?);
+            }
+            "--transport" => {
+                let value = take_value(args, &mut index, "--transport")?;
+                options.transport =
+                    Some(ClientConfigTransport::parse(&value).ok_or_else(|| {
+                        format!("unknown transport `{value}`; use `stdio` or `http`")
+                    })?);
+            }
+            "--command" => {
+                options.command = Some(take_value(args, &mut index, "--command")?);
+            }
+            "--url" => {
+                options.url = Some(take_value(args, &mut index, "--url")?);
+            }
+            "--profile" => {
+                options.profile = take_value(args, &mut index, "--profile")?;
+            }
+            "--help" | "-h" => {
+                print_client_config_help();
+                return Ok(());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown client-config option `{value}`"));
+            }
+            value => positional.push(value.to_string()),
+        }
+        index += 1;
+    }
+
+    match positional.as_slice() {
+        [] => {}
+        [path] => options.root = PathBuf::from(path),
+        _ => return Err("usage: mcp-toolkit client-config [generated-server-dir]".to_string()),
+    }
+
+    let root = if options.root.is_absolute() {
+        options.root.clone()
+    } else {
+        env::current_dir()
+            .map_err(|error| format!("failed to resolve current directory: {error}"))?
+            .join(&options.root)
+    };
+    options.root = root;
+
+    let output = render_client_config(&options).map_err(|error| error.to_string())?;
+    print!("{output}");
     Ok(())
 }
 
@@ -336,10 +403,12 @@ fn print_help() {
     println!("Usage:");
     println!("  mcp-toolkit new --name <package> [--template <id>] [--output <relative-dir>]");
     println!("  mcp-toolkit doctor [generated-server-dir]");
+    println!("  mcp-toolkit client-config [generated-server-dir]");
     println!("  mcp-toolkit templates");
     println!("  mcp-toolkit patterns [pattern-id]");
     println!();
-    println!("Run `mcp-toolkit new --help` or `mcp-toolkit doctor --help` for options.");
+    println!("Run `mcp-toolkit new --help`, `mcp-toolkit doctor --help`, or");
+    println!("`mcp-toolkit client-config --help` for options.");
 }
 
 fn print_new_help() {
@@ -370,6 +439,21 @@ fn print_doctor_help() {
     println!();
     println!("Checks a generated Rust MCP server for starter source, contract, probe,");
     println!("and hosted validation files, then prints the next validation commands.");
+}
+
+fn print_client_config_help() {
+    println!("Usage:");
+    println!("  mcp-toolkit client-config [generated-server-dir] [options]");
+    println!();
+    println!("Options:");
+    println!("      --name <server-name>  MCP client server name (default: Cargo package name)");
+    println!("      --transport <kind>    stdio or http (default: infer from generated files)");
+    println!("      --command <path>      Stdio command path (default: target/release/<package>)");
+    println!(
+        "      --url <url>           Hosted HTTP MCP URL (default: http://127.0.0.1:9411/mcp)"
+    );
+    println!("      --profile <profile>   Tool profile for stdio env (default: read_only)");
+    println!("  -h, --help                Show this help");
 }
 
 fn print_patterns_help() {

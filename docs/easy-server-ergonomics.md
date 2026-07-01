@@ -86,6 +86,10 @@ Keep first-class tools intent-shaped:
 - make `mcp-toolkit doctor <generated-server-dir>` pass before handoff so the
   scaffold still carries its source, schema snapshot, profile contract,
   transport smoke test, probe scenario, and hosted baseline workflow.
+- include a generated-client configuration path such as
+  `mcp-toolkit client-config <generated-server-dir>` so operators do not need
+  to hand-translate binary paths, hosted URLs, and profile environment
+  variables into client-specific TOML.
 
 Profile filtering should be centralized once. The same visible-tool helper or
 inventory policy should drive `tools/list`, local discovery tools, schema

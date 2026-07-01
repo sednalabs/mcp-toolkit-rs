@@ -126,6 +126,10 @@ impl DoctorReport {
         output.push_str("  cargo test --all-targets --all-features\n");
         output.push_str("  cargo run -- --print-tools\n");
         output.push_str("  cargo run -- --print-tool-schema\n");
+        output.push_str(&format!(
+            "  mcp-toolkit client-config {}\n",
+            self.root.display()
+        ));
 
         if self.shape == DoctorShape::HostedHttpAuth {
             output.push_str("  cargo run -- --help\n");

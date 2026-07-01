@@ -63,6 +63,7 @@ cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
   --name my-mcp-server \
   --template curated-stdio-intent
 cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
+cargo run -p mcp-toolkit --bin mcp-toolkit -- client-config my-mcp-server
 cd my-mcp-server
 cargo run -- --print-tools
 cargo run -- --print-tool-schema
@@ -97,6 +98,12 @@ Run `mcp-toolkit doctor <generated-server-dir>` after generation whenever you
 want a static scaffold check before building. The doctor reports the inferred
 starter shape, missing source or proof files, and the next commands for schema
 inspection and validation.
+
+Run `mcp-toolkit client-config <generated-server-dir>` to print a Codex-style
+TOML snippet for the generated transport. For stdio starters it points at the
+expected release binary and pins `EXAMPLE_MCP_TOOL_PROFILE=read_only`; for the
+hosted HTTP/auth starter it prints the local `/mcp` URL unless you pass
+`--url`.
 
 For stdio servers, build the binary and point your MCP client at the generated
 command path. The default served profile is `read_only`; add mutation tools
@@ -208,6 +215,7 @@ To start from a maintained template through the toolkit front door:
 ```bash
 cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
 cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
+cargo run -p mcp-toolkit --bin mcp-toolkit -- client-config my-mcp-server
 ```
 
 Run `cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns` to choose by
