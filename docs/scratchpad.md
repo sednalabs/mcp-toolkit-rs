@@ -64,10 +64,10 @@ let columns = vec![ScratchpadIngestColumn {
 }];
 ```
 
-Server tools should return concise handles and summaries, for example a session
-id, table name, row count, table schema, and suggested follow-up query. Avoid
-serializing complete upstream responses into the MCP chat response when the
-scratchpad path is selected.
+Server tools should return concise handles, summaries, and bounded projections,
+for example a session id, table name, row count, table schema, and suggested
+follow-up query. Avoid serializing complete upstream responses into the MCP chat
+response when the scratchpad path is selected.
 
 ## Safety Defaults
 

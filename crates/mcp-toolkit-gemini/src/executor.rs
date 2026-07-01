@@ -445,6 +445,20 @@ fn configured_retry_delay(config: &GeminiExecutionConfig) -> Duration {
 }
 
 const MIN_RETRY_WINDOW_REMAINING: Duration = Duration::from_millis(500);
+#[cfg(unix)]
+const TEXT_FILE_BUSY_OS_ERROR: i32 = 26;
+
+fn is_text_file_busy_spawn_error(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(TEXT_FILE_BUSY_OS_ERROR)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
 
 const NO_OUTPUT_MARKER: u64 = u64::MAX;
 
@@ -762,9 +776,16 @@ async fn execute_gemini_once(
         command.arg(arg);
     }
 
-    let mut child = command
-        .spawn()
-        .map_err(|err| GeminiExecutionError::SpawnFailed(err.to_string()))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) if is_text_file_busy_spawn_error(&err) => {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            command
+                .spawn()
+                .map_err(|err| GeminiExecutionError::SpawnFailed(err.to_string()))?
+        }
+        Err(err) => return Err(GeminiExecutionError::SpawnFailed(err.to_string())),
+    };
     let child_pid = child.id();
     if let Some(observer) = output_observer.as_ref() {
         observer.on_phase(attempt, GeminiExecutionPhase::Spawned, child_pid);
