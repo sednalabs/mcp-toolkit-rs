@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
+use mcp_toolkit::doctor::inspect_project;
 use mcp_toolkit::new_server::{
     default_template_id, default_toolkit_git_url, default_toolkit_root, generate_new_server,
     templates, NewServerOptions, ToolkitDependencySource,
@@ -19,6 +20,7 @@ fn main() {
 fn run(args: Vec<String>) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("new") => run_new(&args[1..]),
+        Some("doctor") => run_doctor(&args[1..]),
         Some("templates") | Some("list-templates") => {
             print_templates();
             Ok(())
@@ -155,6 +157,7 @@ fn run_new(args: &[String]) -> Result<(), String> {
     );
     println!();
     println!("Next:");
+    println!("  mcp-toolkit doctor {}", summary.output_dir.display());
     println!("  cd {}", summary.output_dir.display());
     println!("  cargo fmt --all --check");
     println!("  cargo test --all-targets --all-features");
@@ -165,6 +168,38 @@ fn run_new(args: &[String]) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+fn run_doctor(args: &[String]) -> Result<(), String> {
+    let root = match args {
+        [] => PathBuf::from("."),
+        [flag] if flag == "--help" || flag == "-h" => {
+            print_doctor_help();
+            return Ok(());
+        }
+        [path] if !path.starts_with('-') => PathBuf::from(path),
+        [flag] if flag.starts_with('-') => return Err(format!("unknown doctor option `{flag}`")),
+        _ => return Err("usage: mcp-toolkit doctor [path]".to_string()),
+    };
+
+    if !root.exists() {
+        return Err(format!("doctor path `{}` does not exist", root.display()));
+    }
+    if !root.is_dir() {
+        return Err(format!(
+            "doctor path `{}` is not a directory",
+            root.display()
+        ));
+    }
+
+    let report = inspect_project(root);
+    print!("{}", report.render());
+
+    if report.ready() {
+        Ok(())
+    } else {
+        Err("doctor found missing required generated-server files".to_string())
+    }
 }
 
 fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String, String> {
@@ -300,10 +335,11 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  mcp-toolkit new --name <package> [--template <id>] [--output <relative-dir>]");
+    println!("  mcp-toolkit doctor [generated-server-dir]");
     println!("  mcp-toolkit templates");
     println!("  mcp-toolkit patterns [pattern-id]");
     println!();
-    println!("Run `mcp-toolkit new --help` for generator options.");
+    println!("Run `mcp-toolkit new --help` or `mcp-toolkit doctor --help` for options.");
 }
 
 fn print_new_help() {
@@ -326,6 +362,14 @@ fn print_new_help() {
     print_templates();
     println!();
     println!("Run `mcp-toolkit patterns` to choose by server archetype instead of template id.");
+}
+
+fn print_doctor_help() {
+    println!("Usage:");
+    println!("  mcp-toolkit doctor [generated-server-dir]");
+    println!();
+    println!("Checks a generated Rust MCP server for starter source, contract, probe,");
+    println!("and hosted validation files, then prints the next validation commands.");
 }
 
 fn print_patterns_help() {

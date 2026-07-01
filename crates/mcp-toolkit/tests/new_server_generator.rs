@@ -120,6 +120,235 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
 }
 
 #[test]
+fn doctor_accepts_generated_templates() {
+    let root = temp_root("doctor-generated");
+
+    for template in templates() {
+        let package_name = format!("{}-generated", template.id);
+        let output = root.join(&package_name);
+
+        generate_new_server(&NewServerOptions {
+            template: template.id.to_string(),
+            package_name,
+            output_dir: output.clone(),
+            toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+            overwrite: false,
+        })
+        .unwrap_or_else(|error| panic!("generate template {}: {error}", template.id));
+
+        let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+            .arg("doctor")
+            .arg(&output)
+            .output()
+            .unwrap_or_else(|error| panic!("run doctor for {}: {error}", template.id));
+
+        assert!(
+            doctor.status.success(),
+            "doctor failed for template {} with {}\nstdout:\n{}\nstderr:\n{}",
+            template.id,
+            doctor.status,
+            String::from_utf8_lossy(&doctor.stdout),
+            String::from_utf8_lossy(&doctor.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&doctor.stdout);
+        assert!(stdout.contains("Ready: yes"));
+        assert!(stdout.contains("Tool schema snapshot"));
+        assert!(stdout.contains("cargo run -- --print-tools"));
+        assert!(stdout.contains("cargo run -- --print-tool-schema"));
+    }
+
+    cleanup(root);
+}
+
+#[test]
+fn doctor_reports_missing_generated_artifacts() {
+    let root = temp_root("doctor-missing");
+    let empty = root.join("empty");
+    fs::create_dir_all(&empty).expect("create empty directory");
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("doctor")
+        .arg(&empty)
+        .output()
+        .expect("run doctor for empty directory");
+
+    assert!(!doctor.status.success());
+
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(stdout.contains("Ready: no"));
+    assert!(stdout.contains("[missing] Cargo manifest (Cargo.toml)"));
+    assert!(stdout.contains("Shape: unknown"));
+
+    let stderr = String::from_utf8_lossy(&doctor.stderr);
+    assert!(stderr.contains("doctor found missing required generated-server files"));
+
+    cleanup(root);
+}
+
+#[test]
+fn doctor_rejects_missing_target_path() {
+    let root = temp_root("doctor-missing-target");
+    let missing = root.join("missing");
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("doctor")
+        .arg(&missing)
+        .output()
+        .expect("run doctor for missing target");
+
+    assert!(!doctor.status.success());
+    assert!(doctor.stdout.is_empty());
+
+    let stderr = String::from_utf8_lossy(&doctor.stderr);
+    assert!(stderr.contains("doctor path"));
+    assert!(stderr.contains("does not exist"));
+
+    cleanup(root);
+}
+
+#[test]
+fn doctor_rejects_file_target_path() {
+    let root = temp_root("doctor-file-target");
+    let target_file = root.join("Cargo.toml");
+    fs::write(&target_file, "[package]\nname = \"not-a-directory\"\n").expect("write target file");
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("doctor")
+        .arg(&target_file)
+        .output()
+        .expect("run doctor for file target");
+
+    assert!(!doctor.status.success());
+    assert!(doctor.stdout.is_empty());
+
+    let stderr = String::from_utf8_lossy(&doctor.stderr);
+    assert!(stderr.contains("doctor path"));
+    assert!(stderr.contains("is not a directory"));
+
+    cleanup(root);
+}
+
+#[test]
+fn doctor_rejects_mismatched_transport_artifacts() {
+    let root = temp_root("doctor-mismatch");
+    let output = root.join("example-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate curated template");
+
+    fs::remove_file(output.join("spec/mcp_probe_stdio_smoke.v1.json"))
+        .expect("remove stdio probe scenario");
+    fs::write(
+        output.join("spec/mcp_probe_http_auth_smoke.v1.json"),
+        "{}\n",
+    )
+    .expect("write mismatched HTTP probe scenario");
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("doctor")
+        .arg(&output)
+        .output()
+        .expect("run doctor for mismatched transport artifacts");
+
+    assert!(!doctor.status.success());
+
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(stdout.contains("Ready: no"));
+    assert!(stdout.contains("[missing] Transport contract and probe"));
+    assert!(stdout.contains("Shape: unknown"));
+
+    cleanup(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_rejects_symlinked_required_files() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("doctor-symlink");
+    let output = root.join("example-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate curated template");
+
+    let external_manifest = root.join("external-Cargo.toml");
+    fs::write(&external_manifest, "[package]\nname = \"external\"\n")
+        .expect("write external manifest");
+    fs::remove_file(output.join("Cargo.toml")).expect("remove generated manifest");
+    symlink(&external_manifest, output.join("Cargo.toml")).expect("symlink generated manifest");
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("doctor")
+        .arg(&output)
+        .output()
+        .expect("run doctor for symlinked required file");
+
+    assert!(!doctor.status.success());
+
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(stdout.contains("Ready: no"));
+    assert!(stdout.contains("[missing] Cargo manifest (Cargo.toml)"));
+
+    cleanup(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_rejects_symlinked_required_directories() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_root("doctor-symlink-dir");
+    let output = root.join("example-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate curated template");
+
+    let external_tests = root.join("external-tests");
+    fs::create_dir_all(&external_tests).expect("create external tests directory");
+    fs::write(external_tests.join("tool_schema_snapshot.rs"), "\n")
+        .expect("write external snapshot test");
+    fs::write(external_tests.join("catalog_profile_contract.rs"), "\n")
+        .expect("write external profile contract test");
+    fs::write(external_tests.join("stdio_smoke.rs"), "\n").expect("write external stdio test");
+    fs::remove_dir_all(output.join("tests")).expect("remove generated tests directory");
+    symlink(&external_tests, output.join("tests")).expect("symlink generated tests directory");
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("doctor")
+        .arg(&output)
+        .output()
+        .expect("run doctor for symlinked required directory");
+
+    assert!(!doctor.status.success());
+
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(stdout.contains("Ready: no"));
+    assert!(stdout.contains("[missing] Tool schema snapshot test"));
+    assert!(stdout.contains("[missing] Transport contract and probe"));
+
+    cleanup(root);
+}
+
+#[test]
 fn generator_is_idempotent_for_unchanged_files() {
     let root = temp_root("idempotent");
     let output = root.join("example-mcp");

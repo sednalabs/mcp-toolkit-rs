@@ -62,7 +62,10 @@ cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns
 cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
   --name my-mcp-server \
   --template curated-stdio-intent
+cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
 cd my-mcp-server
+cargo run -- --print-tools
+cargo run -- --print-tool-schema
 cargo test --all-targets --all-features
 ```
 
@@ -89,6 +92,11 @@ expect on day one:
   `spec/mcp_probe_http_auth_smoke.v1.json` for an optional scripted MCP client
   probe;
 - `.github/workflows/rust-baseline.yml` so the first PR has hosted validation.
+
+Run `mcp-toolkit doctor <generated-server-dir>` after generation whenever you
+want a static scaffold check before building. The doctor reports the inferred
+starter shape, missing source or proof files, and the next commands for schema
+inspection and validation.
 
 For stdio servers, build the binary and point your MCP client at the generated
 command path. The default served profile is `read_only`; add mutation tools
@@ -199,6 +207,7 @@ To start from a maintained template through the toolkit front door:
 
 ```bash
 cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
+cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
 ```
 
 Run `cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns` to choose by

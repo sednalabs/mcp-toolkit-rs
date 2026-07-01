@@ -15,6 +15,7 @@ Use the generator when starting from a maintained template:
 
 ```bash
 cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --template curated-stdio-intent
+cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
 ```
 
 The generator writes a new directory named after the package, rewrites the
@@ -27,6 +28,13 @@ the exact template id. Use
 `--toolkit-git https://github.com/sednalabs/mcp-toolkit-rs` for portable Git
 dependencies, `--pattern <id>` to let the generator choose the recommended
 template, and `--force` only when replacing generated files intentionally.
+
+Run `mcp-toolkit doctor <generated-server-dir>` after generation to check the
+starter source, tool-schema snapshot, profile contract test, transport test,
+probe scenario, and baseline GitHub workflow before building or configuring an
+MCP client. The doctor also prints the `cargo run -- --print-tools` and
+`cargo run -- --print-tool-schema` commands that inspect the active served tool
+surface.
 
 ## Curated Stdio Intent Server
 
