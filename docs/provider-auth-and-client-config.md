@@ -46,7 +46,7 @@ service-specific, but the behavior should stay consistent:
 | `auth_reauth` | Repeat login with forced consent when a refresh token is stale, rotated, or missing a new scope. |
 | `auth_logout` | Remove local cached credentials and explain provider-side revocation separately. |
 | `auth_probe` | Call a low-cost read-only endpoint to prove upstream access. |
-| `print_client_config` or docs equivalent | Show the MCP client command, URL, profile env vars, and restart notes without including secrets. |
+| `print_client_config`, `mcp-toolkit client-config`, or docs equivalent | Show the MCP client command, URL, profile env vars, and restart notes without including secrets. |
 
 Data tools should only use configured credentials. If credentials are missing,
 return a redacted status-shaped error that points to the setup tool or CLI
@@ -195,6 +195,17 @@ same fields every time:
 - auth/login command, if provider login is external to the MCP client;
 - restart guidance after changing credentials, profile, binary path, or hosted
   URL.
+
+For maintained Rust starter templates, use the toolkit front door after
+generation:
+
+```bash
+mcp-toolkit client-config ./my-mcp-server
+```
+
+Use `--transport stdio` or `--transport http` if the scaffold is incomplete and
+the transport cannot be inferred yet. Use `--command`, `--url`, `--name`, and
+`--profile` when rendering deployment-specific snippets.
 
 For a stdio server, the client configuration usually points at the built binary
 and pins the safe profile:

@@ -156,7 +156,145 @@ fn doctor_accepts_generated_templates() {
         assert!(stdout.contains("Tool schema snapshot"));
         assert!(stdout.contains("cargo run -- --print-tools"));
         assert!(stdout.contains("cargo run -- --print-tool-schema"));
+        assert!(stdout.contains("mcp-toolkit client-config"));
     }
+
+    cleanup(root);
+}
+
+#[test]
+fn client_config_renders_stdio_generated_project() {
+    let root = temp_root("client-config-stdio");
+    let output = root.join("example-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate curated template");
+
+    let config = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("client-config")
+        .arg(&output)
+        .output()
+        .expect("run client-config for stdio generated project");
+
+    assert!(
+        config.status.success(),
+        "client-config failed with {}\nstdout:\n{}\nstderr:\n{}",
+        config.status,
+        String::from_utf8_lossy(&config.stdout),
+        String::from_utf8_lossy(&config.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&config.stdout);
+    assert!(stdout.contains("[mcp_servers.\"example-mcp\"]"));
+    assert!(stdout.contains("command = \""));
+    assert!(stdout.contains("target/release/example-mcp"));
+    assert!(stdout.contains("args = []"));
+    assert!(stdout.contains("[mcp_servers.\"example-mcp\".env]"));
+    assert!(stdout.contains("EXAMPLE_MCP_TOOL_PROFILE = \"read_only\""));
+
+    cleanup(root);
+}
+
+#[test]
+fn client_config_renders_hosted_http_generated_project() {
+    let root = temp_root("client-config-http");
+    let output = root.join("example-http-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "hosted-http-auth".to_string(),
+        package_name: "example-http-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate hosted template");
+
+    let config = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("client-config")
+        .arg(&output)
+        .output()
+        .expect("run client-config for hosted generated project");
+
+    assert!(
+        config.status.success(),
+        "client-config failed with {}\nstdout:\n{}\nstderr:\n{}",
+        config.status,
+        String::from_utf8_lossy(&config.stdout),
+        String::from_utf8_lossy(&config.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&config.stdout);
+    assert!(stdout.contains("[mcp_servers.\"example-http-mcp\"]"));
+    assert!(stdout.contains("url = \"http://127.0.0.1:9411/mcp\""));
+    assert!(!stdout.contains("command ="));
+
+    cleanup(root);
+}
+
+#[test]
+fn client_config_supports_overrides() {
+    let root = temp_root("client-config-overrides");
+    let output = root.join("example-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate curated template");
+
+    let config = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("client-config")
+        .arg(&output)
+        .args([
+            "--name",
+            "workspace-example",
+            "--transport",
+            "stdio",
+            "--command",
+            "/opt/example/bin/example-mcp",
+            "--profile",
+            "operator",
+        ])
+        .output()
+        .expect("run client-config with overrides");
+
+    assert!(config.status.success());
+
+    let stdout = String::from_utf8_lossy(&config.stdout);
+    assert!(stdout.contains("[mcp_servers.\"workspace-example\"]"));
+    assert!(stdout.contains("command = \"/opt/example/bin/example-mcp\""));
+    assert!(stdout.contains("EXAMPLE_MCP_TOOL_PROFILE = \"operator\""));
+
+    cleanup(root);
+}
+
+#[test]
+fn client_config_reports_unknown_transport_without_override() {
+    let root = temp_root("client-config-unknown");
+    let empty = root.join("empty");
+    fs::create_dir_all(&empty).expect("create empty directory");
+    fs::write(empty.join("Cargo.toml"), "[package]\nname = \"empty\"\n")
+        .expect("write minimal manifest");
+
+    let config = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("client-config")
+        .arg(&empty)
+        .output()
+        .expect("run client-config for incomplete generated project");
+
+    assert!(!config.status.success());
+
+    let stderr = String::from_utf8_lossy(&config.stderr);
+    assert!(stderr.contains("could not infer generated-server transport"));
 
     cleanup(root);
 }
