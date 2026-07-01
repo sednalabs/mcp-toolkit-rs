@@ -12,7 +12,11 @@
     "analytics-scratchpad",
     "operator-mutation"
   ],
-  "toolkit_crates": ["mcp-toolkit-core", "mcp-toolkit-testing"],
+  "toolkit_crates": [
+    "mcp-toolkit-core",
+    "mcp-toolkit-observability",
+    "mcp-toolkit-scratchpad"
+  ],
   "transports": ["stdio"],
   "auth_modes": ["google-adc", "google-oauth-client", "service-account"],
   "tool_surface": {
@@ -29,19 +33,20 @@
   "scratchpad": {
     "supported": true,
     "engine": "duckdb",
-    "profile": "scratchpad",
-    "notes": "Search analytics rows can be moved into a bounded local session."
+    "profile": "read_only",
+    "notes": "Search analytics rows can be moved into a bounded local session from the default read-only profile."
   },
   "profiles": [
     {
       "name": "read_only",
       "default": true,
-      "tool_groups": ["auth", "site-read", "search-analytics", "discovery"]
-    },
-    {
-      "name": "scratchpad",
-      "default": false,
-      "tool_groups": ["scratchpad", "search-analytics"]
+      "tool_groups": [
+        "auth",
+        "site-read",
+        "search-analytics",
+        "scratchpad",
+        "discovery"
+      ]
     },
     {
       "name": "operator",
