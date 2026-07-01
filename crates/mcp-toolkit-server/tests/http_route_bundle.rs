@@ -46,8 +46,24 @@ impl ServerHandler for TestMcp {
     }
 }
 
-const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
 const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
+
+fn init_body() -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": mcp_toolkit_server::rmcp::model::ProtocolVersion::LATEST,
+            "capabilities": {},
+            "clientInfo": {
+                "name": "test",
+                "version": "1.0"
+            }
+        }
+    })
+    .to_string()
+}
 
 #[tokio::test]
 async fn server_builder_composes_runtime_and_router_defaults() {
@@ -116,7 +132,7 @@ async fn route_bundle_serves_health_and_initialize() {
                 .header("host", "127.0.0.1")
                 .header("accept", ACCEPT_STREAMABLE)
                 .header("content-type", "application/json")
-                .body(Body::from(INIT_BODY))
+                .body(Body::from(init_body()))
                 .expect("initialize request"),
         )
         .await

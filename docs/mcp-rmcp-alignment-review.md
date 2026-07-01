@@ -152,6 +152,9 @@ or server-authoring policy:
 11. Toolkit-owned protocol defaults no longer fall back to `2024-11-05` by
     default. The stdio contract helper requests `2025-11-25`, and
     `mcp-toolkit-gemini` uses the pinned SDK's `ProtocolVersion::LATEST`.
+12. HTTP route-bundle and Streamable HTTP tests now serialize
+    `rmcp::model::ProtocolVersion::LATEST` in initialize fixtures instead of
+    carrying a stale literal protocol version.
 
 ## Current Risk Notes
 

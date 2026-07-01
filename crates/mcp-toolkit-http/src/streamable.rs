@@ -415,8 +415,24 @@ mod tests {
         }
     }
 
-    const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#;
     const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
+
+    fn init_body() -> String {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": rmcp::model::ProtocolVersion::LATEST,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "test",
+                    "version": "1.0"
+                }
+            }
+        })
+        .to_string()
+    }
 
     #[tokio::test]
     async fn build_local_streamable_http_service_preserves_bounds_and_hosts() {
@@ -470,7 +486,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(INIT_BODY))
+            .body(Body::from(init_body()))
             .expect("request");
 
         let response = runtime.service.handle(request).await;
@@ -508,7 +524,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Full::from(Bytes::from_static(INIT_BODY.as_bytes())))
+            .body(Full::from(Bytes::from(init_body())))
             .expect("request");
 
         let response = runtime.service.handle(request).await;
@@ -622,7 +638,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(INIT_BODY))
+            .body(Body::from(init_body()))
             .expect("request");
 
         let response =
