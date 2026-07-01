@@ -44,10 +44,11 @@ living reference pattern from existing MCP servers before adding new toolkit
 abstractions. Use `docs/pattern-manifests.md` and `docs/pattern-recipes.md`
 when you need the machine-readable pattern shape and the implementation recipe
 that goes with it. For a copyable checklist that turns that route into a
-repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For the
-operator-facing details that make a server easy to try and debug, use
-`docs/easy-server-ergonomics.md`. For legacy systems with partial APIs, admin
-HTML, scheduled jobs, or private exports, use
+repeatable implementation lane, use `docs/new-server-delivery-lane.md`. For
+exact generator commands, flags, generated files, and customization points, use
+`docs/new-server-cli-reference.md`. For the operator-facing details that make a
+server easy to try and debug, use `docs/easy-server-ergonomics.md`. For legacy
+systems with partial APIs, admin HTML, scheduled jobs, or private exports, use
 `docs/legacy-system-adapter-pattern.md` before exposing any generic HTTP, SQL,
 or browser-style tool. For auth failure handling, use
 `docs/auth-error-contracts.md`.

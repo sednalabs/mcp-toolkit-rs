@@ -1,4 +1,5 @@
 const STARTER_TEMPLATES_DOC: &str = include_str!("../../../docs/starter-templates.md");
+const CLI_REFERENCE_DOC: &str = include_str!("../../../docs/new-server-cli-reference.md");
 const EASY_SERVER_ERGONOMICS_DOC: &str = include_str!("../../../docs/easy-server-ergonomics.md");
 const PROVIDER_AUTH_CLIENT_CONFIG_DOC: &str =
     include_str!("../../../docs/provider-auth-and-client-config.md");
@@ -32,12 +33,34 @@ fn starter_templates_doc_mentions_generator_front_door() {
         "--pattern <id>",
         "--toolkit-git",
         "--force",
+        "docs/new-server-cli-reference.md",
         "evidence behind an archetype",
         "LocalMcpHttpServerBuilder",
     ] {
         assert!(
             STARTER_TEMPLATES_DOC.contains(needle),
             "starter template doc is missing generator front-door detail `{needle}`"
+        );
+    }
+}
+
+#[test]
+fn cli_reference_mentions_template_specific_layouts() {
+    for needle in [
+        "Curated Stdio Intent",
+        "Hosted HTTP Auth",
+        "Single-Crate Public Stdio",
+        "catalog_profile_contract.rs",
+        "http_auth_contract.rs",
+        "dependency_governance_check.sh",
+        "CodeQL",
+        "OAuth Protected Resource Metadata",
+        "read_only",
+        "operator profile",
+    ] {
+        assert!(
+            CLI_REFERENCE_DOC.contains(needle),
+            "CLI/generated file reference is missing `{needle}`"
         );
     }
 }

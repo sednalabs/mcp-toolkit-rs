@@ -3,7 +3,9 @@
 This guide is the end-to-end route for creating, validating, reviewing, and
 releasing a Rust MCP server with `mcp-toolkit-rs`. For the operational checklist
 that turns this route into a repeatable delivery lane, see
-`docs/new-server-delivery-lane.md`.
+`docs/new-server-delivery-lane.md`. For the exact generator commands, flags,
+generated file layout, and customization points, see
+`docs/new-server-cli-reference.md`.
 
 The toolkit should make common MCP server work easy without becoming a product
 framework. Keep backend clients, domain tools, deployment policy, and
