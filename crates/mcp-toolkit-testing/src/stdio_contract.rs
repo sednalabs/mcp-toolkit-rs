@@ -239,7 +239,12 @@ mod tests {
 
     #[test]
     fn default_protocol_version_tracks_current_mcp_spec() {
-        assert_eq!(super::DEFAULT_PROTOCOL_VERSION, "2025-11-25");
+        let latest_version =
+            serde_json::to_value(rmcp::model::ProtocolVersion::LATEST).expect("serialize latest");
+        assert_eq!(
+            super::DEFAULT_PROTOCOL_VERSION,
+            latest_version.as_str().expect("latest version string")
+        );
     }
 
     #[test]
