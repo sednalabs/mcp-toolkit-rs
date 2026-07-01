@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
 
@@ -686,7 +686,7 @@ fn append_openapi_todos(todos: &mut Vec<String>, risk: DraftRisk, operation: &Ma
             "Confirm provider auth scopes; source operation did not declare security".to_string(),
         );
     }
-    if contains_ref(operation) {
+    if object_contains_ref(operation) {
         todos.push("Resolve local `$ref` schemas before generating typed Rust models".to_string());
     }
 }
@@ -850,12 +850,16 @@ fn first_sentence(text: &str) -> String {
 
 fn contains_ref(value: &Value) -> bool {
     match value {
-        Value::Object(object) => object
-            .iter()
-            .any(|(key, value)| key == "$ref" || contains_ref(value)),
+        Value::Object(object) => object_contains_ref(object),
         Value::Array(values) => values.iter().any(contains_ref),
         _ => false,
     }
+}
+
+fn object_contains_ref(object: &Map<String, Value>) -> bool {
+    object
+        .iter()
+        .any(|(key, value)| key == "$ref" || contains_ref(value))
 }
 
 #[cfg(test)]
