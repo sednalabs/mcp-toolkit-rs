@@ -58,6 +58,10 @@ and recipe from `docs/pattern-recipes.md`. The manifest should identify the
 transport, auth modes, tool-surface posture, profiles, scratchpad posture, and
 conformance expectations that the implementation is borrowing.
 
+Run `mcp-toolkit conformance --pattern <id>` to see the current downstream
+proof posture for that archetype before using it as generator evidence. Use
+`mcp-toolkit conformance --strict` in PRs that add or change pattern manifests.
+
 For the `analytics-scratchpad` archetype, use `docs/scratchpad.md` plus the
 GA4 and Search Console manifests to decide which behavior belongs in
 `mcp-toolkit-scratchpad` and which ingest or evidence behavior remains in the
@@ -82,6 +86,7 @@ Required evidence:
 - the reference atlas row used, or why no row fits;
 - the pattern manifest and recipe used, or why no manifest fits yet;
 - the selected template or adoption helper;
+- the downstream conformance posture if a pattern manifest was used;
 - the transport and trust boundary;
 - the reason any raw `rmcp` runtime wiring remains;
 - the validation commands or workflow that cover the chosen shape.

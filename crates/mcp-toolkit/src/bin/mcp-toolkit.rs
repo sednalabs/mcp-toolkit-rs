@@ -11,7 +11,10 @@ use mcp_toolkit::new_server::{
     default_template_id, default_toolkit_git_url, default_toolkit_root, generate_new_server,
     templates, NewServerOptions, ToolkitDependencySource,
 };
-use mcp_toolkit::patterns::{find_pattern, manifests_for_pattern, patterns};
+use mcp_toolkit::patterns::{
+    conformance_findings, find_pattern, manifests_for_pattern, pattern_manifests, patterns,
+    PatternConformanceSeverity, PatternManifestSpec,
+};
 
 fn main() {
     if let Err(error) = run(env::args().skip(1).collect()) {
@@ -29,6 +32,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             print_templates();
             Ok(())
         }
+        Some("conformance") => run_conformance(&args[1..]),
         Some("patterns") | Some("archetypes") => run_patterns(&args[1..]),
         Some("pattern") | Some("archetype") => run_pattern(&args[1..]),
         Some("--help") | Some("-h") | None => {
@@ -274,6 +278,148 @@ fn run_doctor(args: &[String]) -> Result<(), String> {
     }
 }
 
+fn run_conformance(args: &[String]) -> Result<(), String> {
+    let mut strict = false;
+    let mut server: Option<String> = None;
+    let mut pattern: Option<String> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.as_str() {
+            "--strict" => {
+                strict = true;
+            }
+            "--server" => {
+                server = Some(take_value(args, &mut index, "--server")?);
+            }
+            "--pattern" | "--archetype" => {
+                pattern = Some(take_value(args, &mut index, "--pattern")?);
+            }
+            "--help" | "-h" => {
+                print_conformance_help();
+                return Ok(());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown conformance option `{value}`"));
+            }
+            value => {
+                if server.is_some() || pattern.is_some() {
+                    return Err("use at most one positional server or pattern filter".to_string());
+                }
+                if find_pattern(value).is_some() {
+                    pattern = Some(value.to_string());
+                } else {
+                    server = Some(value.to_string());
+                }
+            }
+        }
+        index += 1;
+    }
+
+    if server.is_some() && pattern.is_some() {
+        return Err("use either --server or --pattern, not both".to_string());
+    }
+
+    let manifests = filtered_manifests(server.as_deref(), pattern.as_deref())?;
+    print_conformance_report(&manifests);
+
+    if strict {
+        let hard_count = manifests
+            .iter()
+            .flat_map(|manifest| conformance_findings(manifest))
+            .filter(|finding| finding.severity == PatternConformanceSeverity::Hard)
+            .count();
+
+        if hard_count > 0 {
+            return Err(format!(
+                "conformance found {hard_count} hard manifest violation{}",
+                if hard_count == 1 { "" } else { "s" }
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn filtered_manifests(
+    server: Option<&str>,
+    pattern: Option<&str>,
+) -> Result<Vec<&'static PatternManifestSpec>, String> {
+    let manifests: Vec<_> = pattern_manifests()
+        .iter()
+        .filter(|manifest| {
+            server
+                .map(|server| manifest.server.name == server)
+                .unwrap_or(true)
+        })
+        .filter(|manifest| {
+            pattern
+                .map(|pattern| manifest.patterns.contains(&pattern))
+                .unwrap_or(true)
+        })
+        .collect();
+
+    if manifests.is_empty() {
+        match (server, pattern) {
+            (Some(server), _) => Err(format!("unknown server `{server}`")),
+            (_, Some(pattern)) => Err(format!(
+                "no conformance manifests found for pattern `{pattern}`"
+            )),
+            _ => Err("no conformance manifests found".to_string()),
+        }
+    } else {
+        Ok(manifests)
+    }
+}
+
+fn print_conformance_report(manifests: &[&PatternManifestSpec]) {
+    println!("Downstream MCP conformance posture:");
+    for manifest in manifests {
+        let findings = conformance_findings(manifest);
+        let hard_count = findings
+            .iter()
+            .filter(|finding| finding.severity == PatternConformanceSeverity::Hard)
+            .count();
+        let advisory_count = findings
+            .iter()
+            .filter(|finding| finding.severity == PatternConformanceSeverity::Advisory)
+            .count();
+        println!(
+            "  {:30} hard={}, advisory={} - {}",
+            manifest.server.name, hard_count, advisory_count, manifest.path
+        );
+        println!(
+            "    schema={} transport={} auth={} domain={} hosted={} release={}",
+            manifest.conformance.schema_snapshot,
+            manifest.conformance.transport_contract,
+            manifest.conformance.auth_surface_contract,
+            manifest.conformance.domain_contracts,
+            manifest.conformance.hosted_validation,
+            manifest.conformance.release_evidence
+        );
+        println!(
+            "    patterns: {}; transports: {}; auth: {}",
+            join_values(manifest.patterns),
+            join_values(manifest.transports),
+            join_values(manifest.auth_modes)
+        );
+        for finding in findings {
+            println!(
+                "    {} {}: {}",
+                match finding.severity {
+                    PatternConformanceSeverity::Hard => "hard",
+                    PatternConformanceSeverity::Advisory => "advisory",
+                },
+                finding.contract,
+                finding.message
+            );
+        }
+    }
+    println!();
+    println!("Use `mcp-toolkit conformance --strict` to fail on hard manifest contradictions.");
+}
+
 fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -389,6 +535,15 @@ fn print_pattern(pattern_id: &str) -> Result<(), String> {
             },
             manifest.scratchpad.engine
         );
+        println!(
+            "    conformance: schema={}, transport={}, auth={}, domain={}, hosted={}, release={}",
+            manifest.conformance.schema_snapshot,
+            manifest.conformance.transport_contract,
+            manifest.conformance.auth_surface_contract,
+            manifest.conformance.domain_contracts,
+            manifest.conformance.hosted_validation,
+            manifest.conformance.release_evidence
+        );
     }
 
     Ok(())
@@ -410,6 +565,7 @@ fn print_help() {
     println!("  mcp-toolkit doctor [generated-server-dir]");
     println!("  mcp-toolkit client-config [generated-server-dir]");
     println!("  mcp-toolkit templates");
+    println!("  mcp-toolkit conformance [--server <name>|--pattern <id>] [--strict]");
     println!("  mcp-toolkit patterns [pattern-id]");
     println!();
     println!("Run `mcp-toolkit new --help`, `mcp-toolkit doctor --help`, or");
@@ -459,6 +615,17 @@ fn print_client_config_help() {
     );
     println!("      --profile <profile>   Tool profile for stdio env (default: read_only)");
     println!("  -h, --help                Show this help");
+}
+
+fn print_conformance_help() {
+    println!("Usage:");
+    println!("  mcp-toolkit conformance");
+    println!("  mcp-toolkit conformance --server <server-name>");
+    println!("  mcp-toolkit conformance --pattern <pattern-id>");
+    println!("  mcp-toolkit conformance <server-name-or-pattern-id>");
+    println!();
+    println!("Reports advisory downstream conformance posture from checked-in pattern manifests.");
+    println!("Use --strict to fail only on hard manifest contradictions.");
 }
 
 fn print_patterns_help() {

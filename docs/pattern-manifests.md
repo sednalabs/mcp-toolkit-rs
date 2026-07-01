@@ -18,6 +18,8 @@ new manifest introduces a new archetype.
 - `docs/pattern-manifests/*.json` are example manifests for reference servers.
 - `docs/reference-server-atlas.md` remains the human map and extraction guide.
 - `docs/pattern-recipes.md` turns the same patterns into implementation steps.
+- `docs/downstream-conformance.md` explains the advisory conformance report
+  generated from the same manifests.
 
 Each manifest should be public, boring, and reviewable. It must not contain
 secrets, hostnames, account ids, private paths, or environment-specific setup.
@@ -44,6 +46,14 @@ Prefer `planned` or `reference-only` over overstating the current toolkit
 surface. A manifest is useful only if it tells later generator work what is
 already reusable and what is still service-owned.
 
+The CLI reports these states with:
+
+```sh
+mcp-toolkit conformance
+mcp-toolkit conformance --pattern google-provider-read-only
+mcp-toolkit conformance --strict
+```
+
 ## Review Rules
 
 When adding or updating a manifest:
@@ -55,6 +65,8 @@ When adding or updating a manifest:
 4. Update `crates/mcp-toolkit-testing/tests/new_server_delivery_lane_docs.rs`
    when a required field, archetype, or directory name changes.
 5. Record the manifest path in the PR or work item evidence block.
+6. Run `mcp-toolkit conformance --strict` when the manifest changes; hard
+   contradictions must be fixed before the row is used as generator evidence.
 
 ## Ownership Rules
 
@@ -72,9 +84,9 @@ Manifest fields should point to toolkit owners conservatively:
   conformance helpers.
 - Policy crates own SQL classification, capability guards, and runtime policy
   adapters.
-- A future scratchpad crate should own generic DuckDB session, bounded query,
-  table inventory, retention, and evidence-export behavior only after the API
-  is proven against more than one service.
+- `mcp-toolkit-scratchpad` owns generic DuckDB session lifecycle, bounded query,
+  table inventory, retention, and local evidence-export substrate. Services
+  still own provider-specific ingest and domain output contracts.
 
 If no crate clearly owns a field yet, leave the manifest as evidence and create
 a work item before adding a dependency or new API.
