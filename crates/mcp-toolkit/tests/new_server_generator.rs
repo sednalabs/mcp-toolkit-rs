@@ -291,10 +291,16 @@ fn release_preflight_rejects_high_confidence_secret_markers() {
         "do not publish: \"client_secret\": \"redacted-example\"\n",
     )
     .expect("write accidental secret marker");
-    fs::write(output.join(".env.local"), "OPENAI_API_KEY=sk-proj-redacted\n")
-        .expect("write accidental env secret marker");
-    fs::write(output.join("Dockerfile"), "ENV GOOGLE_TOKEN=ya29.redacted\n")
-        .expect("write accidental Dockerfile secret marker");
+    fs::write(
+        output.join(".env.local"),
+        "OPENAI_API_KEY=sk-proj-redacted\n",
+    )
+    .expect("write accidental env secret marker");
+    fs::write(
+        output.join("Dockerfile"),
+        "ENV GOOGLE_TOKEN=ya29.redacted\n",
+    )
+    .expect("write accidental Dockerfile secret marker");
     fs::create_dir_all(output.join("node_modules/package"))
         .expect("create skipped node_modules tree");
     fs::write(
