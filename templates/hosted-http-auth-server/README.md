@@ -18,6 +18,8 @@ It demonstrates:
 - tool schema snapshots for exported MCP tools;
 - `--print-tools` and `--print-tool-schema` for local tool-surface inspection
   without binding the HTTP listener;
+- `--doctor` and `--print-client-config` for project-local readiness and
+  Codex-style hosted MCP client configuration snippets;
 - `spec/mcp_probe_http_auth_smoke.v1.json` for a token-backed scripted
   `mcp-probe` smoke scenario against a running local server.
 
@@ -50,6 +52,14 @@ HTTP:
 ```bash
 cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tools
 cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tool-schema
+```
+
+After copying or generating this starter, run these commands from the generated
+project directory:
+
+```bash
+cargo run -- --doctor
+cargo run -- --print-client-config
 ```
 
 ## Contract And Probe Checks

@@ -208,6 +208,10 @@ generation:
 mcp-toolkit client-config ./my-mcp-server
 ```
 
+From inside a maintained generated starter, `cargo run -- --print-client-config`
+prints the same kind of client snippet without requiring the operator to find
+the toolkit binary first.
+
 Use `--transport stdio` or `--transport http` if the scaffold is incomplete and
 the transport cannot be inferred yet. Use `--command`, `--url`, `--name`, and
 `--profile` when rendering deployment-specific snippets.

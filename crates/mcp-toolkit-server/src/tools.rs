@@ -35,6 +35,10 @@ pub enum ToolSurfaceCommand {
     PrintTools,
     /// Print the canonical active tool schema snapshot and exit.
     PrintToolSchema,
+    /// Run the generated-server doctor against the current working directory.
+    Doctor,
+    /// Print a copyable MCP client configuration snippet for the current project.
+    PrintClientConfig,
     /// Print help text and exit.
     Help,
 }
@@ -66,6 +70,8 @@ where
     let command = match arg {
         "--print-tools" => ToolSurfaceCommand::PrintTools,
         "--print-tool-schema" => ToolSurfaceCommand::PrintToolSchema,
+        "--doctor" => ToolSurfaceCommand::Doctor,
+        "--print-client-config" => ToolSurfaceCommand::PrintClientConfig,
         "--help" | "-h" => ToolSurfaceCommand::Help,
         other => return Err(format!("unknown argument: {other}")),
     };
@@ -84,12 +90,14 @@ pub fn render_tool_surface_help(binary_name: &str) -> String {
 {binary_name}
 
 USAGE:
-    {binary_name} [--print-tools|--print-tool-schema]
+    {binary_name} [--print-tools|--print-tool-schema|--doctor|--print-client-config]
 
 OPTIONS:
-    --print-tools        Print the active profile's tool names, then exit
-    --print-tool-schema  Print the active profile's canonical tool schema snapshot, then exit
-    -h, --help           Print this help text
+    --print-tools          Print the active profile's tool names, then exit
+    --print-tool-schema    Print the active profile's canonical tool schema snapshot, then exit
+    --doctor               Run static generated-server checks for the current directory
+    --print-client-config  Print a Codex-style MCP client config for the current directory
+    -h, --help             Print this help text
 "
     )
 }
@@ -163,7 +171,10 @@ pub fn render_tool_surface_command(
     tools: &[Tool],
 ) -> Result<Option<String>, serde_json::Error> {
     match command {
-        ToolSurfaceCommand::Serve | ToolSurfaceCommand::Help => Ok(None),
+        ToolSurfaceCommand::Serve
+        | ToolSurfaceCommand::Doctor
+        | ToolSurfaceCommand::PrintClientConfig
+        | ToolSurfaceCommand::Help => Ok(None),
         ToolSurfaceCommand::PrintTools => render_tool_names(tools).map(Some),
         ToolSurfaceCommand::PrintToolSchema => render_tool_schema_snapshot(tools).map(Some),
     }
@@ -263,6 +274,14 @@ mod tests {
             Ok(ToolSurfaceCommand::PrintToolSchema)
         );
         assert_eq!(
+            tool_surface_command_from_args(["--doctor"]),
+            Ok(ToolSurfaceCommand::Doctor)
+        );
+        assert_eq!(
+            tool_surface_command_from_args(["--print-client-config"]),
+            Ok(ToolSurfaceCommand::PrintClientConfig)
+        );
+        assert_eq!(
             tool_surface_command_from_args(["--help"]),
             Ok(ToolSurfaceCommand::Help)
         );
@@ -292,7 +311,11 @@ mod tests {
     fn renders_tool_surface_help_text() {
         let help = render_tool_surface_help("example-mcp");
 
-        assert!(help.contains("example-mcp [--print-tools|--print-tool-schema]"));
+        assert!(help.contains(
+            "example-mcp [--print-tools|--print-tool-schema|--doctor|--print-client-config]"
+        ));
+        assert!(help.contains("--doctor"));
+        assert!(help.contains("--print-client-config"));
         assert!(help.contains("--print-tool-schema"));
     }
 

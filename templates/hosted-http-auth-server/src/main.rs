@@ -1,4 +1,6 @@
 use hosted_http_auth_server::{build_router, HostedHttpConfig, HostedHttpServer};
+use mcp_toolkit::client_config::{render_client_config, ClientConfigOptions};
+use mcp_toolkit::doctor::inspect_project;
 use mcp_toolkit::server::tools::{
     render_tool_surface_command, render_tool_surface_help, tool_surface_command_from_env,
     ToolSurfaceCommand,
@@ -18,6 +20,8 @@ async fn main() -> MainResult<()> {
             print!("{}", render_tool_surface_help(BINARY_NAME));
             Ok(())
         }
+        Ok(ToolSurfaceCommand::Doctor) => print_doctor(),
+        Ok(ToolSurfaceCommand::PrintClientConfig) => print_client_config(),
         Ok(command) => print_tool_surface(command),
         Err(message) => {
             eprintln!("{message}");
@@ -33,6 +37,25 @@ async fn serve() -> MainResult<()> {
 
     let listener = TcpListener::bind(config.bind_addr).await?;
     axum::serve(listener, build_router(config)?).await?;
+    Ok(())
+}
+
+fn print_doctor() -> MainResult<()> {
+    let report = inspect_project(std::env::current_dir()?);
+    print!("{}", report.render());
+    if report.ready() {
+        Ok(())
+    } else {
+        std::process::exit(2);
+    }
+}
+
+fn print_client_config() -> MainResult<()> {
+    let options = ClientConfigOptions {
+        root: std::env::current_dir()?,
+        ..ClientConfigOptions::default()
+    };
+    print!("{}", render_client_config(&options)?);
     Ok(())
 }
 

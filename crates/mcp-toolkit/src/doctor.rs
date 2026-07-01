@@ -124,8 +124,10 @@ impl DoctorReport {
         output.push_str(&format!("  cd {}\n", self.root.display()));
         output.push_str("  cargo fmt --all --check\n");
         output.push_str("  cargo test --all-targets --all-features\n");
+        output.push_str("  cargo run -- --doctor\n");
         output.push_str("  cargo run -- --print-tools\n");
         output.push_str("  cargo run -- --print-tool-schema\n");
+        output.push_str("  cargo run -- --print-client-config\n");
         output.push_str(&format!(
             "  mcp-toolkit client-config {}\n",
             self.root.display()

@@ -66,8 +66,10 @@ cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
 cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
 cargo run -p mcp-toolkit --bin mcp-toolkit -- client-config my-mcp-server
 cd my-mcp-server
+cargo run -- --doctor
 cargo run -- --print-tools
 cargo run -- --print-tool-schema
+cargo run -- --print-client-config
 cargo test --all-targets --all-features
 ```
 

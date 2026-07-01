@@ -33,9 +33,11 @@ template, and `--force` only when replacing generated files intentionally.
 Run `mcp-toolkit doctor <generated-server-dir>` after generation to check the
 starter source, tool-schema snapshot, profile contract test, transport test,
 probe scenario, and baseline GitHub workflow before building or configuring an
-MCP client. The doctor also prints the `cargo run -- --print-tools` and
-`cargo run -- --print-tool-schema` commands that inspect the active served tool
-surface.
+MCP client. The doctor also prints the generated project's local setup commands,
+including `cargo run -- --doctor`, `cargo run -- --print-tools`,
+`cargo run -- --print-tool-schema`, and
+`cargo run -- --print-client-config`, so handoff can stay inside the generated
+repository.
 
 Run `mcp-toolkit client-config <generated-server-dir>` when you are ready to
 wire the scaffold into an MCP client. It renders a Codex-style TOML snippet for
@@ -85,6 +87,13 @@ cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --
 cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tool-schema
 ```
 
+Inside a generated project, use the project-local setup commands:
+
+```bash
+cargo run -- --doctor
+cargo run -- --print-client-config
+```
+
 This template is intentionally lean. It carries only a minimal
 `.github/workflows/rust-baseline.yml` for generated-project smoke validation;
 it does not carry the standalone public template's CodeQL, coverage, dependency
@@ -121,8 +130,10 @@ Inside a copied standalone repository, inspect the active served surface before
 configuring an MCP client:
 
 ```bash
+cargo run -- --doctor
 cargo run -- --print-tools
 cargo run -- --print-tool-schema
+cargo run -- --print-client-config
 ```
 
 ## Hosted HTTP/Auth Server
@@ -166,6 +177,14 @@ Inspect the active served surface before binding the listener:
 ```bash
 cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tools
 cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tool-schema
+```
+
+Inside a generated hosted project, use the project-local setup commands without
+binding the listener:
+
+```bash
+cargo run -- --doctor
+cargo run -- --print-client-config
 ```
 
 ## Snapshot Workflow
