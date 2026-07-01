@@ -83,6 +83,9 @@ Keep first-class tools intent-shaped:
   deferred loading;
 - include `--print-tools` and `--print-tool-schema` so operators can inspect
   the served surface without starting a client.
+- make `mcp-toolkit doctor <generated-server-dir>` pass before handoff so the
+  scaffold still carries its source, schema snapshot, profile contract,
+  transport smoke test, probe scenario, and hosted baseline workflow.
 
 Profile filtering should be centralized once. The same visible-tool helper or
 inventory policy should drive `tools/list`, local discovery tools, schema
