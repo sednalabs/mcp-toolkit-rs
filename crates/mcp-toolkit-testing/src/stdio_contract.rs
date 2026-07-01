@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
+const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Running stdio MCP process with a JSON-RPC line protocol harness.
@@ -236,6 +236,11 @@ mod tests {
     use serde_json::json;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn default_protocol_version_tracks_current_mcp_spec() {
+        assert_eq!(super::DEFAULT_PROTOCOL_VERSION, "2025-11-25");
+    }
 
     #[test]
     fn tool_call_request_omits_null_arguments() {
