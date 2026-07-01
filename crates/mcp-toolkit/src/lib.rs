@@ -29,6 +29,7 @@ pub use mcp_toolkit_core as core;
 
 pub mod client_config;
 pub mod doctor;
+pub mod draft_generator;
 pub mod new_server;
 pub mod patterns;
 pub mod release_preflight;
