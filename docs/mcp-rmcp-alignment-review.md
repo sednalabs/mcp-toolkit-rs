@@ -14,6 +14,28 @@ Primary references:
 - MCP transports: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
 - `rmcp` Rust SDK: <https://github.com/modelcontextprotocol/rust-sdk>
 
+## SDK Version Posture
+
+As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
+published runtime version, `=1.8.0`, and the lockfile resolves both crates to
+`1.8.0`. That is intentional: the toolkit facade owns the SDK version used by
+generated servers, and generated templates import the server-authoring surface
+through `mcp_toolkit::rmcp` instead of declaring their own direct `rmcp` or
+`rmcp-macros` dependencies.
+
+The upstream `modelcontextprotocol/rust-sdk` repository now advertises a
+`2.0.0` workspace/release line. Treat that as an SDK-major upgrade signal, not
+as a reason for generated servers to bypass the facade. Before moving this
+workspace to a 2.x SDK, re-run this alignment review and specifically compare:
+
+- `StreamableHttpService` and session-manager behavior against the toolkit's
+  route-bundle preflight responses;
+- SSE event-id shape and resume semantics against `RecordingSessionManager`;
+- `#[tool_router]` / `#[tool_handler]` macro output and generated
+  `tools/list` pagination;
+- feature flags needed by the facade versus template dependencies;
+- migration guidance from the official SDK release notes.
+
 ## Current Posture
 
 The toolkit should stay a thin policy and ergonomics layer over `rmcp`, not a
@@ -47,6 +69,7 @@ or server-authoring policy:
 | DNS rebinding defense | Route bundles validate Host/authority and now validate present `Origin` headers against the same allowlist. | Keep. MCP Streamable HTTP requires Origin validation when Origin is present; Host validation remains useful for non-browser and proxy paths. |
 | Session errors | Toolkit route bundles return HTTP errors for missing/invalid sessions before forwarding to `rmcp`. | Keep, but periodically compare with `rmcp` Streamable HTTP behavior when upgrading the SDK. |
 | Auth metadata | Toolkit auth helpers generate protected-resource and authorization-server metadata. | Keep. Resource URL, issuer, scopes, and challenges are deployment-owned configuration. |
+| SDK pin guardrails | The umbrella crate re-exports `rmcp`, templates avoid direct `rmcp` and `rmcp-macros` dependencies, and template checks keep macro/runtime pins aligned. | Keep. Extend this into a workspace-level upgrade checklist before adopting the next SDK major. |
 
 ## Drift Fixed In This Review
 
@@ -86,6 +109,10 @@ or server-authoring policy:
 - Re-check route-bundle session error bodies whenever `rmcp` changes
   Streamable HTTP session handling. The toolkit should keep pre-forwarding
   errors small and compatible.
+- Re-check `RecordingSessionManager` whenever `rmcp` changes SSE event IDs,
+  resume behavior, or Streamable HTTP session-manager trait contracts.
+- Re-check facade feature flags and generated template imports before adopting
+  the next `rmcp` major release.
 - Add generated contract probes for cursor pagination once probe fixtures cover
   multi-page tool lists.
 - Review tool-name validation through the `rmcp` router during each SDK upgrade;
