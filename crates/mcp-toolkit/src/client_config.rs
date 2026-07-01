@@ -130,18 +130,27 @@ pub fn render_client_config(options: &ClientConfigOptions) -> Result<String, Cli
         return Err(ClientConfigError::InvalidRoot(options.root.clone()));
     }
 
-    let package_name = package_name_from_manifest(&options.root)?;
+    let canonical_root = options
+        .root
+        .canonicalize()
+        .map_err(|source| ClientConfigError::Io {
+            path: options.root.clone(),
+            source,
+        })?;
+    let package_name = package_name_from_manifest(&canonical_root)?;
     let server_name = options
         .server_name
         .clone()
         .unwrap_or_else(|| package_name.clone());
     let transport = match options.transport {
         Some(transport) => transport,
-        None => infer_transport(&options.root)?,
+        None => infer_transport(&canonical_root)?,
     };
 
     Ok(match transport {
-        ClientConfigTransport::Stdio => render_stdio_config(options, &package_name, &server_name),
+        ClientConfigTransport::Stdio => {
+            render_stdio_config(options, &package_name, &server_name, &canonical_root)
+        }
         ClientConfigTransport::HostedHttp => render_hosted_http_config(options, &server_name),
     })
 }
@@ -158,10 +167,10 @@ fn render_stdio_config(
     options: &ClientConfigOptions,
     package_name: &str,
     server_name: &str,
+    canonical_root: &Path,
 ) -> String {
     let command = options.command.clone().unwrap_or_else(|| {
-        options
-            .root
+        canonical_root
             .join("target")
             .join("release")
             .join(package_name)
@@ -201,9 +210,14 @@ fn package_name_from_manifest(root: &Path) -> Result<String, ClientConfigError> 
 
     let mut in_package = false;
     for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_package = trimmed == "[package]";
+        let trimmed = line.split('#').next().unwrap_or("").trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let table_name = trimmed[1..trimmed.len() - 1].trim();
+            in_package = table_name == "package";
             continue;
         }
 
@@ -225,7 +239,13 @@ fn package_name_from_manifest(root: &Path) -> Result<String, ClientConfigError> 
 }
 
 fn quoted_value(value: &str) -> Option<&str> {
-    value.strip_prefix('"')?.split('"').next()
+    if let Some(stripped) = value.strip_prefix('"') {
+        stripped.split('"').next()
+    } else if let Some(stripped) = value.strip_prefix('\'') {
+        stripped.split('\'').next()
+    } else {
+        None
+    }
 }
 
 fn toml_string(value: &str) -> String {

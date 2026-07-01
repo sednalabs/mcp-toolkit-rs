@@ -176,9 +176,10 @@ fn client_config_renders_stdio_generated_project() {
     })
     .expect("generate curated template");
 
+    let config_root = output.join("..").join("example-mcp");
     let config = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
         .arg("client-config")
-        .arg(&output)
+        .arg(&config_root)
         .output()
         .expect("run client-config for stdio generated project");
 
@@ -191,9 +192,14 @@ fn client_config_renders_stdio_generated_project() {
     );
 
     let stdout = String::from_utf8_lossy(&config.stdout);
+    let expected_command = output
+        .canonicalize()
+        .expect("canonical generated output")
+        .join("target")
+        .join("release")
+        .join("example-mcp");
     assert!(stdout.contains("[mcp_servers.\"example-mcp\"]"));
-    assert!(stdout.contains("command = \""));
-    assert!(stdout.contains("target/release/example-mcp"));
+    assert!(stdout.contains(&format!("command = \"{}\"", toml_path(&expected_command))));
     assert!(stdout.contains("args = []"));
     assert!(stdout.contains("[mcp_servers.\"example-mcp\".env]"));
     assert!(stdout.contains("EXAMPLE_MCP_TOOL_PROFILE = \"read_only\""));
@@ -282,8 +288,11 @@ fn client_config_reports_unknown_transport_without_override() {
     let root = temp_root("client-config-unknown");
     let empty = root.join("empty");
     fs::create_dir_all(&empty).expect("create empty directory");
-    fs::write(empty.join("Cargo.toml"), "[package]\nname = \"empty\"\n")
-        .expect("write minimal manifest");
+    fs::write(
+        empty.join("Cargo.toml"),
+        "[ package ] # generated metadata\nname = 'empty' # comment\n",
+    )
+    .expect("write minimal manifest");
 
     let config = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
         .arg("client-config")
