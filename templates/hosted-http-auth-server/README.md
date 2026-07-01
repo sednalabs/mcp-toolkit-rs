@@ -96,6 +96,9 @@ server, then stores the resulting MCP credentials for that configured server.
 - Auth is always required for `/mcp`.
 - `/health` is public and should not include service-specific secrets.
 - Host headers are allowlisted by default.
+- Browser `Origin` headers are allowlisted by default. Use
+  `EXAMPLE_MCP_ALLOWED_ORIGINS` with comma-separated full origins such as
+  `https://app.example.com`.
 - `EXAMPLE_MCP_TOOL_PROFILE` defaults to `read_only`; mutation tools should use
   the `operator` profile and `ToolCatalogEntry::with_operator_profile_gate()`.
 

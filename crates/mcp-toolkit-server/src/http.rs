@@ -34,7 +34,10 @@ use http::{
 };
 use http_body_util::LengthLimitError;
 use mcp_toolkit_http::{
-    host::{validate_origin_header, validate_request_authority},
+    host::{
+        validate_origin_header, validate_origin_header_against_allowed_origins,
+        validate_request_authority,
+    },
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
     streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
@@ -254,6 +257,23 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
+    /// Sets allowed browser `Origin` header values on stateful and fallback services.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Origin allowlists must include the scheme, such as
+    /// `https://app.example.com`. Missing `Origin` headers remain accepted for
+    /// non-browser MCP clients.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allowed_origins(mut self, origins: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.config.server_config = self.config.server_config.with_allowed_origins(origins);
+        self
+    }
+
     /// Sets the cancellation token used by the HTTP runtime.
     ///
     /// # Errors
@@ -321,9 +341,11 @@ impl LocalMcpHttpRuntimeBuilder {
     {
         let stateful_config = self.config;
         let allowed_hosts = stateful_config.server_config.allowed_hosts.clone();
+        let allowed_origins = stateful_config.server_config.allowed_origins.clone();
         let fallback_config = self.stateless_server_config.unwrap_or_else(|| {
             StreamableHttpServerConfig::default()
                 .with_allowed_hosts(allowed_hosts.clone())
+                .with_allowed_origins(allowed_origins.clone())
                 .with_stateful_mode(false)
                 .with_sse_retry(None)
                 .with_cancellation_token(
@@ -354,6 +376,7 @@ impl LocalMcpHttpRuntimeBuilder {
             stateful_service: stateful.service,
             stateless_service,
             allowed_hosts,
+            allowed_origins,
         }
     }
 }
@@ -368,6 +391,8 @@ pub struct LocalMcpHttpRuntime<S> {
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
     /// Allowed Host header values copied from the stateful server config.
     pub allowed_hosts: Vec<String>,
+    /// Allowed Origin header values copied from the stateful server config.
+    pub allowed_origins: Vec<String>,
 }
 
 impl<S> LocalMcpHttpRuntime<S>
@@ -391,6 +416,7 @@ where
             stateful_service: self.stateful_service,
             stateless_service: self.stateless_service,
             allowed_hosts: self.allowed_hosts,
+            allowed_origins: self.allowed_origins,
             auth_enabled,
         }
     }
@@ -406,6 +432,8 @@ pub struct LocalMcpHttpState<S> {
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
     /// Allowed Host and Origin header values for the route-bundle guard.
     pub allowed_hosts: Vec<String>,
+    /// Allowed full browser Origin values for the route-bundle guard.
+    pub allowed_origins: Vec<String>,
     /// True when bearer authentication is active above the route bundle.
     pub auth_enabled: bool,
 }
@@ -417,6 +445,7 @@ impl<S> Clone for LocalMcpHttpState<S> {
             stateful_service: self.stateful_service.clone(),
             stateless_service: self.stateless_service.clone(),
             allowed_hosts: self.allowed_hosts.clone(),
+            allowed_origins: self.allowed_origins.clone(),
             auth_enabled: self.auth_enabled,
         }
     }
@@ -516,6 +545,22 @@ impl LocalMcpHttpServerBuilder {
     /// This function does not panic.
     pub fn allowed_hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.runtime = self.runtime.allowed_hosts(hosts);
+        self
+    }
+
+    /// Sets allowed browser `Origin` header values on stateful and fallback services.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Entries must include a scheme, such as `https://app.example.com`. When
+    /// omitted, the route bundle keeps its existing host-derived Origin guard.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allowed_origins(mut self, origins: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.runtime = self.runtime.allowed_origins(origins);
         self
     }
 
@@ -1206,7 +1251,12 @@ where
         );
         return plain_response(err.status_code(), err.message());
     }
-    if let Err(err) = validate_origin_header(req.headers(), &state.allowed_hosts) {
+    let origin_result = if state.allowed_origins.is_empty() {
+        validate_origin_header(req.headers(), &state.allowed_hosts)
+    } else {
+        validate_origin_header_against_allowed_origins(req.headers(), &state.allowed_origins)
+    };
+    if let Err(err) = origin_result {
         tracing::warn!(
             method = %req.method(),
             has_session_header = session_id_from_headers(req.headers()).is_some(),

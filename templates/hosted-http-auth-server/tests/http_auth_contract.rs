@@ -26,6 +26,21 @@ async fn health_is_public_and_host_origin_guarded() {
         .expect("health response");
     assert_eq!(health.status(), StatusCode::OK);
 
+    let allowed_origin = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "127.0.0.1")
+                .header("origin", "http://127.0.0.1:9411")
+                .body(Body::empty())
+                .expect("allowed-origin health request"),
+        )
+        .await
+        .expect("allowed-origin health response");
+    assert_eq!(allowed_origin.status(), StatusCode::OK);
+
     let bad_host = router
         .clone()
         .oneshot(

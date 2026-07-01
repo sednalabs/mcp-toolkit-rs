@@ -40,6 +40,7 @@ pub struct HostedHttpConfig {
     pub issuer: String,
     pub delegation_secret: String,
     pub allowed_hosts: Vec<String>,
+    pub allowed_origins: Vec<String>,
     pub allow_non_loopback: bool,
     pub tool_profile: String,
 }
@@ -52,6 +53,10 @@ impl HostedHttpConfig {
             issuer: "http://issuer.example".to_string(),
             delegation_secret: "development-only-secret".to_string(),
             allowed_hosts: vec!["127.0.0.1".to_string(), "localhost".to_string()],
+            allowed_origins: vec![
+                "http://127.0.0.1:9411".to_string(),
+                "http://localhost:9411".to_string(),
+            ],
             allow_non_loopback: false,
             tool_profile: READ_ONLY_PROFILE_KEY.to_string(),
         }
@@ -78,6 +83,17 @@ impl HostedHttpConfig {
             })
             .filter(|hosts| !hosts.is_empty())
             .unwrap_or(default.allowed_hosts);
+        let allowed_origins = std::env::var("EXAMPLE_MCP_ALLOWED_ORIGINS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|origins| !origins.is_empty())
+            .unwrap_or(default.allowed_origins);
         let allow_non_loopback = parse_bool_env("EXAMPLE_MCP_ALLOW_NON_LOOPBACK");
         let tool_profile =
             std::env::var("EXAMPLE_MCP_TOOL_PROFILE").unwrap_or(default.tool_profile);
@@ -87,6 +103,7 @@ impl HostedHttpConfig {
             issuer,
             delegation_secret,
             allowed_hosts,
+            allowed_origins,
             allow_non_loopback,
             tool_profile,
         })
@@ -274,6 +291,7 @@ pub fn build_router(
 
     Ok(LocalMcpHttpServerBuilder::new()
         .allowed_hosts(config.allowed_hosts.clone())
+        .allowed_origins(config.allowed_origins.clone())
         .stateless_fallback(true)
         .auth_layer(auth_layer)
         .build(move || {

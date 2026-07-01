@@ -136,7 +136,7 @@ It demonstrates:
 - lower-level `LocalMcpHttpRuntimeBuilder` and `LocalMcpHttpRouterBuilder`
   adoption points when a service needs to split runtime and routing itself;
 - `HttpBindSafety` for fail-closed non-loopback bind checks;
-- host allowlists for request guardrails;
+- host and full-origin allowlists for request guardrails;
 - `AuthSurfaceBuilder` with public health and protected `/mcp` routes;
 - generated `read_only` and `operator` profiles, with mutation-ready tools
   kept behind an explicit profile gate before they appear in the hosted tool
