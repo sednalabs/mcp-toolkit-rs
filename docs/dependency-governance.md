@@ -73,7 +73,9 @@ The script enforces:
 
 0. auth/token dependency posture via `scripts/auth_dependency_posture_check.py`
    (blocking)
-1. `rmcp` macro/runtime pin consistency for crates that enable `rmcp/macros`
+1. `rmcp` SDK pin consistency: every direct `rmcp` dependency must use the
+   same exact version pin, and any direct `rmcp-macros` dependency must match
+   the runtime pin
 2. advisory/license/source policy via `cargo-deny` (blocking)
 3. RustSec check via `cargo-audit` (blocking)
 4. stale-risk scan on direct dependencies via `cargo-outdated` (report-only by default)
@@ -120,7 +122,16 @@ For those mechanics:
 - create a follow-up work item for any temporary bespoke token logic that
   cannot be removed before merge.
 
-## RMCP macro/runtime pinning
+## RMCP SDK pinning
+
+Prefer importing the server-authoring surface through the toolkit facade
+(`mcp_toolkit::rmcp` or `mcp_toolkit_server::rmcp`) instead of declaring
+service-local `rmcp` dependencies in generated servers.
+
+When a workspace crate has a deliberate low-level SDK integration reason to
+declare `rmcp` directly, it must use the same exact version pin as every other
+direct `rmcp` dependency in the workspace. This keeps the toolkit from becoming
+a mix of subtly different MCP model, transport, and macro contracts.
 
 Prefer the `rmcp` crate with its `macros` feature over a separate direct
 `rmcp-macros` dependency.
@@ -128,6 +139,21 @@ Prefer the `rmcp` crate with its `macros` feature over a separate direct
 When a crate still declares `rmcp-macros` directly, pin it to the same exact
 version as the `rmcp` runtime.
 
-The repo-level checker enforces that direct pin alignment while allowing crates
+The repo-level checker enforces direct SDK pin alignment while allowing crates
 that rely on `rmcp`'s built-in macro surface and carry no separate
-`rmcp-macros` entry.
+`rmcp-macros` entry. Treat a new upstream `rmcp` major as an explicit alignment
+review event, not as a reason for generated servers to bypass the facade.
+
+## License exceptions for transitive infrastructure crates
+
+`deny.toml` keeps the global license allowlist narrow. Transitive
+infrastructure crates that are acceptable only in a specific dependency tree
+must use scoped `[[licenses.exceptions]]` entries rather than broad global
+license admission.
+
+Current scoped exceptions:
+
+- `webpki-root-certs` / `webpki-roots`: `CDLA-Permissive-2.0`, inherited from
+  WebPKI root trust bundles used by TLS stacks.
+- `tiny-keccak`: `CC0-1.0`, pulled transitively through hashing/data-frame
+  dependencies used by DuckDB/Arrow-backed scratchpad support.
