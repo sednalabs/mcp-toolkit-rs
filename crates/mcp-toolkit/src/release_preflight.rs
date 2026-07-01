@@ -65,6 +65,14 @@ const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
 const TEXT_FILE_EXTENSIONS: &[&str] =
     &["toml", "md", "rs", "json", "yml", "yaml", "sh", "py", "txt"];
 
+const TEXT_FILE_NAMES: &[&str] = &[
+    "LICENSE",
+    ".gitignore",
+    "Dockerfile",
+    "Makefile",
+    "Jenkinsfile",
+];
+
 const SECRET_MARKERS: &[(&str, &str)] = &[
     ("private key block", "-----BEGIN "),
     ("GitHub token", "ghp_"),
@@ -304,7 +312,7 @@ fn contains_manifest_key(contents: &str, key: &str) -> bool {
             continue;
         }
         if let Some((candidate, value)) = trimmed.split_once('=') {
-            if candidate.trim() == key && !value.trim().is_empty() {
+            if manifest_key_has_value(candidate.trim(), value.trim(), key) {
                 return true;
             }
         }
@@ -312,14 +320,34 @@ fn contains_manifest_key(contents: &str, key: &str) -> bool {
     false
 }
 
+fn manifest_key_has_value(candidate: &str, value: &str, key: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+
+    if candidate == key {
+        return true;
+    }
+
+    matches!(candidate.strip_prefix(key), Some(".workspace")) && value == "true"
+}
+
 fn high_confidence_secret_findings(root: &Path) -> Vec<String> {
     let mut findings = Vec::new();
-    scan_dir(root, root, &mut findings);
+    let root = match fs::canonicalize(root) {
+        Ok(root) => root,
+        Err(_) => return findings,
+    };
+    scan_dir(&root, &root, &mut findings);
     findings
 }
 
 fn scan_dir(root: &Path, dir: &Path, findings: &mut Vec<String>) {
-    let entries = match fs::read_dir(dir) {
+    let dir = match canonical_child(root, dir) {
+        Some(dir) => dir,
+        None => return,
+    };
+    let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(_) => return,
     };
@@ -341,9 +369,13 @@ fn scan_dir(root: &Path, dir: &Path, findings: &mut Vec<String>) {
             if should_skip_dir(&path) {
                 continue;
             }
-            scan_dir(root, &path, findings);
+            if let Some(path) = canonical_child(root, &path) {
+                scan_dir(root, &path, findings);
+            }
         } else if metadata.is_file() && should_scan_text_file(&path) {
-            scan_file(root, &path, findings);
+            if let Some(path) = canonical_child(root, &path) {
+                scan_file(root, &path, findings);
+            }
         }
     }
 }
@@ -351,7 +383,7 @@ fn scan_dir(root: &Path, dir: &Path, findings: &mut Vec<String>) {
 fn should_skip_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name == ".git" || name == "target")
+        .map(|name| name == ".git" || name == "target" || name == "node_modules")
         .unwrap_or(false)
 }
 
@@ -359,7 +391,7 @@ fn should_scan_text_file(path: &Path) -> bool {
     if path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name == "LICENSE" || name == ".gitignore")
+        .map(|name| TEXT_FILE_NAMES.contains(&name) || name.starts_with(".env"))
         .unwrap_or(false)
     {
         return true;
@@ -369,6 +401,15 @@ fn should_scan_text_file(path: &Path) -> bool {
         .and_then(|extension| extension.to_str())
         .map(|extension| TEXT_FILE_EXTENSIONS.contains(&extension))
         .unwrap_or(false)
+}
+
+fn canonical_child(root: &Path, path: &Path) -> Option<PathBuf> {
+    let path = fs::canonicalize(path).ok()?;
+    if path.starts_with(root) {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn scan_file(root: &Path, path: &Path, findings: &mut Vec<String>) {

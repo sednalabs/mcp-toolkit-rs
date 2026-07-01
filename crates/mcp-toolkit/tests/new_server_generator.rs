@@ -206,6 +206,40 @@ fn release_preflight_accepts_public_stdio_generated_project() {
 }
 
 #[test]
+fn release_preflight_accepts_workspace_inherited_package_metadata() {
+    let root = temp_root("release-preflight-workspace-metadata");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let manifest_path = output.join("Cargo.toml");
+    let description_line = concat!(
+        "description = \"Standalone public Rust MCP server starter with hosted CI, ",
+        "CodeQL, coverage, and dependency governance.\""
+    );
+    let manifest = read(&manifest_path)
+        .replace("license = \"Apache-2.0\"", "license.workspace = true")
+        .replace(description_line, "description.workspace = true");
+    fs::write(&manifest_path, manifest).expect("write workspace-inherited package metadata");
+
+    let report = inspect_release_preflight(&output);
+    assert!(
+        report.ready(),
+        "workspace-inherited metadata should satisfy release preflight: {:#?}",
+        report.checks
+    );
+
+    cleanup(root);
+}
+
+#[test]
 fn release_preflight_rejects_non_public_starter_until_public_files_exist() {
     let root = temp_root("release-preflight-curated");
     let output = root.join("example-mcp");
@@ -257,6 +291,17 @@ fn release_preflight_rejects_high_confidence_secret_markers() {
         "do not publish: \"client_secret\": \"redacted-example\"\n",
     )
     .expect("write accidental secret marker");
+    fs::write(output.join(".env.local"), "OPENAI_API_KEY=sk-proj-redacted\n")
+        .expect("write accidental env secret marker");
+    fs::write(output.join("Dockerfile"), "ENV GOOGLE_TOKEN=ya29.redacted\n")
+        .expect("write accidental Dockerfile secret marker");
+    fs::create_dir_all(output.join("node_modules/package"))
+        .expect("create skipped node_modules tree");
+    fs::write(
+        output.join("node_modules/package/.env"),
+        "IGNORED_CLIENT_SECRET=\"client_secret\"\n",
+    )
+    .expect("write skipped node_modules secret marker");
 
     let preflight = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
         .arg("release-preflight")
@@ -270,6 +315,9 @@ fn release_preflight_rejects_high_confidence_secret_markers() {
     assert!(stdout.contains("Public ready: no"));
     assert!(stdout.contains("[missing] High-confidence secret marker scan"));
     assert!(stdout.contains("JSON client secret in docs/accidental-secret.md"));
+    assert!(stdout.contains("OpenAI project secret key in .env.local"));
+    assert!(stdout.contains("Google OAuth access token in Dockerfile"));
+    assert!(!stdout.contains("node_modules"));
 
     cleanup(root);
 }
