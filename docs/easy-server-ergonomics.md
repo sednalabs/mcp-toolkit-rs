@@ -81,8 +81,8 @@ Keep first-class tools intent-shaped:
 - put mutations behind an explicit profile, capability, or confirmation layer;
 - include a local `find_tools` path when the catalog may grow or clients use
   deferred loading;
-- add `--print-tools` and `--print-tool-schema` so operators can inspect the
-  served surface without starting a client.
+- include `--print-tools` and `--print-tool-schema` so operators can inspect
+  the served surface without starting a client.
 
 Profile filtering should be centralized once. The same visible-tool helper or
 inventory policy should drive `tools/list`, local discovery tools, schema

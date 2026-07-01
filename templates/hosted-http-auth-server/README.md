@@ -16,6 +16,8 @@ It demonstrates:
 - generated catalog-profile contract tests for `read_only` and `operator`;
 - route-level auth-surface contract tests;
 - tool schema snapshots for exported MCP tools;
+- `--print-tools` and `--print-tool-schema` for local tool-surface inspection
+  without binding the HTTP listener;
 - `spec/mcp_probe_http_auth_smoke.v1.json` for a token-backed scripted
   `mcp-probe` smoke scenario against a running local server.
 
@@ -41,6 +43,14 @@ When copying the template into a new repository, replace the path dependencies
 in `Cargo.toml` with Git dependencies, configure a real HTTPS
 `EXAMPLE_MCP_PUBLIC_BASE_URL`, and use a production token validator instead of
 the delegation-mode development skeleton.
+
+Inspect the active profile's tool surface without starting a client or binding
+HTTP:
+
+```bash
+cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tools
+cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tool-schema
+```
 
 ## Contract And Probe Checks
 
