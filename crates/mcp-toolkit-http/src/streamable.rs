@@ -30,12 +30,15 @@ use axum::body::{to_bytes, Body};
 use http::{HeaderMap, Method, Request, Response, StatusCode};
 use http_body_util::LengthLimitError;
 use rmcp::{
-    transport::streamable_http_server::{
-        session::{
-            local::{LocalSessionManager, SessionConfig},
-            SessionManager,
+    transport::{
+        common::http_header::HEADER_SESSION_ID,
+        streamable_http_server::{
+            session::{
+                local::{LocalSessionManager, SessionConfig},
+                SessionManager,
+            },
+            StreamableHttpServerConfig, StreamableHttpService,
         },
-        StreamableHttpServerConfig, StreamableHttpService,
     },
     RoleServer,
 };
@@ -44,7 +47,6 @@ use tokio::time::{Duration, MissedTickBehavior};
 
 use crate::session::{BoundedSessionManager, RecordingSessionManager, SessionLifecycleConfig};
 
-const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
 const SESSIONLESS_INITIALIZE_BODY_LIMIT: usize = 64 * 1024;
 
 /// Bounded local Streamable HTTP service configuration.
@@ -296,7 +298,7 @@ fn is_body_limit_error(err: &axum::Error) -> bool {
 
 fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
     headers
-        .get(MCP_SESSION_ID_HEADER)
+        .get(HEADER_SESSION_ID)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

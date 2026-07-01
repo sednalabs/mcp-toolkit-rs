@@ -40,8 +40,11 @@ use mcp_toolkit_http::{
     streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
 };
 use rmcp::{
-    transport::streamable_http_server::{
-        SessionManager, StreamableHttpServerConfig, StreamableHttpService,
+    transport::{
+        common::http_header::HEADER_SESSION_ID,
+        streamable_http_server::{
+            SessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        },
     },
     RoleServer, Service,
 };
@@ -51,7 +54,6 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "auth")]
 use crate::auth::AuthSurfaceLayer;
 
-const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
 const SESSIONLESS_POST_PROBE_LIMIT: usize = 64 * 1024;
 
 /// Bind safety policy for hosted HTTP MCP servers.
@@ -1242,7 +1244,7 @@ fn session_stats_json(stats: SessionStats) -> serde_json::Value {
 
 fn session_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
     headers
-        .get(MCP_SESSION_ID_HEADER)
+        .get(HEADER_SESSION_ID)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
