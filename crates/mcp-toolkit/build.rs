@@ -177,9 +177,39 @@ fn generate_pattern_registry_module(manifests_root: &Path) -> Result<String, Box
             "        profiles: &{},\n",
             string_array_literal(&manifest.profiles)
         ));
+        module.push_str("        conformance: PatternConformanceSpec {\n");
+        module.push_str(&format!(
+            "            schema_snapshot: {:?},\n",
+            manifest.conformance.schema_snapshot
+        ));
+        module.push_str(&format!(
+            "            transport_contract: {:?},\n",
+            manifest.conformance.transport_contract
+        ));
+        module.push_str(&format!(
+            "            auth_surface_contract: {:?},\n",
+            manifest.conformance.auth_surface_contract
+        ));
+        module.push_str(&format!(
+            "            domain_contracts: {:?},\n",
+            manifest.conformance.domain_contracts
+        ));
+        module.push_str(&format!(
+            "            hosted_validation: {:?},\n",
+            manifest.conformance.hosted_validation
+        ));
+        module.push_str(&format!(
+            "            release_evidence: {:?},\n",
+            manifest.conformance.release_evidence
+        ));
+        module.push_str(&format!(
+            "            notes: {:?},\n",
+            manifest.conformance.notes
+        ));
+        module.push_str("        },\n");
         module.push_str(&format!(
             "        conformance_notes: {:?},\n",
-            manifest.conformance_notes
+            manifest.conformance.notes
         ));
         module.push_str("        references: &[\n");
         for reference in manifest.references {
@@ -255,9 +285,17 @@ fn read_pattern_manifest(path: String, value: &Value) -> Result<PatternManifest,
         },
         default_profiles,
         profiles,
-        conformance_notes: optional_string_field(conformance, "notes")
-            .unwrap_or("")
-            .to_string(),
+        conformance: PatternConformance {
+            schema_snapshot: string_field(conformance, "schema_snapshot")?.to_string(),
+            transport_contract: string_field(conformance, "transport_contract")?.to_string(),
+            auth_surface_contract: string_field(conformance, "auth_surface_contract")?.to_string(),
+            domain_contracts: string_field(conformance, "domain_contracts")?.to_string(),
+            hosted_validation: string_field(conformance, "hosted_validation")?.to_string(),
+            release_evidence: string_field(conformance, "release_evidence")?.to_string(),
+            notes: optional_string_field(conformance, "notes")
+                .unwrap_or("")
+                .to_string(),
+        },
         references,
     })
 }
@@ -756,7 +794,7 @@ struct PatternManifest {
     scratchpad: PatternScratchpad,
     default_profiles: Vec<String>,
     profiles: Vec<String>,
-    conformance_notes: String,
+    conformance: PatternConformance,
     references: Vec<PatternReference>,
 }
 
@@ -771,6 +809,16 @@ struct PatternScratchpad {
     supported: bool,
     engine: String,
     profile: String,
+    notes: String,
+}
+
+struct PatternConformance {
+    schema_snapshot: String,
+    transport_contract: String,
+    auth_surface_contract: String,
+    domain_contracts: String,
+    hosted_validation: String,
+    release_evidence: String,
     notes: String,
 }
 
