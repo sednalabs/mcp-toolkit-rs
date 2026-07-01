@@ -1,0 +1,23 @@
+[package]
+name = "mcp-toolkit-scratchpad"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Reusable DuckDB-backed scratchpad sessions for Rust MCP servers."
+repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+readme = "../../README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+duckdb = { version = "1.4.4", default-features = false, features = ["bundled"] }
+mcp-toolkit-observability = { version = "0.1.0", path = "../mcp-toolkit-observability", features = ["tracing-bridge"] }
+mcp-toolkit-policy-core = { version = "0.1.0", path = "../mcp-toolkit-policy-core" }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.25.0"

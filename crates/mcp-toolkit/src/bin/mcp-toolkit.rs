@@ -148,6 +148,11 @@ fn run_new(args: &[String]) -> Result<(), String> {
             "Pattern: {} (recipe docs/pattern-recipes.md#{})",
             pattern.id, pattern.recipe_anchor
         );
+        if pattern.id == "analytics-scratchpad" {
+            println!(
+                "Scratchpad: add `mcp-toolkit-scratchpad` when replacing the starter tools with large-result ingest/query tools."
+            );
+        }
     }
     println!(
         "Created {} from `{}` in {}",

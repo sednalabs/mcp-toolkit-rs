@@ -58,6 +58,11 @@ and recipe from `docs/pattern-recipes.md`. The manifest should identify the
 transport, auth modes, tool-surface posture, profiles, scratchpad posture, and
 conformance expectations that the implementation is borrowing.
 
+For the `analytics-scratchpad` archetype, use `docs/scratchpad.md` plus the
+GA4 and Search Console manifests to decide which behavior belongs in
+`mcp-toolkit-scratchpad` and which ingest or evidence behavior remains in the
+service repository.
+
 Use `templates/curated-stdio-intent-server` when the MCP server is
 process-local and should expose a compact curated tool surface over stdio.
 
