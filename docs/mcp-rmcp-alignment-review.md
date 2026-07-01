@@ -31,6 +31,13 @@ tries OAuth path-insertion, OIDC path-insertion, then path-appended OIDC for
 issuer URLs with path components, and validates the returned issuer and endpoint
 metadata before accepting a result.
 
+Fourth-pass review note: toolkit-owned protocol defaults were rechecked against
+the pinned SDK. `rmcp` 1.8.0 exposes `ProtocolVersion::LATEST` as `2025-11-25`,
+so toolkit-owned fallbacks should use the SDK latest value unless a compatibility
+test deliberately passes an older version. The stdio contract harness now
+defaults to `2025-11-25`, and `mcp-toolkit-gemini` uses `ProtocolVersion::LATEST`
+as its server fallback.
+
 ## SDK Version Posture
 
 As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
@@ -142,6 +149,9 @@ or server-authoring policy:
 10. Tool inventory policy now fails closed by default for unknown tools, keeps
     permissive fallback behind an explicit migration helper, and profile-filtered
     tool search now returns schemas only for visible search results.
+11. Toolkit-owned protocol defaults no longer fall back to `2024-11-05` by
+    default. The stdio contract helper requests `2025-11-25`, and
+    `mcp-toolkit-gemini` uses the pinned SDK's `ProtocolVersion::LATEST`.
 
 ## Current Risk Notes
 
@@ -159,9 +169,9 @@ or server-authoring policy:
   into default route-bundle replay. If a future server exposes persistent
   replay through it, review that flow against the SDK's `EventId` parser and
   session-store support before shipping.
-- The stdio test harness still defaults to protocol version `2024-11-05` for
-  compatibility smoke tests. That is acceptable while templates negotiate via
-  `rmcp`, but the harness should be reviewed during the next SDK-major upgrade.
+- Compatibility smoke tests may still pass explicit older protocol versions to
+  the stdio harness. Keep the helper default aligned with the pinned SDK's
+  latest stable protocol version.
 - HTTP route bundles rely on `rmcp` to process accepted JSON-RPC requests after
   local preflight checks. When `rmcp` 2.x is adopted, compare accepted/missing
   `MCP-Protocol-Version`, session-id, and SSE-resume behavior before landing.
