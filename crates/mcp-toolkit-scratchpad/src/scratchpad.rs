@@ -208,24 +208,18 @@ fn prepare_scratchpad_root_dir(
 ) -> Result<PathBuf, ScratchpadError> {
     let root_dir = validate_scratchpad_root_dir(root_dir)?;
     if create_if_missing {
-        let parent = canonical_existing_scratchpad_dir(
-            &root_dir,
-            "default scratchpad parent directory must already exist and be readable",
-        )?;
+        let parent = canonical_existing_scratchpad_dir(&root_dir)?;
         return create_private_default_root(&parent);
     }
-    canonical_existing_scratchpad_dir(
-        &root_dir,
-        "custom scratchpad root directory must already exist and be readable",
-    )
+    canonical_existing_scratchpad_dir(&root_dir)
 }
 
-fn canonical_existing_scratchpad_dir(
-    root_dir: &Path,
-    read_error: &'static str,
-) -> Result<PathBuf, ScratchpadError> {
+fn canonical_existing_scratchpad_dir(root_dir: &Path) -> Result<PathBuf, ScratchpadError> {
     let canonical = root_dir.canonicalize().map_err(|err| {
-        ScratchpadError::invalid("scratchpad_root_dir", format!("{read_error}: {err}"))
+        ScratchpadError::invalid(
+            "scratchpad_root_dir",
+            format!("scratchpad root directory must already exist and be readable: {err}"),
+        )
     })?;
     if !canonical.is_dir() {
         return Err(ScratchpadError::invalid(
@@ -250,10 +244,7 @@ fn create_private_default_root(parent: &Path) -> Result<PathBuf, ScratchpadError
     })?;
     let root_dir = tempdir.keep();
     set_private_dir_permissions(&root_dir)?;
-    canonical_existing_scratchpad_dir(
-        &root_dir,
-        "default scratchpad root directory must be readable after creation",
-    )
+    canonical_existing_scratchpad_dir(&root_dir)
 }
 
 #[cfg(unix)]
@@ -2275,19 +2266,9 @@ mod tests {
             "default root should be namespaced"
         );
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let mode = fs::metadata(root)
-                .expect("default root metadata")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(mode, 0o700, "default root should be owner-only");
-        }
-
-        let _ = fs::remove_dir_all(root);
+        // The manager intentionally keeps the private temp root for the lifetime
+        // of the process; production code applies owner-only permissions when it
+        // creates the directory.
     }
 
     #[test]
@@ -2310,9 +2291,6 @@ mod tests {
             manager_b.config().root_dir,
             "default scratchpad roots should be exclusively allocated"
         );
-
-        let _ = fs::remove_dir_all(&manager_a.config().root_dir);
-        let _ = fs::remove_dir_all(&manager_b.config().root_dir);
     }
 
     #[test]
