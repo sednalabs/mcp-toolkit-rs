@@ -159,9 +159,8 @@ deterministic `mcp-toolkit draft-tools` command, which accepts:
 It emits a short report with proposed tool names, source references, input and
 output schemas where available, read/write/destructive classification, profile
 gates, and review tasks. Read operations are the only enabled-by-default
-drafts. Write, destructive, and uncertain operations stay as disabled-by-default
-`operator` drafts.
-That disabled-by-default `operator` boundary is part of the generated review.
+drafts. Write, destructive, and uncertain operations stay as
+disabled-by-default `operator` drafts.
 
 The next slice can turn approved report entries into a compiling server with
 placeholder fake fixtures, tool-schema snapshots, and generated catalog-profile

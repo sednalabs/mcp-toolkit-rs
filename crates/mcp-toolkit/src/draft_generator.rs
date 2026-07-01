@@ -301,6 +301,7 @@ impl Error for DraftGeneratorError {
 pub fn inspect_draft_source(
     options: &DraftGeneratorOptions,
 ) -> Result<DraftToolReport, DraftGeneratorError> {
+    // codeql[rust/path-injection] Operator-selected local file after CLI validation.
     let contents =
         fs::read_to_string(&options.source).map_err(|source| DraftGeneratorError::Io {
             path: options.source.clone(),
@@ -700,6 +701,11 @@ fn standard_todos() -> Vec<String> {
 }
 
 fn classify_operation(method: &str, operation: &Map<String, Value>) -> DraftRisk {
+    let method_risk = classify_method(method);
+    if method_risk == DraftRisk::Read {
+        return DraftRisk::Read;
+    }
+
     let operation_id = operation
         .get("operationId")
         .and_then(Value::as_str)
@@ -723,7 +729,7 @@ fn classify_operation(method: &str, operation: &Map<String, Value>) -> DraftRisk
     {
         DraftRisk::Write
     } else {
-        classify_method(method)
+        method_risk
     }
 }
 
@@ -773,14 +779,14 @@ fn unique_name(name: String, used_names: &mut BTreeSet<String>) -> String {
         return name;
     }
 
-    for suffix in 2usize.. {
+    let mut suffix = 2usize;
+    loop {
         let candidate = format!("{name}_{suffix}");
         if used_names.insert(candidate.clone()) {
             return candidate;
         }
+        suffix += 1;
     }
-
-    name
 }
 
 fn normalize_identifier(input: &str) -> String {
@@ -982,7 +988,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("{prefix}-{nanos}"));
+        let path = PathBuf::from(format!(
+            "target/mcp-toolkit-draft-generator-tests/{prefix}-{}-{nanos}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).expect("create temp root");
         path
     }
