@@ -766,8 +766,7 @@ fn proposed_path_tool_name(method: &str, path: &str) -> String {
     let resource = path
         .split('/')
         .filter(|segment| !segment.is_empty())
-        .filter(|segment| !is_path_parameter(segment))
-        .next_back()
+        .rfind(|segment| !is_path_parameter(segment))
         .map(normalize_identifier)
         .filter(|segment| !segment.is_empty())
         .unwrap_or_else(|| "endpoint".to_string());
