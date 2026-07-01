@@ -154,9 +154,66 @@ fn doctor_accepts_generated_templates() {
         let stdout = String::from_utf8_lossy(&doctor.stdout);
         assert!(stdout.contains("Ready: yes"));
         assert!(stdout.contains("Tool schema snapshot"));
+        assert!(stdout.contains("cargo run -- --doctor"));
         assert!(stdout.contains("cargo run -- --print-tools"));
         assert!(stdout.contains("cargo run -- --print-tool-schema"));
+        assert!(stdout.contains("cargo run -- --print-client-config"));
         assert!(stdout.contains("mcp-toolkit client-config"));
+    }
+
+    cleanup(root);
+}
+
+#[test]
+fn generator_emits_project_local_doctor_and_client_config_commands_for_every_template() {
+    let root = temp_root("all-template-local-commands");
+
+    for template in templates() {
+        let package_name = format!("{}-generated", template.id);
+        let output = root.join(&package_name);
+
+        generate_new_server(&NewServerOptions {
+            template: template.id.to_string(),
+            package_name,
+            output_dir: output.clone(),
+            toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+            overwrite: false,
+        })
+        .unwrap_or_else(|error| panic!("generate template {}: {error}", template.id));
+
+        let main = read(&output.join("src/main.rs"));
+        assert!(
+            main.contains("ToolSurfaceCommand::Doctor"),
+            "{} should expose a project-local doctor command",
+            template.id
+        );
+        assert!(
+            main.contains("ToolSurfaceCommand::PrintClientConfig"),
+            "{} should expose a project-local client-config command",
+            template.id
+        );
+        assert!(
+            main.contains("inspect_project"),
+            "{} should use the toolkit doctor helper",
+            template.id
+        );
+        assert!(
+            main.contains("render_client_config"),
+            "{} should use the toolkit client-config helper",
+            template.id
+        );
+
+        let readme = read(&output.join("README.md"));
+        assert!(
+            readme.contains("cargo run -- --doctor"),
+            "{} should document the project-local doctor command",
+            template.id
+        );
+        assert!(
+            readme.contains("cargo run -- --print-client-config"),
+            "{} should document the project-local client-config command",
+            template.id
+        );
     }
 
     cleanup(root);

@@ -83,6 +83,9 @@ Keep first-class tools intent-shaped:
   deferred loading;
 - include `--print-tools` and `--print-tool-schema` so operators can inspect
   the served surface without starting a client.
+- include generated binary-local `--doctor` and `--print-client-config`
+  commands so operators can verify readiness and copy client config from inside
+  the generated repository.
 - make `mcp-toolkit doctor <generated-server-dir>` pass before handoff so the
   scaffold still carries its source, schema snapshot, profile contract,
   transport smoke test, probe scenario, and hosted baseline workflow.

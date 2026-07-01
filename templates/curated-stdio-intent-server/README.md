@@ -17,6 +17,8 @@ It demonstrates:
   checks a starter tool response for common secret substrings;
 - `--print-tools` and `--print-tool-schema` for local tool-surface inspection
   without starting an MCP client;
+- `--doctor` and `--print-client-config` for project-local readiness and
+  Codex-style MCP client configuration snippets;
 - `spec/mcp_probe_stdio_smoke.v1.json` for a portable scripted `mcp-probe`
   smoke scenario.
 
@@ -36,6 +38,14 @@ Inspect the active profile's tool surface without starting a client:
 ```bash
 cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tools
 cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tool-schema
+```
+
+After copying or generating this starter, run these commands from the generated
+project directory:
+
+```bash
+cargo run -- --doctor
+cargo run -- --print-client-config
 ```
 
 ## Contract And Probe Checks
