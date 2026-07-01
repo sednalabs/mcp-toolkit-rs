@@ -155,6 +155,11 @@ scopes and diagnostics consistent:
 - `GoogleProviderAuthConfig::adc_login_scopes()` and
   `google_adc_login_command()` include
   `https://www.googleapis.com/auth/cloud-platform` with provider read scopes;
+- `GoogleProviderAuthConfig::adc_setup_plan()` returns a secret-safe,
+  serializable command plan for browser login, headless login, client-id-file
+  fallback, ADC quota project, and API enablement hints;
+- `ProviderAuthCommand` carries both argv and a copyable shell rendering so
+  MCP auth tools can avoid hand-rolled command strings;
 - `classify_google_provider_auth_error()` maps common Google failures into
   stable kinds such as `missing_quota_project`, `api_disabled`,
   `missing_scope`, `permission_denied`, `oauth_app_blocked`, and
