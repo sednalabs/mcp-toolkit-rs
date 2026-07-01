@@ -30,6 +30,7 @@ mcp-toolkit <command>
 | `mcp-toolkit pattern <id>` | Alias for `patterns <id>`. | Same as above. |
 | `mcp-toolkit new --name <package>` | Generate a new server from a maintained template. | Run `doctor`, inspect generated files, then run generated tests. |
 | `mcp-toolkit doctor [generated-server-dir]` | Check generated source, proof files, probe files, and baseline workflow. | Fix missing scaffold files or continue to validation. |
+| `mcp-toolkit release-preflight [generated-server-dir]` | Check public-readiness files, workflows, release proof scaffolding, and high-confidence secret markers. | Fix missing public repository evidence before publishing or installing. |
 | `mcp-toolkit client-config [generated-server-dir]` | Print a Codex-style client snippet for the generated transport. | Replace placeholder command paths, URLs, or profiles for the real deployment. |
 | `mcp-toolkit conformance` | Print downstream manifest conformance posture. | Use `--strict` in PRs that change pattern manifests. |
 
@@ -39,6 +40,7 @@ The top-level help is deliberately short:
 mcp-toolkit --help
 mcp-toolkit new --help
 mcp-toolkit doctor --help
+mcp-toolkit release-preflight --help
 mcp-toolkit client-config --help
 mcp-toolkit conformance --help
 ```
@@ -124,6 +126,26 @@ cargo test --all-targets --all-features
 
 Those generated binary-local commands are part of the operator UX. Keep them
 working unless the service provides a stronger equivalent.
+
+## Release Preflight
+
+Run release preflight before publishing a generated repository, attaching a
+binary, or installing it on a shared host:
+
+```bash
+mcp-toolkit release-preflight my-mcp-server
+```
+
+Release preflight is stricter than doctor. It expects a public-ready repository
+shape with README guidance, a license file, Cargo license and description
+metadata, baseline CI, CodeQL, coverage, dependency governance, schema/probe
+proof, governance docs, and no high-confidence secret markers in generated text
+files.
+
+The `single-crate-public-stdio` template is designed to pass release preflight
+from generation. Smaller starter templates may pass `doctor` but fail
+`release-preflight` until the service repository adds public release files and
+workflows.
 
 ## Client Config
 
@@ -278,6 +300,7 @@ script green:
 
 ```bash
 ./scripts/dependency_governance_check.sh
+mcp-toolkit release-preflight .
 ```
 
 When editing the toolkit templates themselves, use the template manifest paths

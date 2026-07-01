@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use mcp_toolkit::new_server::{
     default_toolkit_root, generate_new_server, templates, NewServerOptions, ToolkitDependencySource,
 };
+use mcp_toolkit::release_preflight::inspect_release_preflight;
 
 #[test]
 fn generator_creates_curated_stdio_project() {
@@ -160,6 +161,115 @@ fn doctor_accepts_generated_templates() {
         assert!(stdout.contains("cargo run -- --print-client-config"));
         assert!(stdout.contains("mcp-toolkit client-config"));
     }
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_accepts_public_stdio_generated_project() {
+    let root = temp_root("release-preflight-public");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let report = inspect_release_preflight(&output);
+    assert!(report.ready(), "public template should be release-ready");
+
+    let preflight = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("release-preflight")
+        .arg(&output)
+        .output()
+        .expect("run release-preflight for public template");
+
+    assert!(
+        preflight.status.success(),
+        "release-preflight failed for public template with {}\nstdout:\n{}\nstderr:\n{}",
+        preflight.status,
+        String::from_utf8_lossy(&preflight.stdout),
+        String::from_utf8_lossy(&preflight.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&preflight.stdout);
+    assert!(stdout.contains("Public ready: yes"));
+    assert!(stdout.contains("CodeQL workflow"));
+    assert!(stdout.contains("Dependency governance workflow"));
+    assert!(stdout.contains("High-confidence secret marker scan"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_non_public_starter_until_public_files_exist() {
+    let root = temp_root("release-preflight-curated");
+    let output = root.join("example-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "curated-stdio-intent".to_string(),
+        package_name: "example-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate curated template");
+
+    let preflight = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("release-preflight")
+        .arg(&output)
+        .output()
+        .expect("run release-preflight for curated template");
+
+    assert!(!preflight.status.success());
+
+    let stdout = String::from_utf8_lossy(&preflight.stdout);
+    assert!(stdout.contains("Public ready: no"));
+    assert!(stdout.contains("[missing] License file (LICENSE)"));
+    assert!(stdout.contains("[missing] CodeQL workflow (.github/workflows/codeql.yml)"));
+    assert!(stdout.contains("[ok] Generated scaffold doctor"));
+
+    let stderr = String::from_utf8_lossy(&preflight.stderr);
+    assert!(stderr.contains("release-preflight found missing public-readiness requirements"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_high_confidence_secret_markers() {
+    let root = temp_root("release-preflight-secret");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+    fs::write(
+        output.join("docs/accidental-secret.md"),
+        "do not publish: \"client_secret\": \"redacted-example\"\n",
+    )
+    .expect("write accidental secret marker");
+
+    let preflight = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .arg("release-preflight")
+        .arg(&output)
+        .output()
+        .expect("run release-preflight with secret marker");
+
+    assert!(!preflight.status.success());
+
+    let stdout = String::from_utf8_lossy(&preflight.stdout);
+    assert!(stdout.contains("Public ready: no"));
+    assert!(stdout.contains("[missing] High-confidence secret marker scan"));
+    assert!(stdout.contains("JSON client secret in docs/accidental-secret.md"));
 
     cleanup(root);
 }

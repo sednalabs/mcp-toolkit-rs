@@ -15,6 +15,7 @@ use mcp_toolkit::patterns::{
     conformance_findings, find_pattern, manifests_for_pattern, pattern_manifests, patterns,
     PatternConformanceSeverity, PatternManifestSpec,
 };
+use mcp_toolkit::release_preflight::inspect_release_preflight;
 
 fn main() {
     if let Err(error) = run(env::args().skip(1).collect()) {
@@ -27,6 +28,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("new") => run_new(&args[1..]),
         Some("doctor") => run_doctor(&args[1..]),
+        Some("release-preflight") | Some("release_preflight") | Some("preflight") => {
+            run_release_preflight(&args[1..])
+        }
         Some("client-config") | Some("client_config") => run_client_config(&args[1..]),
         Some("templates") | Some("list-templates") => {
             print_templates();
@@ -275,6 +279,43 @@ fn run_doctor(args: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err("doctor found missing required generated-server files".to_string())
+    }
+}
+
+fn run_release_preflight(args: &[String]) -> Result<(), String> {
+    let root = match args {
+        [] => PathBuf::from("."),
+        [flag] if flag == "--help" || flag == "-h" => {
+            print_release_preflight_help();
+            return Ok(());
+        }
+        [path] if !path.starts_with('-') => PathBuf::from(path),
+        [flag] if flag.starts_with('-') => {
+            return Err(format!("unknown release-preflight option `{flag}`"));
+        }
+        _ => return Err("usage: mcp-toolkit release-preflight [path]".to_string()),
+    };
+
+    if !root.exists() {
+        return Err(format!(
+            "release-preflight path `{}` does not exist",
+            root.display()
+        ));
+    }
+    if !root.is_dir() {
+        return Err(format!(
+            "release-preflight path `{}` is not a directory",
+            root.display()
+        ));
+    }
+
+    let report = inspect_release_preflight(root);
+    print!("{}", report.render());
+
+    if report.ready() {
+        Ok(())
+    } else {
+        Err("release-preflight found missing public-readiness requirements".to_string())
     }
 }
 
@@ -563,13 +604,14 @@ fn print_help() {
     println!("Usage:");
     println!("  mcp-toolkit new --name <package> [--template <id>] [--output <relative-dir>]");
     println!("  mcp-toolkit doctor [generated-server-dir]");
+    println!("  mcp-toolkit release-preflight [generated-server-dir]");
     println!("  mcp-toolkit client-config [generated-server-dir]");
     println!("  mcp-toolkit templates");
     println!("  mcp-toolkit conformance [--server <name>|--pattern <id>] [--strict]");
     println!("  mcp-toolkit patterns [pattern-id]");
     println!();
-    println!("Run `mcp-toolkit new --help`, `mcp-toolkit doctor --help`, or");
-    println!("`mcp-toolkit client-config --help` for options.");
+    println!("Run `mcp-toolkit new --help`, `mcp-toolkit doctor --help`,");
+    println!("`mcp-toolkit release-preflight --help`, or `mcp-toolkit client-config --help` for options.");
 }
 
 fn print_new_help() {
@@ -600,6 +642,15 @@ fn print_doctor_help() {
     println!();
     println!("Checks a generated Rust MCP server for starter source, contract, probe,");
     println!("and hosted validation files, then prints the next validation commands.");
+}
+
+fn print_release_preflight_help() {
+    println!("Usage:");
+    println!("  mcp-toolkit release-preflight [generated-server-dir]");
+    println!();
+    println!("Checks a generated Rust MCP server for public-ready README, license,");
+    println!("CI, CodeQL, dependency governance, schema/probe proof, and obvious");
+    println!("high-confidence secret markers without executing generated code.");
 }
 
 fn print_client_config_help() {

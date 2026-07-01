@@ -82,6 +82,17 @@ cargo run -- --doctor
 cargo run -- --print-client-config
 ```
 
+Before publishing, installing, or cutting a release candidate, run the toolkit
+release preflight from the toolkit checkout or installed toolkit binary:
+
+```bash
+mcp-toolkit release-preflight .
+```
+
+The preflight is static and secret-safe. It checks the README, license, Cargo
+metadata, GitHub workflows, CodeQL, dependency governance, schema/probe proof,
+and high-confidence secret markers without executing this server.
+
 The scripted probe scenario exercises the generated binary through a real MCP
 client:
 

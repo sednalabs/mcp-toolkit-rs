@@ -31,6 +31,7 @@ pub mod client_config;
 pub mod doctor;
 pub mod new_server;
 pub mod patterns;
+pub mod release_preflight;
 
 #[cfg(feature = "http")]
 pub use mcp_toolkit_http as http;
