@@ -172,6 +172,34 @@ async fn route_bundle_rejects_oversized_sessionless_post() {
 }
 
 #[tokio::test]
+async fn route_bundle_rejects_unknown_session_before_stateless_fallback() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["127.0.0.1"])
+        .stateless_fallback(true)
+        .build(|| Ok(TestMcp::new()));
+    let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .header("accept", ACCEPT_STREAMABLE)
+                .header("content-type", "application/json")
+                .header("mcp-session-id", "unknown-session")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+                ))
+                .expect("unknown session request"),
+        )
+        .await
+        .expect("unknown session response");
+
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
 async fn route_bundle_rejects_unknown_host() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1"])

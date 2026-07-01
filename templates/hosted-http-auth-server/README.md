@@ -46,6 +46,11 @@ in `Cargo.toml` with Git dependencies, configure a real HTTPS
 `EXAMPLE_MCP_PUBLIC_BASE_URL`, and use a production token validator instead of
 the delegation-mode development skeleton.
 
+The server refuses non-loopback startup with scaffold auth values. Before
+setting `EXAMPLE_MCP_ALLOW_NON_LOOPBACK=1`, replace
+`EXAMPLE_MCP_DELEGATION_SECRET`, replace `EXAMPLE_MCP_ISSUER`, and use HTTPS
+public metadata URLs.
+
 Inspect the active profile's tool surface without starting a client or binding
 HTTP:
 
@@ -103,6 +108,8 @@ server, then stores the resulting MCP credentials for that configured server.
 
 - The default bind address is loopback.
 - Non-loopback binding is denied unless explicitly enabled.
+- Non-loopback serving rejects the scaffold delegation secret, placeholder
+  issuer, and non-HTTPS public metadata URLs.
 - Auth is always required for `/mcp`.
 - `/health` is public and should not include service-specific secrets.
 - Host headers are allowlisted by default.

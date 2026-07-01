@@ -290,7 +290,7 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
-    /// Enables or disables stateless fallback for POST requests that cannot use a session.
+    /// Enables or disables stateless fallback for sessionless POST requests.
     ///
     /// # Errors
     /// This function does not return errors.
@@ -1075,9 +1075,6 @@ where
     if let Some(session_id) = session_id {
         if session_exists(&state.session_manager, &session_id).await {
             return forward_service(state.stateful_service, req, "stateful_session").await;
-        }
-        if let Some(stateless) = state.stateless_service {
-            return forward_service(stateless, req, "stateless_fallback").await;
         }
         log_route_rejection(
             req.method(),

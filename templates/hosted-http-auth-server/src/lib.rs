@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use mcp_toolkit::rmcp::{
 };
 use mcp_toolkit::server::{
     auth::{AuthSurfaceBuilder, IssuerEntry},
-    http::{HttpBindSafety, LocalMcpHttpServerBuilder},
+    http::{HttpBindSafety, HttpBindSafetyError, LocalMcpHttpServerBuilder},
     tools::list_tools_result,
 };
 use mcp_toolkit_auth::surface::AuthorizationServerMetadataSource;
@@ -27,6 +28,10 @@ use mcp_toolkit_core::tool_inventory::{
     ToolCatalog, ToolCatalogEntry, ToolCatalogProfile, ToolDiscoveryMetadata, ToolInventory,
     ToolInventoryDecision, ToolInventoryError, ToolOperation, READ_ONLY_PROFILE_KEY,
 };
+
+const DEV_ISSUER_SCHEME: &str = "http";
+const DEV_ISSUER_HOST: &str = "issuer.example";
+const DEV_DELEGATION_SECRET: &str = "development-only-secret";
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct StatusRequest {
@@ -45,13 +50,54 @@ pub struct HostedHttpConfig {
     pub tool_profile: String,
 }
 
+#[derive(Debug)]
+pub enum HostedHttpConfigError {
+    BindSafety(HttpBindSafetyError),
+    DevelopmentDelegationSecret,
+    DevelopmentIssuer,
+    InsecurePublicBaseUrl,
+    InsecureIssuer,
+}
+
+impl fmt::Display for HostedHttpConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BindSafety(err) => err.fmt(f),
+            Self::DevelopmentDelegationSecret => write!(
+                f,
+                "EXAMPLE_MCP_DELEGATION_SECRET must be changed before serving non-loopback"
+            ),
+            Self::DevelopmentIssuer => write!(
+                f,
+                "EXAMPLE_MCP_ISSUER must be changed before serving non-loopback"
+            ),
+            Self::InsecurePublicBaseUrl => write!(
+                f,
+                "EXAMPLE_MCP_PUBLIC_BASE_URL must be https:// before serving non-loopback"
+            ),
+            Self::InsecureIssuer => write!(
+                f,
+                "EXAMPLE_MCP_ISSUER must be https:// before serving non-loopback"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HostedHttpConfigError {}
+
+impl From<HttpBindSafetyError> for HostedHttpConfigError {
+    fn from(error: HttpBindSafetyError) -> Self {
+        Self::BindSafety(error)
+    }
+}
+
 impl HostedHttpConfig {
     pub fn local_dev() -> Self {
         Self {
             bind_addr: "127.0.0.1:9411".parse().expect("loopback bind addr"),
             public_base_url: "http://127.0.0.1:9411".to_string(),
-            issuer: "http://issuer.example".to_string(),
-            delegation_secret: "development-only-secret".to_string(),
+            issuer: dev_issuer(),
+            delegation_secret: DEV_DELEGATION_SECRET.to_string(),
             allowed_hosts: vec!["127.0.0.1".to_string(), "localhost".to_string()],
             allowed_origins: vec![
                 "http://127.0.0.1:9411".to_string(),
@@ -68,10 +114,10 @@ impl HostedHttpConfig {
             .unwrap_or_else(|_| default.bind_addr.to_string())
             .parse()?;
         let public_base_url =
-            std::env::var("EXAMPLE_MCP_PUBLIC_BASE_URL").unwrap_or(default.public_base_url);
-        let issuer = std::env::var("EXAMPLE_MCP_ISSUER").unwrap_or(default.issuer);
+            trimmed_env("EXAMPLE_MCP_PUBLIC_BASE_URL").unwrap_or(default.public_base_url);
+        let issuer = trimmed_env("EXAMPLE_MCP_ISSUER").unwrap_or(default.issuer);
         let delegation_secret =
-            std::env::var("EXAMPLE_MCP_DELEGATION_SECRET").unwrap_or(default.delegation_secret);
+            trimmed_env("EXAMPLE_MCP_DELEGATION_SECRET").unwrap_or(default.delegation_secret);
         let allowed_hosts = std::env::var("EXAMPLE_MCP_ALLOWED_HOSTS")
             .ok()
             .map(|raw| {
@@ -95,8 +141,7 @@ impl HostedHttpConfig {
             .filter(|origins| !origins.is_empty())
             .unwrap_or(default.allowed_origins);
         let allow_non_loopback = parse_bool_env("EXAMPLE_MCP_ALLOW_NON_LOOPBACK");
-        let tool_profile =
-            std::env::var("EXAMPLE_MCP_TOOL_PROFILE").unwrap_or(default.tool_profile);
+        let tool_profile = trimmed_env("EXAMPLE_MCP_TOOL_PROFILE").unwrap_or(default.tool_profile);
         Ok(Self {
             bind_addr,
             public_base_url,
@@ -113,9 +158,46 @@ impl HostedHttpConfig {
         HttpBindSafety::new(self.allow_non_loopback, true)
     }
 
+    pub fn validate_deployable(&self) -> Result<(), HostedHttpConfigError> {
+        self.bind_safety().validate(self.bind_addr)?;
+        if self.bind_addr.ip().is_loopback() {
+            return Ok(());
+        }
+        if self.delegation_secret.trim() == DEV_DELEGATION_SECRET {
+            return Err(HostedHttpConfigError::DevelopmentDelegationSecret);
+        }
+        if self.issuer.trim() == dev_issuer() {
+            return Err(HostedHttpConfigError::DevelopmentIssuer);
+        }
+        if !is_https_url(&self.public_base_url) {
+            return Err(HostedHttpConfigError::InsecurePublicBaseUrl);
+        }
+        if !is_https_url(&self.issuer) {
+            return Err(HostedHttpConfigError::InsecureIssuer);
+        }
+        Ok(())
+    }
+
     pub fn resource_url(&self) -> String {
         format!("{}/mcp", self.public_base_url.trim_end_matches('/'))
     }
+}
+
+fn is_https_url(url: &str) -> bool {
+    url.trim()
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+}
+
+fn dev_issuer() -> String {
+    format!("{DEV_ISSUER_SCHEME}://{DEV_ISSUER_HOST}")
+}
+
+fn trimmed_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
 }
 
 fn parse_bool_env(name: &str) -> bool {
@@ -282,6 +364,7 @@ fn profile_error(error: ToolInventoryError) -> rmcp::ErrorData {
 pub fn build_router(
     config: HostedHttpConfig,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
+    config.validate_deployable()?;
     let auth_layer =
         AuthSurfaceBuilder::single_issuer(config.public_base_url.clone(), issuer_entry(&config)?)
             .public_path("/health")
