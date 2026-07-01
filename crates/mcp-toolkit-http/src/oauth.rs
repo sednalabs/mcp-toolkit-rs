@@ -162,6 +162,56 @@ pub fn oidc_well_known_paths(resource_path: &str) -> Vec<String> {
     well_known_paths(resource_path, "openid-configuration")
 }
 
+/// Build MCP authorization-server discovery URLs for an issuer.
+///
+/// For issuer URLs with path components, MCP 2025-11-25 requires clients to try
+/// OAuth and OIDC path-insertion endpoints before the path-appended OIDC
+/// fallback used by many existing providers.
+///
+/// # Errors
+/// Returns `url::ParseError` when `issuer` is not an absolute URL.
+///
+/// # Security
+/// Query and fragment components are stripped before constructing discovery
+/// URLs. Callers must still validate fetched metadata before trusting it.
+pub fn authorization_server_discovery_urls(issuer: &str) -> Result<Vec<String>, url::ParseError> {
+    let mut parsed = Url::parse(issuer.trim().trim_end_matches('/'))?;
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+
+    let issuer_path = parsed.path().trim_matches('/').to_string();
+    let mut urls = if issuer_path.is_empty() {
+        vec![
+            issuer_discovery_url(&parsed, OAUTH_AUTHZ_WELL_KNOWN_PATH, None),
+            issuer_discovery_url(&parsed, OIDC_WELL_KNOWN_PATH, None),
+        ]
+    } else {
+        vec![
+            issuer_discovery_url(&parsed, OAUTH_AUTHZ_WELL_KNOWN_PATH, Some(&issuer_path)),
+            issuer_discovery_url(&parsed, OIDC_WELL_KNOWN_PATH, Some(&issuer_path)),
+            issuer_path_appended_oidc_url(&parsed),
+        ]
+    };
+    urls.dedup();
+    Ok(urls)
+}
+
+fn issuer_discovery_url(issuer: &Url, well_known_path: &str, issuer_path: Option<&str>) -> String {
+    let mut url = issuer.clone();
+    match issuer_path {
+        Some(path) if !path.is_empty() => url.set_path(&format!("{well_known_path}/{path}")),
+        _ => url.set_path(well_known_path),
+    }
+    url.to_string()
+}
+
+fn issuer_path_appended_oidc_url(issuer: &Url) -> String {
+    let mut url = issuer.clone();
+    let issuer_path = issuer.path().trim_end_matches('/');
+    url.set_path(&format!("{issuer_path}{OIDC_WELL_KNOWN_PATH}"));
+    url.to_string()
+}
+
 /// RFC 9728 well-known paths for OAuth 2.0 Protected Resource Metadata.
 pub fn protected_resource_well_known_paths(resource_path: &str) -> Vec<String> {
     well_known_paths(resource_path, "oauth-protected-resource")
@@ -477,9 +527,9 @@ pub fn fallback_oauth_endpoints(issuer: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        authorization_server_metadata_url, authorization_server_well_known_paths,
-        fallback_oauth_endpoints, oidc_metadata_url, oidc_well_known_paths,
-        protected_resource_well_known_paths, public_base_url_from_bind_addr,
+        authorization_server_discovery_urls, authorization_server_metadata_url,
+        authorization_server_well_known_paths, fallback_oauth_endpoints, oidc_metadata_url,
+        oidc_well_known_paths, protected_resource_well_known_paths, public_base_url_from_bind_addr,
         public_base_url_from_resource_url, resource_metadata_default, resource_metadata_hint,
         resource_metadata_url, resource_url_from_base, validate_absolute_url, UrlValidationError,
         BEARER_METHOD_HEADER, OAUTH_AUTHZ_WELL_KNOWN_PATH, OIDC_WELL_KNOWN_PATH,
@@ -917,6 +967,50 @@ mod tests {
         assert_eq!(
             paths,
             vec!["/.well-known/openid-configuration/mcp".to_string()]
+        );
+    }
+
+    #[test]
+    fn authorization_server_discovery_urls_for_root_issuer() {
+        let urls = authorization_server_discovery_urls("https://issuer.example.com")
+            .expect("discovery urls");
+        assert_eq!(
+            urls,
+            vec![
+                "https://issuer.example.com/.well-known/oauth-authorization-server".to_string(),
+                "https://issuer.example.com/.well-known/openid-configuration".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn authorization_server_discovery_urls_for_pathful_issuer() {
+        let urls = authorization_server_discovery_urls("https://issuer.example.com/tenant1")
+            .expect("discovery urls");
+        assert_eq!(
+            urls,
+            vec![
+                "https://issuer.example.com/.well-known/oauth-authorization-server/tenant1"
+                    .to_string(),
+                "https://issuer.example.com/.well-known/openid-configuration/tenant1".to_string(),
+                "https://issuer.example.com/tenant1/.well-known/openid-configuration".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn authorization_server_discovery_urls_strip_query_and_fragment() {
+        let urls =
+            authorization_server_discovery_urls("https://issuer.example.com/tenant1?x=1#frag")
+                .expect("discovery urls");
+        assert_eq!(
+            urls,
+            vec![
+                "https://issuer.example.com/.well-known/oauth-authorization-server/tenant1"
+                    .to_string(),
+                "https://issuer.example.com/.well-known/openid-configuration/tenant1".to_string(),
+                "https://issuer.example.com/tenant1/.well-known/openid-configuration".to_string(),
+            ]
         );
     }
 
