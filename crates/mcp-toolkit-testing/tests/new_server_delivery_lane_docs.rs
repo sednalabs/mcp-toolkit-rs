@@ -115,6 +115,7 @@ fn cli_reference_pins_command_and_file_surface() {
         "mcp-toolkit patterns <id>",
         "mcp-toolkit new --name <package>",
         "mcp-toolkit doctor [generated-server-dir]",
+        "mcp-toolkit release-preflight [generated-server-dir]",
         "mcp-toolkit client-config [generated-server-dir]",
         "mcp-toolkit conformance",
         "--toolkit-git <url>",
@@ -129,6 +130,8 @@ fn cli_reference_pins_command_and_file_surface() {
         "tests/catalog_profile_contract.rs",
         "tests/tool_schema_snapshot.rs",
         "Safe Customization Points",
+        "Release Preflight",
+        "high-confidence secret markers",
         "mcp-toolkit-scratchpad",
     ] {
         assert!(

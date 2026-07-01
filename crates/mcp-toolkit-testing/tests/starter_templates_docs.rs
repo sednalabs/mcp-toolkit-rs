@@ -34,6 +34,7 @@ fn starter_templates_doc_mentions_generator_front_door() {
         "--toolkit-git",
         "--force",
         "docs/new-server-cli-reference.md",
+        "mcp-toolkit release-preflight",
         "evidence behind an archetype",
         "LocalMcpHttpServerBuilder",
     ] {
@@ -54,6 +55,7 @@ fn cli_reference_mentions_template_specific_layouts() {
         "http_auth_contract.rs",
         "dependency_governance_check.sh",
         "CodeQL",
+        "release preflight",
         "OAuth Protected Resource Metadata",
         "read_only",
         "operator profile",

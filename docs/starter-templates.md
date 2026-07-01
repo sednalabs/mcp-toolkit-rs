@@ -48,6 +48,12 @@ wire the scaffold into an MCP client. It renders a Codex-style TOML snippet for
 the inferred transport, with `--transport`, `--name`, `--command`, `--url`, and
 `--profile` overrides for real deployment paths.
 
+Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
+installing a generated repository. It is stricter than doctor: the standalone
+public template is expected to pass, while smaller starters should fail until
+they add a license file, CodeQL or equivalent static analysis, dependency
+governance, coverage, release metadata, and public-ready docs.
+
 ## Curated Stdio Intent Server
 
 Use `templates/curated-stdio-intent-server` when the server should run as a
@@ -128,6 +134,7 @@ cargo fmt --manifest-path templates/single-crate-public-stdio-server/Cargo.toml 
 cargo clippy --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
 ./templates/single-crate-public-stdio-server/scripts/dependency_governance_check.sh
+mcp-toolkit release-preflight templates/single-crate-public-stdio-server
 ```
 
 Inside a copied standalone repository, inspect the active served surface before
@@ -138,6 +145,7 @@ cargo run -- --doctor
 cargo run -- --print-tools
 cargo run -- --print-tool-schema
 cargo run -- --print-client-config
+mcp-toolkit release-preflight .
 ```
 
 ## Hosted HTTP/Auth Server

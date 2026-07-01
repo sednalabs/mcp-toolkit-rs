@@ -66,6 +66,7 @@ cargo run -p mcp-toolkit --bin mcp-toolkit -- new \
   --template curated-stdio-intent
 cargo run -p mcp-toolkit --bin mcp-toolkit -- doctor my-mcp-server
 cargo run -p mcp-toolkit --bin mcp-toolkit -- client-config my-mcp-server
+cargo run -p mcp-toolkit --bin mcp-toolkit -- release-preflight my-mcp-server
 cd my-mcp-server
 cargo run -- --doctor
 cargo run -- --print-tools
@@ -108,6 +109,11 @@ TOML snippet for the generated transport. For stdio starters it points at the
 expected release binary and pins `EXAMPLE_MCP_TOOL_PROFILE=read_only`; for the
 hosted HTTP/auth starter it prints the local `/mcp` URL unless you pass
 `--url`.
+
+Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
+installing a generated repository. It is stricter than `doctor`: it expects
+public-ready README, license, Cargo metadata, CI, CodeQL, coverage, dependency
+governance, schema/probe proof, and no high-confidence secret markers.
 
 For stdio servers, build the binary and point your MCP client at the generated
 command path. The default served profile is `read_only`; add mutation tools
