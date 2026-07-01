@@ -241,6 +241,54 @@ impl ProviderAuthStatus {
     }
 }
 
+/// Secret-safe provider-auth command rendered for operator setup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderAuthCommand {
+    /// Argument vector suitable for process execution.
+    pub argv: Vec<String>,
+    /// Copyable shell representation for docs, CLIs, and MCP diagnostics.
+    pub shell: String,
+}
+
+impl ProviderAuthCommand {
+    /// Builds a command from an argument vector and renders a shell-safe display
+    /// string.
+    ///
+    /// # Security
+    /// Only pass public setup arguments. Do not include tokens, authorization
+    /// codes, client secrets, private keys, or credential JSON payloads.
+    pub fn new(argv: Vec<String>) -> Self {
+        let shell = format_provider_auth_command(&argv);
+        Self { argv, shell }
+    }
+}
+
+/// Google ADC setup plan for operator-facing auth tools and documentation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoogleProviderAuthSetupPlan {
+    /// Human-readable API name, such as `Search Console API`.
+    pub api_name: String,
+    /// ADC login scopes, including `cloud-platform`.
+    pub scopes: Vec<String>,
+    /// Browser-capable ADC login command.
+    pub login: ProviderAuthCommand,
+    /// Headless-friendly ADC login command.
+    pub headless_login: ProviderAuthCommand,
+    /// ADC login command with a client-id file fallback.
+    pub login_with_client_id_file: ProviderAuthCommand,
+    /// Headless-friendly ADC login command with a client-id file fallback.
+    pub headless_login_with_client_id_file: ProviderAuthCommand,
+    /// ADC quota-project command.
+    pub quota_project: ProviderAuthCommand,
+    /// API enablement command, when the Google service name is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_enable: Option<ProviderAuthCommand>,
+    /// Ordered safe next-step summaries.
+    pub next_steps: Vec<String>,
+    /// Safe notes for common Google auth footguns.
+    pub notes: Vec<String>,
+}
+
 /// Google provider-auth configuration used to build diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoogleProviderAuthConfig {
@@ -289,6 +337,71 @@ impl GoogleProviderAuthConfig {
     /// Returns the `gcloud auth application-default login` command argv.
     pub fn adc_login_command(&self, headless: bool) -> Vec<String> {
         google_adc_login_command(self.provider_scopes.iter().map(String::as_str), headless)
+    }
+
+    /// Returns the ADC login command with a Google OAuth client-id file.
+    pub fn adc_login_command_with_client_id_file(
+        &self,
+        headless: bool,
+        client_id_file: &str,
+    ) -> Vec<String> {
+        google_adc_login_command_with_client_id_file(
+            self.provider_scopes.iter().map(String::as_str),
+            headless,
+            client_id_file,
+        )
+    }
+
+    /// Returns the ADC quota-project command argv.
+    pub fn adc_quota_project_command(&self) -> Vec<String> {
+        google_adc_quota_project_command(&self.quota_project_placeholder)
+    }
+
+    /// Returns the API enablement command argv, when this config knows the API
+    /// service name.
+    pub fn api_enable_command(&self) -> Option<Vec<String>> {
+        self.api_service_name
+            .as_deref()
+            .map(|service| google_api_enable_command(service, &self.quota_project_placeholder))
+    }
+
+    /// Builds a serializable Google ADC setup plan for CLI/MCP auth tools.
+    pub fn adc_setup_plan(&self) -> GoogleProviderAuthSetupPlan {
+        let client_id_file_placeholder = "/path/to/client_id.json";
+        let login = ProviderAuthCommand::new(self.adc_login_command(false));
+        let headless_login = ProviderAuthCommand::new(self.adc_login_command(true));
+        let login_with_client_id_file = ProviderAuthCommand::new(
+            self.adc_login_command_with_client_id_file(false, client_id_file_placeholder),
+        );
+        let headless_login_with_client_id_file = ProviderAuthCommand::new(
+            self.adc_login_command_with_client_id_file(true, client_id_file_placeholder),
+        );
+        let quota_project = ProviderAuthCommand::new(self.adc_quota_project_command());
+        let api_enable = self.api_enable_command().map(ProviderAuthCommand::new);
+        let mut next_steps = vec![
+            "run the browser login command, or the headless command on SSH hosts".to_string(),
+            "set an ADC quota project if Google reports that local ADC requires one".to_string(),
+        ];
+        if api_enable.is_some() {
+            next_steps.push("enable the required Google API on the quota project".to_string());
+        }
+        next_steps.push("rerun auth_status or auth_probe after changing credentials".to_string());
+
+        GoogleProviderAuthSetupPlan {
+            api_name: self.api_name.clone(),
+            scopes: self.adc_login_scopes(),
+            login,
+            headless_login,
+            login_with_client_id_file,
+            headless_login_with_client_id_file,
+            quota_project,
+            api_enable,
+            next_steps,
+            notes: vec![
+                "Use the client-id-file command if Google rejects the provider scope during ADC login.".to_string(),
+                "For unattended deployments, prefer service-account or workload identity credentials over local user ADC.".to_string(),
+            ],
+        }
     }
 }
 
@@ -376,11 +489,46 @@ pub fn google_adc_login_command<'a>(
     command
 }
 
+/// Returns the `gcloud auth application-default login` command argv with a
+/// client-id file fallback.
+pub fn google_adc_login_command_with_client_id_file<'a>(
+    provider_scopes: impl IntoIterator<Item = &'a str>,
+    headless: bool,
+    client_id_file: &str,
+) -> Vec<String> {
+    let mut command = google_adc_login_command(provider_scopes, headless);
+    command.push("--client-id-file".to_string());
+    command.push(client_id_file_or_default(client_id_file).to_string());
+    command
+}
+
+/// Returns the `gcloud auth application-default set-quota-project` command argv.
+pub fn google_adc_quota_project_command(project_placeholder: &str) -> Vec<String> {
+    vec![
+        "gcloud".to_string(),
+        "auth".to_string(),
+        "application-default".to_string(),
+        "set-quota-project".to_string(),
+        placeholder_or_default(project_placeholder).to_string(),
+    ]
+}
+
+/// Returns the `gcloud services enable` command argv for a Google API.
+pub fn google_api_enable_command(api_service_name: &str, project_placeholder: &str) -> Vec<String> {
+    vec![
+        "gcloud".to_string(),
+        "services".to_string(),
+        "enable".to_string(),
+        api_service_name.trim().to_string(),
+        "--project".to_string(),
+        placeholder_or_default(project_placeholder).to_string(),
+    ]
+}
+
 /// Builds standard next steps for a missing Google ADC quota project.
 pub fn google_quota_project_next_steps(project_placeholder: &str) -> Vec<String> {
-    let project = placeholder_or_default(project_placeholder);
     vec![
-        format!("gcloud auth application-default set-quota-project {project}"),
+        format_command(google_adc_quota_project_command(project_placeholder)),
         "ensure the required Google API is enabled on that project".to_string(),
         "rerun auth_status or auth_probe after updating the quota project".to_string(),
     ]
@@ -428,6 +576,15 @@ fn placeholder_or_default(value: &str) -> &str {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         "YOUR_PROJECT"
+    } else {
+        trimmed
+    }
+}
+
+fn client_id_file_or_default(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "/path/to/client_id.json"
     } else {
         trimmed
     }
@@ -605,10 +762,7 @@ fn google_next_steps(
     match kind {
         GoogleProviderAuthFailureKind::MissingCredentials => vec![
             format_command(config.adc_login_command(true)),
-            format!(
-                "gcloud auth application-default set-quota-project {}",
-                placeholder_or_default(&config.quota_project_placeholder)
-            ),
+            format_command(config.adc_quota_project_command()),
             "rerun auth_status or auth_probe".to_string(),
         ],
         GoogleProviderAuthFailureKind::MissingScope => vec![
@@ -621,11 +775,8 @@ fn google_next_steps(
         }
         GoogleProviderAuthFailureKind::ApiDisabled => {
             let mut steps = Vec::new();
-            if let Some(service) = config.api_service_name.as_deref() {
-                steps.push(format!(
-                    "gcloud services enable {service} --project {}",
-                    placeholder_or_default(&config.quota_project_placeholder)
-                ));
+            if let Some(command) = config.api_enable_command() {
+                steps.push(format_command(command));
             } else {
                 steps.push("enable the required Google API on the quota project".to_string());
             }
@@ -655,7 +806,45 @@ fn google_next_steps(
 }
 
 fn format_command(parts: Vec<String>) -> String {
-    parts.join(" ")
+    format_provider_auth_command(&parts)
+}
+
+/// Formats a provider-auth command argv as a copyable shell string.
+pub fn format_provider_auth_command(parts: &[String]) -> String {
+    parts
+        .iter()
+        .map(|part| shell_quote_provider_auth_arg(part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote_provider_auth_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg.bytes().all(is_shell_safe_provider_auth_byte) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+fn is_shell_safe_provider_auth_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'_'
+            | b'-'
+            | b'.'
+            | b'/'
+            | b':'
+            | b','
+            | b'='
+            | b'@'
+            | b'+'
+    )
 }
 
 #[cfg(test)]
@@ -700,6 +889,103 @@ mod tests {
                 "--no-launch-browser".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn provider_auth_command_shell_quotes_paths_with_spaces() {
+        let command = ProviderAuthCommand::new(vec![
+            "ga4-mcp".to_string(),
+            "auth".to_string(),
+            "login".to_string(),
+            "--client-id-file".to_string(),
+            "/tmp/client id.json".to_string(),
+        ]);
+
+        assert_eq!(
+            command.shell,
+            "ga4-mcp auth login --client-id-file '/tmp/client id.json'"
+        );
+        assert_eq!(command.argv[4], "/tmp/client id.json");
+    }
+
+    #[test]
+    fn google_adc_login_command_supports_client_id_file() {
+        let config = GoogleProviderAuthConfig::new(
+            "Analytics Admin API",
+            vec!["https://www.googleapis.com/auth/analytics.readonly".to_string()],
+        );
+
+        let command =
+            config.adc_login_command_with_client_id_file(true, "/tmp/google oauth client.json");
+        let rendered = format_provider_auth_command(&command);
+
+        assert_eq!(
+            command,
+            vec![
+                "gcloud".to_string(),
+                "auth".to_string(),
+                "application-default".to_string(),
+                "login".to_string(),
+                "--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/analytics.readonly".to_string(),
+                "--no-launch-browser".to_string(),
+                "--client-id-file".to_string(),
+                "/tmp/google oauth client.json".to_string(),
+            ]
+        );
+        assert_eq!(
+            rendered,
+            "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/analytics.readonly --no-launch-browser --client-id-file '/tmp/google oauth client.json'"
+        );
+    }
+
+    #[test]
+    fn google_adc_setup_plan_collects_common_operator_commands() {
+        let config = GoogleProviderAuthConfig::new(
+            "Search Console API",
+            vec!["https://www.googleapis.com/auth/webmasters.readonly".to_string()],
+        )
+        .with_api_service_name("searchconsole.googleapis.com");
+
+        let plan = config.adc_setup_plan();
+
+        assert_eq!(plan.api_name, "Search Console API");
+        assert_eq!(
+            plan.scopes,
+            vec![
+                GOOGLE_CLOUD_PLATFORM_SCOPE.to_string(),
+                "https://www.googleapis.com/auth/webmasters.readonly".to_string()
+            ]
+        );
+        assert_eq!(plan.login.argv, config.adc_login_command(false));
+        assert!(plan.headless_login.shell.contains("--no-launch-browser"));
+        assert!(!plan
+            .login_with_client_id_file
+            .shell
+            .contains("--no-launch-browser"));
+        assert!(plan
+            .login_with_client_id_file
+            .shell
+            .contains("--client-id-file /path/to/client_id.json"));
+        assert!(plan
+            .headless_login_with_client_id_file
+            .shell
+            .contains("--no-launch-browser --client-id-file /path/to/client_id.json"));
+        assert_eq!(
+            plan.quota_project.shell,
+            "gcloud auth application-default set-quota-project YOUR_PROJECT"
+        );
+        assert_eq!(
+            plan.api_enable.expect("api enable command").shell,
+            "gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT"
+        );
+        assert!(plan
+            .next_steps
+            .iter()
+            .any(|step| step.contains("auth_status or auth_probe")));
+        assert!(plan
+            .notes
+            .iter()
+            .any(|note| note.contains("client-id-file")));
     }
 
     #[test]
