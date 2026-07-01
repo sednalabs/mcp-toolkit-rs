@@ -46,6 +46,8 @@ It demonstrates:
 - generated `read_only` and `operator` profiles, with the live `tools/list`,
   `get_tool`, and `call_tool` path using `EXAMPLE_MCP_TOOL_PROFILE=read_only`
   by default;
+- `--print-tools` and `--print-tool-schema` commands backed by the same active
+  profile filtering as `tools/list`;
 - catalog-profile contract tests that pin the expected `read_only` and
   `operator` surfaces;
 - `assert_tool_schema_snapshot` drift protection;
@@ -60,6 +62,13 @@ Validate it with:
 cargo fmt --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all --check
 cargo clippy --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml --all-targets --all-features
+```
+
+Inspect the active served surface before configuring an MCP client:
+
+```bash
+cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tools
+cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tool-schema
 ```
 
 This template is intentionally lean. It carries only a minimal
@@ -80,7 +89,8 @@ It demonstrates:
 - standalone GitHub workflows for baseline validation, CodeQL, coverage, and
   dependency governance;
 - catalog-profile, schema-snapshot, stdio-smoke, response-safety, and
-  `mcp-probe` scenario files carried from the curated stdio starter;
+  `mcp-probe` scenario files carried from the curated stdio starter, including
+  binary tests for local tool-surface inspection flags;
 - a public-safe `.gitignore`, `LICENSE`, and starter `deny.toml`;
 - repo-local governance and snapshot-rebaseline helper scripts.
 
@@ -91,6 +101,14 @@ cargo fmt --manifest-path templates/single-crate-public-stdio-server/Cargo.toml 
 cargo clippy --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path templates/single-crate-public-stdio-server/Cargo.toml --all-targets --all-features
 ./templates/single-crate-public-stdio-server/scripts/dependency_governance_check.sh
+```
+
+Inside a copied standalone repository, inspect the active served surface before
+configuring an MCP client:
+
+```bash
+cargo run -- --print-tools
+cargo run -- --print-tool-schema
 ```
 
 ## Hosted HTTP/Auth Server
@@ -116,6 +134,8 @@ It demonstrates:
 - pre-auth bad-host `/mcp` checks using
   `assert_forbidden_without_bearer_challenge`;
 - tool-schema snapshots for exported tools;
+- `--print-tools` and `--print-tool-schema` commands that inspect the active
+  served surface without binding the HTTP listener;
 - `spec/mcp_probe_http_auth_smoke.v1.json` for a bearer-token-backed scripted
   MCP client probe against a running local server.
 
@@ -125,6 +145,13 @@ Validate it with:
 cargo fmt --manifest-path templates/hosted-http-auth-server/Cargo.toml --all --check
 cargo clippy --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path templates/hosted-http-auth-server/Cargo.toml --all-targets --all-features
+```
+
+Inspect the active served surface before binding the listener:
+
+```bash
+cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tools
+cargo run --manifest-path templates/hosted-http-auth-server/Cargo.toml -- --print-tool-schema
 ```
 
 ## Snapshot Workflow

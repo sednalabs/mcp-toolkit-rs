@@ -14,7 +14,14 @@ path = "src/lib.rs"
 [features]
 default = []
 full = ["stdio", "http", "auth"]
-stdio = ["dep:mcp-toolkit-core", "dep:rmcp", "dep:tokio", "rmcp/server", "rmcp/transport-io"]
+stdio = [
+  "dep:mcp-toolkit-core",
+  "dep:rmcp",
+  "dep:serde_json",
+  "dep:tokio",
+  "rmcp/server",
+  "rmcp/transport-io",
+]
 http = [
   "dep:axum",
   "dep:http",

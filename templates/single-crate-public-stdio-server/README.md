@@ -10,6 +10,8 @@ one:
   `ToolInventory` checks;
 - standard `read_only` and `operator` catalog profiles, with
   `EXAMPLE_MCP_TOOL_PROFILE=read_only` as the default live MCP surface;
+- local `--print-tools` and `--print-tool-schema` commands that inspect that
+  active surface before a client is configured;
 - generated catalog-profile contract tests for `read_only` and `operator`;
 - strict tool-schema snapshot and installed-binary stdio smoke tests, including
   a starter tool response-safety check;
@@ -62,6 +64,13 @@ cargo test --all-targets --all-features
 
 The hosted GitHub workflows in `.github/workflows/` should be the shared proof
 surface for public review and merge.
+
+Inspect the active profile's tool surface without starting a client:
+
+```bash
+cargo run -- --print-tools
+cargo run -- --print-tool-schema
+```
 
 The scripted probe scenario exercises the generated binary through a real MCP
 client:

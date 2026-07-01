@@ -15,6 +15,8 @@ It demonstrates:
 - `mcp-toolkit-testing::assert_tool_schema_snapshot` for contract drift;
 - a real stdio JSON-RPC smoke test that initializes, runs `tools/list`, and
   checks a starter tool response for common secret substrings;
+- `--print-tools` and `--print-tool-schema` for local tool-surface inspection
+  without starting an MCP client;
 - `spec/mcp_probe_stdio_smoke.v1.json` for a portable scripted `mcp-probe`
   smoke scenario.
 
@@ -28,6 +30,13 @@ cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml
 
 When copying the template into a new repository, replace the path dependencies
 in `Cargo.toml` with Git dependencies, then keep the same tests in CI.
+
+Inspect the active profile's tool surface without starting a client:
+
+```bash
+cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tools
+cargo run --manifest-path templates/curated-stdio-intent-server/Cargo.toml -- --print-tool-schema
+```
 
 ## Contract And Probe Checks
 
