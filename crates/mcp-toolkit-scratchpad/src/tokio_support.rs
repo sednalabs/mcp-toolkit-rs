@@ -24,7 +24,10 @@ use super::ScratchpadError;
 ///
 /// # Errors
 /// Returns the operation's `ScratchpadError`, or `ScratchpadError::Internal`
-/// if the blocking task is cancelled or panics before returning.
+/// if the blocking task is cancelled before returning.
+///
+/// # Panics
+/// Resumes panics raised by the blocking operation on the calling task.
 pub async fn run_scratchpad_blocking<T, F>(operation: F) -> Result<T, ScratchpadError>
 where
     T: Send + 'static,
@@ -32,9 +35,14 @@ where
 {
     match tokio::task::spawn_blocking(operation).await {
         Ok(result) => result,
-        Err(err) => Err(ScratchpadError::Internal(format!(
-            "scratchpad blocking task failed: {err}"
-        ))),
+        Err(err) => {
+            if err.is_panic() {
+                std::panic::resume_unwind(err.into_panic());
+            }
+            Err(ScratchpadError::Internal(format!(
+                "scratchpad blocking task cancelled: {err}"
+            )))
+        }
     }
 }
 
@@ -50,16 +58,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_scratchpad_blocking_maps_join_error() {
-        let result = run_scratchpad_blocking(|| -> Result<(), ScratchpadError> {
+    #[should_panic(expected = "simulated scratchpad worker panic")]
+    async fn run_scratchpad_blocking_propagates_panic() {
+        let _ = run_scratchpad_blocking(|| -> Result<(), ScratchpadError> {
             panic!("simulated scratchpad worker panic");
         })
         .await;
-
-        assert!(matches!(
-            result,
-            Err(ScratchpadError::Internal(message))
-                if message.contains("scratchpad blocking task failed")
-        ));
     }
 }
