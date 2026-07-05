@@ -34,6 +34,35 @@ The crate deliberately does not own provider-specific ingest tools, OAuth,
 quota handling, service-specific table naming, markdown evidence bundle wording,
 or default profile decisions.
 
+## Async MCP Handlers
+
+`ScratchpadSessionManager` is synchronous because DuckDB work is blocking. In
+Tokio-backed MCP servers, enable the crate's `tokio` feature and call
+`run_scratchpad_blocking` from async tool handlers instead of querying DuckDB on
+the async executor:
+
+```toml
+[dependencies]
+mcp-toolkit-scratchpad = {
+  git = "https://github.com/sednalabs/mcp-toolkit-rs",
+  branch = "main",
+  features = ["tokio"]
+}
+```
+
+```rust
+use mcp_toolkit_scratchpad::run_scratchpad_blocking;
+
+let sessions = self.scratchpad_sessions().clone();
+let session_id = args.session_id.clone();
+let sql = args.sql.clone();
+let projection =
+    run_scratchpad_blocking(move || sessions.query_rows(&session_id, &sql, 0, 100)).await?;
+```
+
+The umbrella crate exposes the same helper when both `scratchpad` and
+`scratchpad-tokio` are enabled.
+
 ## Minimal Shape
 
 ```rust

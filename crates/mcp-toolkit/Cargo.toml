@@ -28,13 +28,23 @@ toml_edit = "0.25.12"
 
 [features]
 default = []
-full = ["auth", "http", "policy", "policy-ffi", "process", "scratchpad", "gemini", "server"]
+full = [
+  "auth",
+  "http",
+  "policy",
+  "policy-ffi",
+  "process",
+  "scratchpad-tokio",
+  "gemini",
+  "server",
+]
 auth = ["mcp-toolkit-auth"]
 http = ["mcp-toolkit-http"]
 policy = ["mcp-toolkit-policy-core", "mcp-toolkit-policy-runtime"]
 policy-ffi = ["mcp-toolkit-policy-ffi"]
 process = ["mcp-toolkit-process"]
 scratchpad = ["mcp-toolkit-scratchpad"]
+scratchpad-tokio = ["scratchpad", "mcp-toolkit-scratchpad/tokio"]
 gemini = ["mcp-toolkit-gemini"]
 server = [
   "mcp-toolkit-server",

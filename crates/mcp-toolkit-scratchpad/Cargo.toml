@@ -11,6 +11,10 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+tokio = ["dep:tokio"]
+
 [dependencies]
 duckdb = { version = "1.4.4", default-features = false, features = ["bundled"] }
 mcp-toolkit-observability = { version = "0.1.0", path = "../mcp-toolkit-observability", features = ["tracing-bridge"] }
@@ -18,4 +22,5 @@ mcp-toolkit-policy-core = { version = "0.1.0", path = "../mcp-toolkit-policy-cor
 serde_json = "1.0.149"
 tempfile = "3.25.0"
 thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["macros", "rt"], optional = true }
 tracing = "0.1.44"

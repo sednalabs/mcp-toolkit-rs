@@ -19,6 +19,8 @@
 pub mod error;
 pub mod scratchpad;
 pub mod sql_safety;
+#[cfg(feature = "tokio")]
+pub mod tokio_support;
 
 pub use error::ScratchpadError;
 pub use scratchpad::{
@@ -30,3 +32,5 @@ pub use scratchpad::{
     SharedScratchpadSessionManager,
 };
 pub use sql_safety::{validate_scratchpad_sql, ScratchpadSqlPolicyCode, ScratchpadSqlPolicyError};
+#[cfg(feature = "tokio")]
+pub use tokio_support::run_scratchpad_blocking;

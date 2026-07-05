@@ -233,7 +233,10 @@ stable public surface:
    `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
 9. Use `mcp-toolkit-scratchpad` when a read-only or analytics server needs to
    keep large rowsets out of chat while still giving agents bounded DuckDB SQL,
-   table inventory, query projections, and cleanup/export affordances. Keep
+   table inventory, query projections, and cleanup/export affordances. Enable
+   `mcp-toolkit-scratchpad/tokio` or the umbrella `scratchpad-tokio` feature
+   when calling scratchpad operations from Tokio-backed async MCP handlers; use
+   `run_scratchpad_blocking` so DuckDB work stays off the async executor. Keep
    provider-specific ingest and evidence wording in the service repository.
 10. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
