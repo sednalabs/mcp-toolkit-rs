@@ -1,6 +1,6 @@
 pub(crate) use crate::auth_context_from_parts;
 pub(crate) use crate::auth_context_ref_from_parts;
-pub(crate) use crate::claims::extract_scopes;
+pub(crate) use crate::claims::{extract_scopes, supplemental_jwt_claims};
 pub(crate) use crate::{
     AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext, AuthSecurityProfile,
     Authenticator, ClientAuthMethod, InMemoryJtiReplayStore,
@@ -397,6 +397,47 @@ mod tests {
         assert_eq!(scopes, vec!["ops.read", "ops.write"]);
     }
 
+    #[test]
+    fn supplemental_jwt_claims_accepts_padded_trimmed_jwt_parts() {
+        let claims = json!({
+            "sub": "user-123",
+            "realm_access": {
+                "roles": ["kc-admin-access"]
+            }
+        });
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .expect("token");
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let padded = format!("  {}=.{}==.{}  ", parts[0], parts[1], parts[2]);
+
+        let decoded = super::supplemental_jwt_claims(&padded).expect("supplemental claims");
+
+        assert_eq!(decoded.get("sub"), Some(&json!("user-123")));
+        assert_eq!(
+            decoded
+                .pointer("/realm_access/roles/0")
+                .and_then(Value::as_str),
+            Some("kc-admin-access")
+        );
+    }
+
+    #[test]
+    fn supplemental_jwt_claims_rejects_non_object_payload() {
+        let token = encode(
+            &Header::default(),
+            &json!(["not", "an", "object"]),
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .expect("token");
+
+        assert!(super::supplemental_jwt_claims(&token).is_none());
+    }
+
     /// Executes jti_not_required_for_token_bound_context.
     ///
     /// # Errors
@@ -713,6 +754,82 @@ mod tests {
             captured.starts_with("Basic "),
             "expected client auth to use basic header"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn introspection_mode_merges_roles_from_active_jwt_payload() {
+        let exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        let jwt_claims = json!({
+            "iss": "issuer",
+            "aud": "audience",
+            "sub": "user-123",
+            "exp": exp,
+            "scope": "untrusted-scope",
+            "realm_access": {
+                "roles": ["kc-admin-access"]
+            },
+            "resource_access": {
+                "realm-management": {
+                    "roles": ["view-users"]
+                }
+            }
+        });
+        let token = encode(
+            &Header::default(),
+            &jwt_claims,
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .expect("token");
+        let payload = json!({
+            "active": true,
+            "iss": "issuer",
+            "aud": "audience",
+            "sub": "user-123",
+            "exp": exp,
+            "scope": "read"
+        });
+        let header_capture = Arc::new(Mutex::new(None));
+        let state = IntrospectionState {
+            payload,
+            require_basic: true,
+            header_capture,
+        };
+        let (url, shutdown_tx) = spawn_introspection_server(state).await;
+
+        let auth = Authenticator::new(AuthConfig {
+            mode: AuthMode::Introspection,
+            introspection_url: Some(url),
+            introspection_client_id: Some("client".to_string()),
+            introspection_client_secret: Some("secret".to_string()),
+            introspection_auth_method: ClientAuthMethod::ClientSecretBasic,
+            issuer: Some("issuer".to_string()),
+            audience: Some("audience".to_string()),
+            jti_ttl_s: 0.0,
+            jti_cache_size: 0,
+            strict_oauth: true,
+            ..Default::default()
+        })
+        .expect("auth");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).expect("header"),
+        );
+        let result = auth.authenticate_headers(&headers).await;
+        let _ = shutdown_tx.send(());
+
+        let context = result.expect("expected introspection to succeed");
+        assert_eq!(context.scopes, vec!["read"]);
+        assert_eq!(
+            context.roles,
+            vec!["kc-admin-access".to_string(), "view-users".to_string()]
+        );
+        assert_eq!(context.claims.get("active"), Some(&json!(true)));
     }
 
     /// Executes introspection_rejects_mismatched_issuer.

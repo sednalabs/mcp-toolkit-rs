@@ -27,11 +27,15 @@
 
 use std::collections::HashSet;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use jsonwebtoken::errors::ErrorKind;
 use serde_json::Value;
 use tracing::debug;
 
 use crate::{AuthConfig, AuthError};
+
+const JWT_CLAIMS_MAX_BYTES: usize = 128 * 1024;
 
 /// Validates that the token issuer and audience match the security configuration.
 pub(crate) fn validate_issuer_audience(
@@ -203,6 +207,43 @@ pub(crate) fn extract_roles(claims: &Value) -> Vec<String> {
     roles.sort();
     roles.dedup();
     roles
+}
+
+pub(crate) fn supplemental_jwt_claims(token: &str) -> Option<Value> {
+    let token = token.trim();
+    let mut parts = token.split('.');
+    let header = parts.next()?;
+    let payload = parts.next()?;
+    let signature = parts.next()?;
+    if parts.next().is_some() || header.is_empty() || payload.is_empty() || signature.is_empty() {
+        return None;
+    }
+
+    let header = decode_jwt_part(header)?;
+    let header = header.as_object()?;
+    let alg = header
+        .get("alg")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if alg.eq_ignore_ascii_case("none") {
+        return None;
+    }
+
+    let payload = decode_jwt_part(payload)?;
+    payload.is_object().then_some(payload)
+}
+
+fn decode_jwt_part(part: &str) -> Option<Value> {
+    let part = part.trim_end_matches('=');
+    if part.len() > JWT_CLAIMS_MAX_BYTES {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(part).ok()?;
+    if decoded.len() > JWT_CLAIMS_MAX_BYTES {
+        return None;
+    }
+    serde_json::from_slice::<Value>(&decoded).ok()
 }
 
 pub(crate) fn merge_claims(primary: &Value, secondary: &Value) -> Value {
