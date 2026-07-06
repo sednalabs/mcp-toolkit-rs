@@ -104,6 +104,18 @@ pub struct IssuerEntry {
     pub resource_url_override: Option<String>,
 }
 
+/// Metadata-source inputs used to construct one issuer/resource entry.
+#[derive(Debug, Clone)]
+pub struct IssuerMetadataConfig {
+    pub resource_path: String,
+    pub metadata_source: AuthorizationServerMetadataSource,
+    pub realm: String,
+    pub scopes_supported: Vec<String>,
+    pub allowed_client_ids: HashSet<String>,
+    pub authenticator: Arc<Authenticator>,
+    pub resource_url_override: Option<String>,
+}
+
 impl IssuerEntry {
     /// Builds entry from metadata source.
     pub fn from_metadata_source(
@@ -135,6 +147,28 @@ impl IssuerEntry {
             authenticator,
             resource_url_override,
         })
+    }
+
+    /// Builds entry from named metadata-source inputs.
+    pub fn from_metadata_config(config: IssuerMetadataConfig) -> Result<Self, AuthSurfaceError> {
+        let IssuerMetadataConfig {
+            resource_path,
+            metadata_source,
+            realm,
+            scopes_supported,
+            allowed_client_ids,
+            authenticator,
+            resource_url_override,
+        } = config;
+        Self::from_metadata_source(
+            resource_path,
+            metadata_source,
+            realm,
+            scopes_supported,
+            allowed_client_ids,
+            authenticator,
+            resource_url_override,
+        )
     }
 }
 
@@ -180,23 +214,9 @@ impl AuthSurfaceConfig {
     /// `IssuerEntry::from_metadata_source`.
     pub fn single_issuer_from_metadata_source(
         public_base_url: impl Into<String>,
-        resource_path: impl Into<String>,
-        metadata_source: AuthorizationServerMetadataSource,
-        realm: impl Into<String>,
-        scopes_supported: Vec<String>,
-        allowed_client_ids: HashSet<String>,
-        authenticator: Arc<Authenticator>,
-        resource_url_override: Option<String>,
+        issuer: IssuerMetadataConfig,
     ) -> Result<Self, AuthSurfaceError> {
-        let entry = IssuerEntry::from_metadata_source(
-            resource_path,
-            metadata_source,
-            realm,
-            scopes_supported,
-            allowed_client_ids,
-            authenticator,
-            resource_url_override,
-        )?;
+        let entry = IssuerEntry::from_metadata_config(issuer)?;
         Ok(Self::single_issuer(public_base_url, entry))
     }
 
