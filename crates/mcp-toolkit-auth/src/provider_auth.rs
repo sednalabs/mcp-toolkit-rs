@@ -370,12 +370,15 @@ impl GoogleProviderAuthConfig {
     /// Returns the API enablement command argv, when this config knows the API
     /// service name.
     pub fn api_enable_command(&self) -> Option<Vec<String>> {
-        (!self.api_service_names.is_empty()).then(|| {
-            google_api_enable_command_multi(
-                self.api_service_names.iter().map(String::as_str),
-                &self.quota_project_placeholder,
-            )
-        })
+        self.api_service_names
+            .iter()
+            .any(|service| !service.trim().is_empty())
+            .then(|| {
+                google_api_enable_command_multi(
+                    self.api_service_names.iter().map(String::as_str),
+                    &self.quota_project_placeholder,
+                )
+            })
     }
 
     /// Builds a serializable Google ADC setup plan for CLI/MCP auth tools.
@@ -1057,6 +1060,24 @@ mod tests {
     fn google_adc_setup_plan_omits_blank_api_enable_command() {
         let config =
             GoogleProviderAuthConfig::new("Example API", Vec::new()).with_api_service_name("  ");
+
+        let plan = config.adc_setup_plan();
+
+        assert!(plan.api_enable.is_none());
+        assert!(plan
+            .next_steps
+            .iter()
+            .all(|step| !step.contains("enable the required Google API")));
+    }
+
+    #[test]
+    fn google_adc_setup_plan_omits_direct_blank_api_services() {
+        let config = GoogleProviderAuthConfig {
+            api_name: "Example API".to_string(),
+            provider_scopes: Vec::new(),
+            api_service_names: vec![" ".to_string(), "\t".to_string()],
+            quota_project_placeholder: "YOUR_PROJECT".to_string(),
+        };
 
         let plan = config.adc_setup_plan();
 
