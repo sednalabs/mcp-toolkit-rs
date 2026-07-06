@@ -168,6 +168,38 @@ impl AuthSurfaceConfig {
         }
     }
 
+    /// Build a single-issuer configuration directly from a metadata source.
+    ///
+    /// # Errors
+    /// Returns `AuthSurfaceError` when the supplied metadata source fails
+    /// validation or cannot be resolved into deterministic authorization-server
+    /// metadata.
+    ///
+    /// # Security
+    /// Preserves the same metadata validation guarantees as
+    /// `IssuerEntry::from_metadata_source`.
+    pub fn single_issuer_from_metadata_source(
+        public_base_url: impl Into<String>,
+        resource_path: impl Into<String>,
+        metadata_source: AuthorizationServerMetadataSource,
+        realm: impl Into<String>,
+        scopes_supported: Vec<String>,
+        allowed_client_ids: HashSet<String>,
+        authenticator: Arc<Authenticator>,
+        resource_url_override: Option<String>,
+    ) -> Result<Self, AuthSurfaceError> {
+        let entry = IssuerEntry::from_metadata_source(
+            resource_path,
+            metadata_source,
+            realm,
+            scopes_supported,
+            allowed_client_ids,
+            authenticator,
+            resource_url_override,
+        )?;
+        Ok(Self::single_issuer(public_base_url, entry))
+    }
+
     /// Return true when any configured auth-surface URL uses insecure `http://`.
     pub fn contains_insecure_http_urls(&self) -> bool {
         url_uses_insecure_http(&self.public_base_url)
@@ -1670,6 +1702,51 @@ mod tests {
         assert_eq!(
             entry.code_challenge_methods_supported,
             Some(vec!["S256".to_string()])
+        );
+    }
+
+    #[test]
+    fn auth_surface_config_can_be_built_from_metadata_source() {
+        let config = AuthSurfaceConfig::single_issuer_from_metadata_source(
+            "https://example.com",
+            "/mcp",
+            AuthorizationServerMetadataSource::Explicit(AuthorizationServerMetadata {
+                issuer: "https://issuer.test".to_string(),
+                authorization_endpoint: "https://issuer.test/auth".to_string(),
+                token_endpoint: "https://issuer.test/token".to_string(),
+                registration_endpoint: None,
+                jwks_uri: Some("https://issuer.test/jwks".to_string()),
+                introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
+                device_authorization_endpoint: Some("https://issuer.test/device".to_string()),
+                grant_types_supported: Some(vec![
+                    "authorization_code".to_string(),
+                    "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+                ]),
+                client_id_metadata_document_supported: None,
+                token_endpoint_auth_methods_supported: None,
+                code_challenge_methods_supported: None,
+            }),
+            "test",
+            vec!["ops:read".to_string()],
+            HashSet::new(),
+            test_authenticator(),
+            Some("https://example.com/mcp".to_string()),
+        )
+        .expect("config from metadata source");
+
+        assert_eq!(config.public_base_url, "https://example.com");
+        assert_eq!(config.entries.len(), 1);
+        assert_eq!(config.entries[0].resource_path, "/mcp");
+        assert_eq!(
+            config.entries[0].device_authorization_endpoint.as_deref(),
+            Some("https://issuer.test/device")
+        );
+        assert_eq!(
+            config.entries[0].grant_types_supported,
+            Some(vec![
+                "authorization_code".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_string()
+            ])
         );
     }
 
