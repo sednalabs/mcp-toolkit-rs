@@ -530,10 +530,7 @@ pub fn google_adc_quota_project_command(project_placeholder: &str) -> Vec<String
 }
 
 /// Returns the `gcloud services enable` command argv for a Google API.
-pub fn google_api_enable_command(
-    api_service_name: &str,
-    project_placeholder: &str,
-) -> Vec<String> {
+pub fn google_api_enable_command(api_service_name: &str, project_placeholder: &str) -> Vec<String> {
     google_api_enable_command_multi([api_service_name], project_placeholder)
 }
 
