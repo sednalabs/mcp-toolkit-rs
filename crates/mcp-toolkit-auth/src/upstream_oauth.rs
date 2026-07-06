@@ -118,6 +118,8 @@ pub enum UpstreamOAuthError {
         "Google OAuth auth_uri must be one of the supported Google HTTPS authorization endpoints"
     )]
     DisallowedGoogleAuthEndpoint,
+    #[error("Google ADC file must contain an authorized_user credential")]
+    UnsupportedGoogleAdcCredentialType,
     #[error("OAuth HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
     #[error("OAuth token endpoint returned {status}: {error}")]
@@ -341,6 +343,55 @@ struct RawGoogleOAuthClient {
     redirect_uris: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawGoogleAuthorizedUserAdc {
+    #[serde(rename = "type")]
+    credential_type: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    refresh_token: Option<String>,
+    token_uri: Option<String>,
+    quota_project_id: Option<String>,
+}
+
+/// Google authorized-user ADC metadata and refresh configuration.
+#[derive(Clone)]
+pub struct GoogleAuthorizedUserAdc {
+    refresh_config: OAuthRefreshConfig,
+    quota_project_id: Option<String>,
+}
+
+impl fmt::Debug for GoogleAuthorizedUserAdc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GoogleAuthorizedUserAdc")
+            .field("refresh_config", &self.refresh_config)
+            .field("quota_project_id", &self.quota_project_id)
+            .finish()
+    }
+}
+
+impl GoogleAuthorizedUserAdc {
+    /// Returns the OAuth refresh-token exchange config.
+    pub fn refresh_config(&self) -> &OAuthRefreshConfig {
+        &self.refresh_config
+    }
+
+    /// Converts this ADC record into its OAuth refresh-token exchange config.
+    pub fn into_refresh_config(self) -> OAuthRefreshConfig {
+        self.refresh_config
+    }
+
+    /// Returns the ADC quota project id, when the file declares one.
+    pub fn quota_project_id(&self) -> Option<&str> {
+        self.quota_project_id.as_deref()
+    }
+
+    /// Returns the OAuth client id embedded in the ADC file.
+    pub fn client_id(&self) -> &str {
+        self.refresh_config.client().client_id()
+    }
+}
+
 /// Parses a Google OAuth client-secret JSON file.
 ///
 /// # Errors
@@ -400,6 +451,73 @@ pub fn google_oauth_client_from_slice(
         token_auth_method: OAuthClientAuthMethod::RequestBody,
         redirect_uris: client.redirect_uris,
         kind: Some(kind),
+    })
+}
+
+/// Parses a Google authorized-user ADC file.
+///
+/// # Errors
+/// Returns file, JSON, unsupported-credential-type, missing-field, endpoint,
+/// empty-scope, or blank-refresh-token errors.
+///
+/// # Security
+/// The returned config redacts client-secret and refresh-token values in
+/// formatted output. Prefer server-specific ADC files so one MCP server's
+/// login cannot replace another server's grant.
+pub fn google_authorized_user_adc_from_file(
+    path: impl AsRef<Path>,
+    scopes: Vec<String>,
+) -> Result<GoogleAuthorizedUserAdc, UpstreamOAuthError> {
+    let bytes = fs::read(path).map_err(|err| io_error("read Google ADC file", err))?;
+    google_authorized_user_adc_from_slice(&bytes, scopes)
+}
+
+/// Parses Google authorized-user ADC JSON bytes.
+///
+/// # Errors
+/// Returns JSON, unsupported-credential-type, missing-field, endpoint,
+/// empty-scope, or blank-refresh-token errors.
+///
+/// # Security
+/// The returned config redacts client-secret and refresh-token values in
+/// formatted output. The ADC input bytes are secret-bearing and must not be
+/// logged.
+pub fn google_authorized_user_adc_from_slice(
+    bytes: &[u8],
+    scopes: Vec<String>,
+) -> Result<GoogleAuthorizedUserAdc, UpstreamOAuthError> {
+    let parsed: RawGoogleAuthorizedUserAdc = serde_json::from_slice(bytes)?;
+    let credential_type = parsed
+        .credential_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    if credential_type != "authorized_user" {
+        return Err(UpstreamOAuthError::UnsupportedGoogleAdcCredentialType);
+    }
+
+    let client_id = required_field(parsed.client_id, "client_id")?;
+    let client_secret = SecretString::new(required_field(parsed.client_secret, "client_secret")?);
+    let refresh_token = SecretString::new(required_field(parsed.refresh_token, "refresh_token")?);
+    let token_endpoint = parsed
+        .token_uri
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| GOOGLE_TOKEN_ENDPOINT.to_string());
+    validate_google_token_endpoint(&token_endpoint)?;
+
+    let client = OAuthClientConfig::new(
+        client_id,
+        Some(client_secret),
+        GOOGLE_AUTH_ENDPOINT,
+        token_endpoint,
+    )?;
+    let refresh_config = OAuthRefreshConfig::new(client, refresh_token, scopes)?;
+    Ok(GoogleAuthorizedUserAdc {
+        refresh_config,
+        quota_project_id: parsed
+            .quota_project_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     })
 }
 
@@ -2182,6 +2300,73 @@ mod tests {
         assert!(config.client_secret_present());
         assert_eq!(config.kind(), Some(GoogleOAuthClientKind::Installed));
         assert!(!format!("{config:?}").contains("client-secret"));
+    }
+
+    #[test]
+    fn parses_google_authorized_user_adc_and_redacts_secrets() {
+        let json = br#"{
+            "type": "authorized_user",
+            "client_id": "client-id.apps.googleusercontent.com",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-secret",
+            "quota_project_id": " quota-project ",
+            "token_uri": "https://accounts.google.com/o/oauth2/token"
+        }"#;
+
+        let adc = google_authorized_user_adc_from_slice(
+            json,
+            vec!["https://www.googleapis.com/auth/example".to_string()],
+        )
+        .expect("parse adc");
+
+        assert_eq!(adc.client_id(), "client-id.apps.googleusercontent.com");
+        assert_eq!(adc.quota_project_id(), Some("quota-project"));
+        assert_eq!(
+            adc.refresh_config().client().token_endpoint(),
+            "https://accounts.google.com/o/oauth2/token"
+        );
+        assert_eq!(
+            adc.refresh_config().scopes(),
+            &["https://www.googleapis.com/auth/example".to_string()]
+        );
+        let debug = format!("{adc:?}");
+        assert!(!debug.contains("client-secret"));
+        assert!(!debug.contains("refresh-secret"));
+    }
+
+    #[test]
+    fn rejects_non_authorized_user_adc_credentials() {
+        let json = br#"{
+            "type": "service_account",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-secret"
+        }"#;
+
+        let err = google_authorized_user_adc_from_slice(json, vec!["scope-a".to_string()])
+            .expect_err("reject service account adc");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsupportedGoogleAdcCredentialType
+        ));
+    }
+
+    #[test]
+    fn rejects_google_adc_credentials_without_type() {
+        let json = br#"{
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-secret"
+        }"#;
+
+        let err = google_authorized_user_adc_from_slice(json, vec!["scope-a".to_string()])
+            .expect_err("reject missing adc type");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsupportedGoogleAdcCredentialType
+        ));
     }
 
     #[test]
