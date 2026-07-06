@@ -540,10 +540,9 @@ fn print_conformance_report(manifests: &[&PatternManifestSpec]) {
 }
 
 fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String, String> {
+    let missing_value = format!("missing value for {}", option);
     *index += 1;
-    args.get(*index)
-        .cloned()
-        .ok_or_else(|| format!("missing value for {}", option))
+    args.get(*index).cloned().ok_or(missing_value)
 }
 
 fn canonical_toolkit_root(root: PathBuf) -> Result<PathBuf, String> {
