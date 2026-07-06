@@ -296,8 +296,8 @@ pub struct GoogleProviderAuthConfig {
     pub api_name: String,
     /// Required provider scopes, excluding `cloud-platform`.
     pub provider_scopes: Vec<String>,
-    /// Google Cloud API service name, such as `searchconsole.googleapis.com`.
-    pub api_service_name: Option<String>,
+    /// Google Cloud API service names, such as `searchconsole.googleapis.com`.
+    pub api_service_names: Vec<String>,
     /// Placeholder or redacted quota project label used in next steps.
     pub quota_project_placeholder: String,
 }
@@ -312,20 +312,24 @@ impl GoogleProviderAuthConfig {
         Self {
             api_name: api_name.into(),
             provider_scopes,
-            api_service_name: None,
+            api_service_names: Vec::new(),
             quota_project_placeholder: "YOUR_PROJECT".to_string(),
         }
     }
 
     /// Adds the Google API service name used by `gcloud services enable`.
     pub fn with_api_service_name(mut self, api_service_name: impl Into<String>) -> Self {
-        let api_service_name = api_service_name.into();
-        let trimmed = api_service_name.trim();
-        if trimmed.is_empty() {
-            self.api_service_name = None;
-        } else {
-            self.api_service_name = Some(trimmed.to_string());
-        }
+        extend_unique_api_services(&mut self.api_service_names, [api_service_name.into()]);
+        self
+    }
+
+    /// Adds one or more Google API service names used by `gcloud services enable`.
+    pub fn with_api_service_names<I, S>(mut self, api_service_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        extend_unique_api_services(&mut self.api_service_names, api_service_names);
         self
     }
 
@@ -366,11 +370,15 @@ impl GoogleProviderAuthConfig {
     /// Returns the API enablement command argv, when this config knows the API
     /// service name.
     pub fn api_enable_command(&self) -> Option<Vec<String>> {
-        self.api_service_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|service| !service.is_empty())
-            .map(|service| google_api_enable_command(service, &self.quota_project_placeholder))
+        self.api_service_names
+            .iter()
+            .any(|service| !service.trim().is_empty())
+            .then(|| {
+                google_api_enable_command_multi(
+                    self.api_service_names.iter().map(String::as_str),
+                    &self.quota_project_placeholder,
+                )
+            })
     }
 
     /// Builds a serializable Google ADC setup plan for CLI/MCP auth tools.
@@ -526,14 +534,44 @@ pub fn google_adc_quota_project_command(project_placeholder: &str) -> Vec<String
 
 /// Returns the `gcloud services enable` command argv for a Google API.
 pub fn google_api_enable_command(api_service_name: &str, project_placeholder: &str) -> Vec<String> {
-    vec![
+    google_api_enable_command_multi([api_service_name], project_placeholder)
+}
+
+/// Returns the `gcloud services enable` command argv for one or more Google APIs.
+pub fn google_api_enable_command_multi<'a>(
+    api_service_names: impl IntoIterator<Item = &'a str>,
+    project_placeholder: &str,
+) -> Vec<String> {
+    let mut command = vec![
         "gcloud".to_string(),
         "services".to_string(),
         "enable".to_string(),
-        api_service_name.trim().to_string(),
+    ];
+    let mut services = Vec::new();
+    extend_unique_api_services(&mut services, api_service_names);
+    command.extend(services);
+    command.extend([
         "--project".to_string(),
         placeholder_or_default(project_placeholder).to_string(),
-    ]
+    ]);
+    command
+}
+
+fn extend_unique_api_services<I, S>(services: &mut Vec<String>, api_service_names: I)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    for api_service_name in api_service_names {
+        let api_service_name = api_service_name.into();
+        let trimmed = api_service_name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !services.iter().any(|existing| existing == trimmed) {
+            services.push(trimmed.to_string());
+        }
+    }
 }
 
 /// Builds standard next steps for a missing Google ADC quota project.
@@ -1000,9 +1038,46 @@ mod tests {
     }
 
     #[test]
+    fn google_adc_setup_plan_supports_multiple_api_enable_services() {
+        let config = GoogleProviderAuthConfig::new(
+            "Google Analytics API",
+            vec!["https://www.googleapis.com/auth/analytics.readonly".to_string()],
+        )
+        .with_api_service_names([
+            "analyticsadmin.googleapis.com",
+            "analyticsdata.googleapis.com",
+        ]);
+
+        let plan = config.adc_setup_plan();
+
+        assert_eq!(
+            plan.api_enable.expect("api enable command").shell,
+            "gcloud services enable analyticsadmin.googleapis.com analyticsdata.googleapis.com --project YOUR_PROJECT"
+        );
+    }
+
+    #[test]
     fn google_adc_setup_plan_omits_blank_api_enable_command() {
         let config =
             GoogleProviderAuthConfig::new("Example API", Vec::new()).with_api_service_name("  ");
+
+        let plan = config.adc_setup_plan();
+
+        assert!(plan.api_enable.is_none());
+        assert!(plan
+            .next_steps
+            .iter()
+            .all(|step| !step.contains("enable the required Google API")));
+    }
+
+    #[test]
+    fn google_adc_setup_plan_omits_direct_blank_api_services() {
+        let config = GoogleProviderAuthConfig {
+            api_name: "Example API".to_string(),
+            provider_scopes: Vec::new(),
+            api_service_names: vec![" ".to_string(), "\t".to_string()],
+            quota_project_placeholder: "YOUR_PROJECT".to_string(),
+        };
 
         let plan = config.adc_setup_plan();
 
