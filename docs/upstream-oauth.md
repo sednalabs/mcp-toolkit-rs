@@ -40,6 +40,9 @@ For Google upstream APIs, the toolkit provides:
 
 - `google_oauth_client_from_file` / `google_oauth_client_from_slice` for
   downloaded OAuth client JSON;
+- `google_authorized_user_adc_from_file` /
+  `google_authorized_user_adc_from_slice` for server-specific gcloud
+  authorized-user ADC files;
 - `LoopbackOAuthOptions::google_login()` for normal browser login with offline
   access;
 - `LoopbackOAuthOptions::google_reauth()` for fresh consent when replacing a
@@ -69,6 +72,13 @@ path, and query are the same and the hosts are common loopback aliases such as
 `localhost`, `127.0.0.1`, or `[::1]`. With the default callback path, register
 `http://localhost/oauth/callback` or `http://127.0.0.1/oauth/callback` for that
 shape. Otherwise the helper fails before sending the user into consent.
+
+For gcloud-backed local user credentials, prefer a server-specific
+`CLOUDSDK_CONFIG` directory and parse that directory's
+`application_default_credentials.json` with the authorized-user ADC helper.
+The conventional gcloud ADC file is global to the OS user; logging one Google
+MCP in with a narrower or different scope set can replace the grant another
+Google MCP expected.
 
 ## SSH And Headless Operation
 

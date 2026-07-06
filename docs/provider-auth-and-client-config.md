@@ -143,6 +143,15 @@ disabled-API error, set the quota project, enable the upstream API on that
 project, and make sure the authenticated principal may use the project for
 quota.
 
+When several Google MCP servers share one OS user, prefer a server-specific
+ADC file instead of the conventional global gcloud ADC file. Run `gcloud auth
+application-default login` with a service-specific `CLOUDSDK_CONFIG` directory,
+then have the server read that directory's
+`application_default_credentials.json` through
+`mcp_toolkit_auth::upstream_oauth::google_authorized_user_adc_from_file`.
+This keeps one server's scope update from replacing another server's refresh
+token grant.
+
 When the server owns browser OAuth directly, use
 `mcp_toolkit_auth::upstream_oauth` instead of hand-rolled token exchange. Prefer
 a Desktop OAuth client for dynamic loopback ports. For SSH or remote hosts,
