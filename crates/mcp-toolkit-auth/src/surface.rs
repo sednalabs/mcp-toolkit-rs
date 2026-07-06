@@ -1729,28 +1729,34 @@ mod tests {
     fn auth_surface_config_can_be_built_from_metadata_source() {
         let config = AuthSurfaceConfig::single_issuer_from_metadata_source(
             "https://example.com",
-            "/mcp",
-            AuthorizationServerMetadataSource::Explicit(AuthorizationServerMetadata {
-                issuer: "https://issuer.test".to_string(),
-                authorization_endpoint: "https://issuer.test/auth".to_string(),
-                token_endpoint: "https://issuer.test/token".to_string(),
-                registration_endpoint: None,
-                jwks_uri: Some("https://issuer.test/jwks".to_string()),
-                introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
-                device_authorization_endpoint: Some("https://issuer.test/device".to_string()),
-                grant_types_supported: Some(vec![
-                    "authorization_code".to_string(),
-                    "urn:ietf:params:oauth:grant-type:device_code".to_string(),
-                ]),
-                client_id_metadata_document_supported: None,
-                token_endpoint_auth_methods_supported: None,
-                code_challenge_methods_supported: None,
-            }),
-            "test",
-            vec!["ops:read".to_string()],
-            HashSet::new(),
-            test_authenticator(),
-            Some("https://example.com/mcp".to_string()),
+            IssuerMetadataConfig {
+                resource_path: "/mcp".to_string(),
+                metadata_source: AuthorizationServerMetadataSource::Explicit(
+                    AuthorizationServerMetadata {
+                        issuer: "https://issuer.test".to_string(),
+                        authorization_endpoint: "https://issuer.test/auth".to_string(),
+                        token_endpoint: "https://issuer.test/token".to_string(),
+                        registration_endpoint: None,
+                        jwks_uri: Some("https://issuer.test/jwks".to_string()),
+                        introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
+                        device_authorization_endpoint: Some(
+                            "https://issuer.test/device".to_string(),
+                        ),
+                        grant_types_supported: Some(vec![
+                            "authorization_code".to_string(),
+                            "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+                        ]),
+                        client_id_metadata_document_supported: None,
+                        token_endpoint_auth_methods_supported: None,
+                        code_challenge_methods_supported: None,
+                    },
+                ),
+                realm: "test".to_string(),
+                scopes_supported: vec!["ops:read".to_string()],
+                allowed_client_ids: HashSet::new(),
+                authenticator: test_authenticator(),
+                resource_url_override: Some("https://example.com/mcp".to_string()),
+            },
         )
         .expect("config from metadata source");
 
