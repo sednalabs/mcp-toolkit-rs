@@ -181,7 +181,12 @@ impl PolicyProvenanceRequirement {
         }
 
         if let Some(prefix) = self.expected_decision_source_prefix.as_deref() {
-            if !decision.decision_source.starts_with(prefix) {
+            let exact_match = decision.decision_source == prefix;
+            let child_namespace = decision
+                .decision_source
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('.'));
+            if !exact_match && !child_namespace {
                 return Err(PolicyProvenanceError::DecisionSourcePrefixMismatch {
                     expected_prefix: prefix.to_string(),
                     actual: decision.decision_source.clone(),
@@ -219,7 +224,10 @@ impl PolicyProvenanceRequirement {
 /// Provenance validation failure for policy decision envelopes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyProvenanceError {
-    DecisionSourceMismatch { expected: String, actual: String },
+    DecisionSourceMismatch {
+        expected: String,
+        actual: String,
+    },
     DecisionSourcePrefixMismatch {
         expected_prefix: String,
         actual: String,
@@ -228,8 +236,13 @@ pub enum PolicyProvenanceError {
         allowed: Vec<PolicyRuntimeMode>,
         actual: PolicyRuntimeMode,
     },
-    PolicyContractVersionMissing { expected: String },
-    PolicyContractVersionMismatch { expected: String, actual: String },
+    PolicyContractVersionMissing {
+        expected: String,
+    },
+    PolicyContractVersionMismatch {
+        expected: String,
+        actual: String,
+    },
 }
 
 impl fmt::Display for PolicyProvenanceError {
@@ -581,7 +594,8 @@ mod tests {
         das_observability_policy_authority, das_query_policy_authority, gateway_policy_authority,
         hello_server_policy_authority, sql_restricted_policy_authority, ClosurePolicyAuthority,
         HelloPolicyRequest, HelloServerProfile, KernelPolicyAuthority, PolicyAuthority,
-        PolicyProvenanceError, PolicyProvenanceRequirement, PolicyRuntimeMode,
+        PolicyAuthorityDecision, PolicyProvenanceError, PolicyProvenanceRequirement,
+        PolicyRuntimeMode,
     };
     use mcp_toolkit_policy_core::{
         Decision, DecisionCode, SqlRestrictedPolicyInput, SQL_POLICY_CONTRACT_VERSION,
@@ -655,6 +669,32 @@ mod tests {
             PolicyProvenanceError::DecisionSourceMismatch {
                 expected: "unit.policy".to_string(),
                 actual: "unit.other".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn provenance_requirement_rejects_sibling_decision_source_prefix() {
+        let decision = PolicyAuthorityDecision {
+            allow: true,
+            code: None,
+            reason: None,
+            decision_source: "unit.policy_extended.spark".to_string(),
+            runtime_mode: PolicyRuntimeMode::Rust,
+            policy_contract_version: Some("unit/v1".to_string()),
+            required_scopes: None,
+        };
+        let requirement = PolicyProvenanceRequirement::new().decision_source_prefix("unit.policy");
+
+        let err = decision
+            .validate_provenance(&requirement)
+            .expect_err("sibling source prefixes must be rejected");
+
+        assert_eq!(
+            err,
+            PolicyProvenanceError::DecisionSourcePrefixMismatch {
+                expected_prefix: "unit.policy".to_string(),
+                actual: "unit.policy_extended.spark".to_string()
             }
         );
     }
