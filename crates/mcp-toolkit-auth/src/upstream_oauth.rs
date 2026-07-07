@@ -149,7 +149,7 @@ pub enum UpstreamOAuthError {
     RedirectUriNotRegistered(String),
     #[error("unable to launch browser: {0}")]
     BrowserLaunch(String),
-    #[error("stored refresh token file has unsafe permissions or path type")]
+    #[error("secret credential file has unsafe permissions or path type")]
     UnsafeTokenFilePermissions,
     #[error("stored token cache version {0} is not supported")]
     UnsupportedTokenCacheVersion(u8),
@@ -352,6 +352,7 @@ struct RawGoogleAuthorizedUserAdc {
     refresh_token: Option<String>,
     token_uri: Option<String>,
     quota_project_id: Option<String>,
+    universe_domain: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -401,6 +402,49 @@ impl GoogleAuthorizedUserAdc {
     /// Returns the OAuth client id embedded in the ADC file.
     pub fn client_id(&self) -> &str {
         self.refresh_config.client().client_id()
+    }
+}
+
+/// Redaction-safe metadata from a Google authorized-user ADC file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleAuthorizedUserAdcMetadata {
+    credential_type: String,
+    client_id_present: bool,
+    client_secret_present: bool,
+    refresh_token_present: bool,
+    quota_project_id: Option<String>,
+    universe_domain: Option<String>,
+}
+
+impl GoogleAuthorizedUserAdcMetadata {
+    /// Returns the declared ADC credential type.
+    pub fn credential_type(&self) -> &str {
+        &self.credential_type
+    }
+
+    /// Returns whether the ADC file contains a non-empty client id.
+    pub fn client_id_present(&self) -> bool {
+        self.client_id_present
+    }
+
+    /// Returns whether the ADC file contains a non-empty client secret.
+    pub fn client_secret_present(&self) -> bool {
+        self.client_secret_present
+    }
+
+    /// Returns whether the ADC file contains a non-empty refresh token.
+    pub fn refresh_token_present(&self) -> bool {
+        self.refresh_token_present
+    }
+
+    /// Returns the ADC quota project id, when the file declares one.
+    pub fn quota_project_id(&self) -> Option<&str> {
+        self.quota_project_id.as_deref()
+    }
+
+    /// Returns the ADC universe domain, when the file declares one.
+    pub fn universe_domain(&self) -> Option<&str> {
+        self.universe_domain.as_deref()
     }
 }
 
@@ -480,7 +524,7 @@ pub fn google_authorized_user_adc_from_file(
     path: impl AsRef<Path>,
     scopes: Vec<String>,
 ) -> Result<GoogleAuthorizedUserAdc, UpstreamOAuthError> {
-    let bytes = fs::read(path).map_err(|err| io_error("read Google ADC file", err))?;
+    let bytes = read_secret_file_bytes(path.as_ref(), "read Google ADC file")?;
     google_authorized_user_adc_from_slice(&bytes, scopes)
 }
 
@@ -530,6 +574,60 @@ pub fn google_authorized_user_adc_from_slice(
             .quota_project_id
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
+    })
+}
+
+/// Reads redaction-safe metadata from a Google authorized-user ADC file.
+///
+/// # Errors
+/// Returns JSON, unsupported-credential-type, I/O, or unsafe-permission
+/// errors.
+///
+/// # Security
+/// Applies the same owner-only, non-symlink secret-file checks as the refresh
+/// token cache loader and does not expose refresh tokens or client secrets.
+pub fn google_authorized_user_adc_metadata_from_file(
+    path: impl AsRef<Path>,
+) -> Result<Option<GoogleAuthorizedUserAdcMetadata>, UpstreamOAuthError> {
+    let Some(bytes) = maybe_read_secret_file_bytes(path.as_ref(), "read Google ADC file")? else {
+        return Ok(None);
+    };
+    google_authorized_user_adc_metadata_from_slice(&bytes).map(Some)
+}
+
+/// Parses redaction-safe metadata from Google authorized-user ADC JSON bytes.
+///
+/// # Errors
+/// Returns JSON or unsupported-credential-type errors.
+///
+/// # Security
+/// The ADC input bytes are secret-bearing and must not be logged.
+pub fn google_authorized_user_adc_metadata_from_slice(
+    bytes: &[u8],
+) -> Result<GoogleAuthorizedUserAdcMetadata, UpstreamOAuthError> {
+    let parsed: RawGoogleAuthorizedUserAdc = serde_json::from_slice(bytes)?;
+    let credential_type = parsed
+        .credential_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    if credential_type != "authorized_user" {
+        return Err(UpstreamOAuthError::UnsupportedGoogleAdcCredentialType);
+    }
+
+    Ok(GoogleAuthorizedUserAdcMetadata {
+        credential_type: "authorized_user".to_string(),
+        client_id_present: parsed.client_id.as_deref().is_some_and(has_non_empty_value),
+        client_secret_present: parsed
+            .client_secret
+            .as_deref()
+            .is_some_and(has_non_empty_value),
+        refresh_token_present: parsed
+            .refresh_token
+            .as_deref()
+            .is_some_and(has_non_empty_value),
+        quota_project_id: trim_non_empty(parsed.quota_project_id),
+        universe_domain: trim_non_empty(parsed.universe_domain),
     })
 }
 
@@ -1479,6 +1577,43 @@ fn write_secret_json_file(path: &Path, bytes: &[u8]) -> Result<(), UpstreamOAuth
     Ok(())
 }
 
+fn read_secret_file_bytes(
+    path: &Path,
+    read_context: &'static str,
+) -> Result<Vec<u8>, UpstreamOAuthError> {
+    let Some(bytes) = maybe_read_secret_file_bytes(path, read_context)? else {
+        return Err(io_error(
+            read_context,
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ));
+    };
+    Ok(bytes)
+}
+
+fn maybe_read_secret_file_bytes(
+    path: &Path,
+    read_context: &'static str,
+) -> Result<Option<Vec<u8>>, UpstreamOAuthError> {
+    ensure_token_cache_ancestors_safe(path)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if !token_cache_path_exists(parent)? {
+            return Ok(None);
+        }
+        ensure_token_cache_directory(parent)?;
+    }
+    if !token_cache_file_exists(path)? {
+        return Ok(None);
+    }
+    let mut file = open_token_file_for_read(path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|err| io_error(read_context, err))?;
+    Ok(Some(bytes))
+}
+
 fn ensure_token_cache_ancestors_safe(path: &Path) -> Result<(), UpstreamOAuthError> {
     let Some(parent) = path
         .parent()
@@ -1604,6 +1739,16 @@ fn temporary_token_cache_path(path: &Path) -> PathBuf {
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(|parent| parent.join(&temp_name))
         .unwrap_or_else(|| PathBuf::from(temp_name))
+}
+
+fn trim_non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn has_non_empty_value(value: &str) -> bool {
+    !value.trim().is_empty()
 }
 
 /// Provider-issued replacement refresh-token metadata.
@@ -2451,6 +2596,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_google_authorized_user_adc_metadata_without_exposing_secrets() {
+        let json = br#"{
+            "type": "authorized_user",
+            "client_id": "client-id.apps.googleusercontent.com",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-secret",
+            "quota_project_id": " quota-project ",
+            "universe_domain": " googleapis.com "
+        }"#;
+
+        let metadata =
+            google_authorized_user_adc_metadata_from_slice(json).expect("parse adc metadata");
+
+        assert_eq!(metadata.credential_type(), "authorized_user");
+        assert!(metadata.client_id_present());
+        assert!(metadata.client_secret_present());
+        assert!(metadata.refresh_token_present());
+        assert_eq!(metadata.quota_project_id(), Some("quota-project"));
+        assert_eq!(metadata.universe_domain(), Some("googleapis.com"));
+        let debug = format!("{metadata:?}");
+        assert!(!debug.contains("client-secret"));
+        assert!(!debug.contains("refresh-secret"));
+    }
+
+    #[test]
     fn saves_google_authorized_user_adc_with_quota_project() {
         let temp = unique_temp_dir("google-adc-save");
         let path = temp
@@ -2522,6 +2692,99 @@ mod tests {
         assert!(matches!(err, UpstreamOAuthError::MissingRefreshToken));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn google_authorized_user_adc_metadata_rejects_group_readable_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = unique_temp_dir("unsafe-adc-permissions");
+        let path = temp.join("application_default_credentials.json");
+        fs::write(
+            &path,
+            r#"{"type":"authorized_user","client_id":"client","client_secret":"client-secret","refresh_token":"refresh-secret"}"#,
+        )
+        .expect("write adc");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        let err = google_authorized_user_adc_metadata_from_file(&path)
+            .expect_err("reject unsafe ADC permissions");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsafeTokenFilePermissions
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn google_authorized_user_adc_metadata_rejects_writable_parent_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = unique_temp_dir("unsafe-adc-parent");
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o777)).expect("chmod temp");
+        let path = temp.join("application_default_credentials.json");
+        fs::write(
+            &path,
+            r#"{"type":"authorized_user","client_id":"client","client_secret":"client-secret","refresh_token":"refresh-secret"}"#,
+        )
+        .expect("write adc");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod");
+
+        let err = google_authorized_user_adc_metadata_from_file(&path)
+            .expect_err("reject unsafe ADC parent");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsafeTokenFilePermissions
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn google_authorized_user_adc_from_file_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+        let temp = unique_temp_dir("symlink-adc");
+        let target = temp.join("target.json");
+        let link = temp.join("application_default_credentials.json");
+        fs::write(
+            &target,
+            r#"{"type":"authorized_user","client_id":"client","client_secret":"client-secret","refresh_token":"refresh-secret"}"#,
+        )
+        .expect("write target");
+        symlink(&target, &link).expect("symlink");
+
+        let err = google_authorized_user_adc_from_file(&link, vec!["scope-a".to_string()])
+            .expect_err("reject ADC symlink");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsafeTokenFilePermissions
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn google_authorized_user_adc_metadata_rejects_symlink_parent_directory() {
+        use std::os::unix::fs::symlink;
+        let temp = unique_temp_dir("adc-symlink-parent");
+        let real_parent = temp.join("real-parent");
+        let link_parent = temp.join("link-parent");
+        fs::create_dir_all(&real_parent).expect("create real parent");
+        symlink(&real_parent, &link_parent).expect("symlink parent");
+        let path = link_parent.join("application_default_credentials.json");
+        fs::write(
+            real_parent.join("application_default_credentials.json"),
+            r#"{"type":"authorized_user","client_id":"client","client_secret":"client-secret","refresh_token":"refresh-secret"}"#,
+        )
+        .expect("write target adc");
+
+        let err = google_authorized_user_adc_metadata_from_file(&path)
+            .expect_err("reject ADC symlink parent");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsafeTokenFilePermissions
+        ));
+    }
+
     #[test]
     fn rejects_non_authorized_user_adc_credentials() {
         let json = br#"{
@@ -2555,6 +2818,36 @@ mod tests {
             err,
             UpstreamOAuthError::UnsupportedGoogleAdcCredentialType
         ));
+    }
+
+    #[test]
+    fn google_authorized_user_adc_metadata_rejects_missing_type() {
+        let json = br#"{
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-secret"
+        }"#;
+
+        let err = google_authorized_user_adc_metadata_from_slice(json)
+            .expect_err("reject missing adc type");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsupportedGoogleAdcCredentialType
+        ));
+    }
+
+    #[test]
+    fn google_authorized_user_adc_metadata_returns_none_when_parent_directory_is_missing() {
+        let temp = unique_temp_dir("missing-parent");
+        let path = temp
+            .join("missing")
+            .join("application_default_credentials.json");
+
+        let metadata = google_authorized_user_adc_metadata_from_file(&path)
+            .expect("missing parent should behave like missing file");
+
+        assert!(metadata.is_none());
     }
 
     #[test]
