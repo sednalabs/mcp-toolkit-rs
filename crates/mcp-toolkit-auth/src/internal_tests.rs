@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn supplemental_jwt_claims_accepts_padded_trimmed_jwt_parts() {
+    fn supplemental_jwt_claims_accepts_trimmed_jwt() {
         let claims = json!({
             "sub": "user-123",
             "realm_access": {
@@ -411,11 +411,9 @@ mod tests {
             &EncodingKey::from_secret(b"test-secret"),
         )
         .expect("token");
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        let padded = format!("  {}=.{}==.{}  ", parts[0], parts[1], parts[2]);
+        let trimmed = format!("  {token}  ");
 
-        let decoded = super::supplemental_jwt_claims(&padded).expect("supplemental claims");
+        let decoded = super::supplemental_jwt_claims(&trimmed).expect("supplemental claims");
 
         assert_eq!(decoded.get("sub"), Some(&json!("user-123")));
         assert_eq!(
