@@ -606,8 +606,12 @@ pub fn google_authorized_user_adc_metadata_from_slice(
     bytes: &[u8],
 ) -> Result<GoogleAuthorizedUserAdcMetadata, UpstreamOAuthError> {
     let parsed: RawGoogleAuthorizedUserAdc = serde_json::from_slice(bytes)?;
-    let credential_type = required_field(parsed.credential_type, "type")?;
-    if credential_type.trim() != "authorized_user" {
+    let credential_type = parsed
+        .credential_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
+    if credential_type != "authorized_user" {
         return Err(UpstreamOAuthError::UnsupportedGoogleAdcCredentialType);
     }
 
@@ -1595,6 +1599,9 @@ fn maybe_read_secret_file_bytes(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
+        if !token_cache_path_exists(parent)? {
+            return Ok(None);
+        }
         ensure_token_cache_directory(parent)?;
     }
     if !token_cache_file_exists(path)? {
@@ -2811,6 +2818,36 @@ mod tests {
             err,
             UpstreamOAuthError::UnsupportedGoogleAdcCredentialType
         ));
+    }
+
+    #[test]
+    fn google_authorized_user_adc_metadata_rejects_missing_type() {
+        let json = br#"{
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-secret"
+        }"#;
+
+        let err = google_authorized_user_adc_metadata_from_slice(json)
+            .expect_err("reject missing adc type");
+
+        assert!(matches!(
+            err,
+            UpstreamOAuthError::UnsupportedGoogleAdcCredentialType
+        ));
+    }
+
+    #[test]
+    fn google_authorized_user_adc_metadata_returns_none_when_parent_directory_is_missing() {
+        let temp = unique_temp_dir("missing-parent");
+        let path = temp
+            .join("missing")
+            .join("application_default_credentials.json");
+
+        let metadata = google_authorized_user_adc_metadata_from_file(&path)
+            .expect("missing parent should behave like missing file");
+
+        assert!(metadata.is_none());
     }
 
     #[test]
