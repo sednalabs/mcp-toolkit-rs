@@ -43,12 +43,17 @@ For Google upstream APIs, the toolkit provides:
 - `google_authorized_user_adc_from_file` /
   `google_authorized_user_adc_from_slice` for server-specific gcloud
   authorized-user ADC files;
+- `save_google_authorized_user_adc` for storing a browser OAuth refresh token
+  as a Google authorized-user ADC file with the toolkit's owner-only file
+  safeguards;
 - `LoopbackOAuthOptions::google_login()` for normal browser login with offline
   access;
 - `LoopbackOAuthOptions::google_reauth()` for fresh consent when replacing a
   refresh token;
 - `start_loopback_authorization` for PKCE S256 authorization-code flow using a
-  local loopback callback;
+  local loopback callback. `PendingLoopbackAuthorization` can finish either
+  from the loopback listener or from a pasted loopback callback URL, which is
+  useful on SSH hosts where the browser cannot reach the remote loopback port;
 - `RefreshTokenFileStore` for refresh-token cache files with Unix owner-only
   permissions and cross-platform symlink/non-file guards, including symlinked
   ancestor directories;
@@ -92,6 +97,12 @@ waits for completion. Servers can use that in two low-friction ways:
 For SSH or remote hosts, bind the callback to loopback on the remote host and
 use an SSH local port forward from the browser-capable machine. Prefer a fresh
 port for retry after state mismatch, stale tabs, or callback refusal.
+
+When a port forward is not available, a CLI can ask the operator to copy the
+final `http://127.0.0.1:...` browser redirect URL from the address bar and pass
+it to `PendingLoopbackAuthorization::finish_with_callback_url`. Treat that URL
+as secret-bearing because it contains an authorization code. Do not log it or
+return it from MCP tools.
 
 ## Token Handling Rules
 
