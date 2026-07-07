@@ -1446,7 +1446,10 @@ fn token_cache_path_exists(path: &Path) -> Result<bool, UpstreamOAuthError> {
 
 fn write_secret_json_file(path: &Path, bytes: &[u8]) -> Result<(), UpstreamOAuthError> {
     ensure_token_cache_ancestors_safe(path)?;
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         let parent_preexisting = token_cache_path_exists(parent)?;
         fs::create_dir_all(parent).map_err(|err| io_error("create token cache directory", err))?;
         if !parent_preexisting {
@@ -2450,7 +2453,9 @@ mod tests {
     #[test]
     fn saves_google_authorized_user_adc_with_quota_project() {
         let temp = unique_temp_dir("google-adc-save");
-        let path = temp.join("app").join("application_default_credentials.json");
+        let path = temp
+            .join("app")
+            .join("application_default_credentials.json");
         let client = google_oauth_client_from_slice(
             br#"{
                 "installed": {
@@ -3848,11 +3853,17 @@ mod tests {
         ));
     }
 
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "mcp-toolkit-upstream-oauth-{label}-{}",
-            rand::random::<u64>()
-        ));
+    #[track_caller]
+    fn unique_temp_dir(_label: &str) -> PathBuf {
+        let caller = std::panic::Location::caller();
+        let path = PathBuf::from("target")
+            .join("mcp-toolkit-upstream-oauth-tests")
+            .join(format!(
+                "case-{}-{}.{}",
+                caller.line(),
+                std::process::id(),
+                rand::random::<u64>()
+            ));
         fs::create_dir_all(&path).expect("create temp dir");
         #[cfg(unix)]
         {
