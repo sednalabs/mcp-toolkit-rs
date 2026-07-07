@@ -65,7 +65,7 @@ uploads `policy-kernel-consumption-<run_id>` with:
 
 - `manifest.json`
 - `sql_policy_core_vs_kernel_report.json`
-- optional downloaded policy-kernel validation artifacts
+- optional downloaded policy-kernel validation artifacts with SHA-256 values
 
 Public policy-kernel repositories can be consumed by passing
 `policy_kernel_repository` to `workflow_dispatch` without an extra secret.
@@ -87,3 +87,8 @@ gh workflow run policy-kernel-consumption.yml \
 
 To include a policy-kernel validation artifact as provenance, also pass
 `policy_kernel_run_id` and, optionally, `policy_kernel_artifact_name`.
+
+For server adoption claims, combine this hosted manifest with
+`docs/policy-kernel-provenance-acceptance.md`. The manifest proves toolkit
+consumption and artifact identity; the server still owns request mapping,
+runtime placement, and deny-before-mutation evidence.
