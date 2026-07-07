@@ -67,9 +67,58 @@ impl ToolErrorPayload {
     }
 }
 
+/// Classifies the result of an idempotent mutation request.
+///
+/// Use this enum when a tool accepts add, remove, replace, or ensure-style
+/// writes and needs to report whether it changed state, previewed a change, or
+/// found the target already in the requested state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationOutcome {
+    Added,
+    Removed,
+    Updated,
+    WouldAdd,
+    WouldRemove,
+    WouldUpdate,
+    AlreadyBound,
+    AlreadyUnbound,
+    AlreadyMatch,
+}
+
+impl MutationOutcome {
+    /// Returns the stable JSON string for this outcome.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Removed => "removed",
+            Self::Updated => "updated",
+            Self::WouldAdd => "would_add",
+            Self::WouldRemove => "would_remove",
+            Self::WouldUpdate => "would_update",
+            Self::AlreadyBound => "already_bound",
+            Self::AlreadyUnbound => "already_unbound",
+            Self::AlreadyMatch => "already_match",
+        }
+    }
+
+    /// Returns true when the outcome represents an applied mutation.
+    #[must_use]
+    pub const fn changed(self) -> bool {
+        matches!(self, Self::Added | Self::Removed | Self::Updated)
+    }
+
+    /// Returns true when the outcome represents a dry-run mutation preview.
+    #[must_use]
+    pub const fn is_preview(self) -> bool {
+        matches!(self, Self::WouldAdd | Self::WouldRemove | Self::WouldUpdate)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ToolErrorPayload;
+    use super::{MutationOutcome, ToolErrorPayload};
     use serde_json::json;
 
     #[test]
@@ -104,5 +153,22 @@ mod tests {
                 "scope": "keycloak-admin:clients:read"
             })
         );
+    }
+
+    #[test]
+    fn mutation_outcome_serializes_stable_snake_case_labels() {
+        assert_eq!(
+            serde_json::to_value(MutationOutcome::WouldUpdate).expect("serialize outcome"),
+            json!("would_update")
+        );
+        assert_eq!(MutationOutcome::AlreadyBound.as_str(), "already_bound");
+    }
+
+    #[test]
+    fn mutation_outcome_classifies_applied_preview_and_noop_states() {
+        assert!(MutationOutcome::Added.changed());
+        assert!(!MutationOutcome::WouldAdd.changed());
+        assert!(MutationOutcome::WouldRemove.is_preview());
+        assert!(!MutationOutcome::AlreadyMatch.is_preview());
     }
 }
