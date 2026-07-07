@@ -22,7 +22,7 @@
 //! ## References
 //! * [MCP Authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization.md)
 
-use std::sync::Arc;
+use std::{error::Error, fmt, sync::Arc};
 
 use mcp_toolkit_policy_core::{
     Decision, DecisionCode, SqlRestrictedPolicyInput, SQL_POLICY_CONTRACT_VERSION,
@@ -92,7 +92,177 @@ impl PolicyAuthorityDecision {
             required_scopes: decision.required_scopes.clone(),
         }
     }
+
+    /// Validates that this decision carries the provenance required by a server.
+    ///
+    /// # Errors
+    /// Returns [`PolicyProvenanceError`] when the decision source, runtime mode,
+    /// or policy contract version does not satisfy the requirement.
+    ///
+    /// # Security
+    /// Use this check at service startup or policy-layer installation time. It
+    /// proves only that a decision envelope names the expected policy metadata;
+    /// it does not prove service middleware ordering, token verification, or
+    /// mutation rollback behavior.
+    pub fn validate_provenance(
+        &self,
+        requirement: &PolicyProvenanceRequirement,
+    ) -> Result<(), PolicyProvenanceError> {
+        requirement.validate(self)
+    }
 }
+
+/// Server-side requirement for policy decision provenance.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyProvenanceRequirement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_decision_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_decision_source_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_runtime_modes: Vec<PolicyRuntimeMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_policy_contract_version: Option<String>,
+}
+
+impl PolicyProvenanceRequirement {
+    /// Creates an empty requirement.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Requires an exact decision source.
+    pub fn decision_source(mut self, source: impl Into<String>) -> Self {
+        self.expected_decision_source = Some(source.into());
+        self
+    }
+
+    /// Requires a decision source prefix.
+    pub fn decision_source_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.expected_decision_source_prefix = Some(prefix.into());
+        self
+    }
+
+    /// Allows one runtime mode.
+    pub fn allow_runtime_mode(mut self, mode: PolicyRuntimeMode) -> Self {
+        if !self.allowed_runtime_modes.contains(&mode) {
+            self.allowed_runtime_modes.push(mode);
+        }
+        self
+    }
+
+    /// Requires one policy contract version.
+    pub fn policy_contract_version(mut self, version: impl Into<String>) -> Self {
+        self.expected_policy_contract_version = Some(version.into());
+        self
+    }
+
+    /// Validates a decision against this provenance requirement.
+    ///
+    /// # Errors
+    /// Returns [`PolicyProvenanceError`] when any configured requirement is not
+    /// satisfied by the decision envelope.
+    ///
+    /// # Security
+    /// This helper checks decision metadata only. Consumers still own the
+    /// surrounding request mapper, authentication edge, and deny-before-mutation
+    /// evidence for their service.
+    pub fn validate(
+        &self,
+        decision: &PolicyAuthorityDecision,
+    ) -> Result<(), PolicyProvenanceError> {
+        if let Some(expected) = self.expected_decision_source.as_deref() {
+            if decision.decision_source != expected {
+                return Err(PolicyProvenanceError::DecisionSourceMismatch {
+                    expected: expected.to_string(),
+                    actual: decision.decision_source.clone(),
+                });
+            }
+        }
+
+        if let Some(prefix) = self.expected_decision_source_prefix.as_deref() {
+            if !decision.decision_source.starts_with(prefix) {
+                return Err(PolicyProvenanceError::DecisionSourcePrefixMismatch {
+                    expected_prefix: prefix.to_string(),
+                    actual: decision.decision_source.clone(),
+                });
+            }
+        }
+
+        if !self.allowed_runtime_modes.is_empty()
+            && !self.allowed_runtime_modes.contains(&decision.runtime_mode)
+        {
+            return Err(PolicyProvenanceError::RuntimeModeNotAllowed {
+                allowed: self.allowed_runtime_modes.clone(),
+                actual: decision.runtime_mode,
+            });
+        }
+
+        if let Some(expected) = self.expected_policy_contract_version.as_deref() {
+            let Some(actual) = decision.policy_contract_version.as_deref() else {
+                return Err(PolicyProvenanceError::PolicyContractVersionMissing {
+                    expected: expected.to_string(),
+                });
+            };
+            if actual != expected {
+                return Err(PolicyProvenanceError::PolicyContractVersionMismatch {
+                    expected: expected.to_string(),
+                    actual: actual.to_string(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Provenance validation failure for policy decision envelopes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyProvenanceError {
+    DecisionSourceMismatch { expected: String, actual: String },
+    DecisionSourcePrefixMismatch {
+        expected_prefix: String,
+        actual: String,
+    },
+    RuntimeModeNotAllowed {
+        allowed: Vec<PolicyRuntimeMode>,
+        actual: PolicyRuntimeMode,
+    },
+    PolicyContractVersionMissing { expected: String },
+    PolicyContractVersionMismatch { expected: String, actual: String },
+}
+
+impl fmt::Display for PolicyProvenanceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DecisionSourceMismatch { expected, actual } => write!(
+                formatter,
+                "decision source mismatch: expected '{expected}', got '{actual}'"
+            ),
+            Self::DecisionSourcePrefixMismatch {
+                expected_prefix,
+                actual,
+            } => write!(
+                formatter,
+                "decision source prefix mismatch: expected prefix '{expected_prefix}', got '{actual}'"
+            ),
+            Self::RuntimeModeNotAllowed { allowed, actual } => write!(
+                formatter,
+                "runtime mode '{actual:?}' is not in allowed set {allowed:?}"
+            ),
+            Self::PolicyContractVersionMissing { expected } => write!(
+                formatter,
+                "policy contract version missing: expected '{expected}'"
+            ),
+            Self::PolicyContractVersionMismatch { expected, actual } => write!(
+                formatter,
+                "policy contract version mismatch: expected '{expected}', got '{actual}'"
+            ),
+        }
+    }
+}
+
+impl Error for PolicyProvenanceError {}
 
 /// Interface for request-to-decision policy evaluation.
 pub trait PolicyAuthority<Request>: Send + Sync {
@@ -411,7 +581,7 @@ mod tests {
         das_observability_policy_authority, das_query_policy_authority, gateway_policy_authority,
         hello_server_policy_authority, sql_restricted_policy_authority, ClosurePolicyAuthority,
         HelloPolicyRequest, HelloServerProfile, KernelPolicyAuthority, PolicyAuthority,
-        PolicyRuntimeMode,
+        PolicyProvenanceError, PolicyProvenanceRequirement, PolicyRuntimeMode,
     };
     use mcp_toolkit_policy_core::{
         Decision, DecisionCode, SqlRestrictedPolicyInput, SQL_POLICY_CONTRACT_VERSION,
@@ -444,6 +614,101 @@ mod tests {
             Some("sql-restricted/v1")
         );
         assert!(decision.required_scopes.is_none());
+    }
+
+    #[test]
+    fn provenance_requirement_accepts_matching_decision_metadata() {
+        let authority = sql_restricted_policy_authority(PolicyRuntimeMode::Rust);
+        let decision = authority.evaluate(&SqlRestrictedPolicyInput {
+            policy_contract_version: SQL_POLICY_CONTRACT_VERSION.to_string(),
+            sql: "select 1".to_string(),
+        });
+        let requirement = PolicyProvenanceRequirement::new()
+            .decision_source_prefix("mcp_toolkit_policy_runtime.sql_restricted")
+            .allow_runtime_mode(PolicyRuntimeMode::Rust)
+            .policy_contract_version(SQL_POLICY_CONTRACT_VERSION);
+
+        decision
+            .validate_provenance(&requirement)
+            .expect("matching provenance should satisfy the acceptance hook");
+    }
+
+    #[test]
+    fn provenance_requirement_rejects_wrong_decision_source() {
+        let decision = PolicyAuthorityDecision {
+            allow: true,
+            code: None,
+            reason: None,
+            decision_source: "unit.other".to_string(),
+            runtime_mode: PolicyRuntimeMode::Rust,
+            policy_contract_version: Some("unit/v1".to_string()),
+            required_scopes: None,
+        };
+        let requirement = PolicyProvenanceRequirement::new().decision_source("unit.policy");
+
+        let err = decision
+            .validate_provenance(&requirement)
+            .expect_err("wrong source must be rejected");
+
+        assert_eq!(
+            err,
+            PolicyProvenanceError::DecisionSourceMismatch {
+                expected: "unit.policy".to_string(),
+                actual: "unit.other".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn provenance_requirement_rejects_unallowed_runtime_mode() {
+        let decision = PolicyAuthorityDecision {
+            allow: true,
+            code: None,
+            reason: None,
+            decision_source: "unit.policy.spark".to_string(),
+            runtime_mode: PolicyRuntimeMode::SparkPrefer,
+            policy_contract_version: Some("unit/v1".to_string()),
+            required_scopes: None,
+        };
+        let requirement =
+            PolicyProvenanceRequirement::new().allow_runtime_mode(PolicyRuntimeMode::Rust);
+
+        let err = decision
+            .validate_provenance(&requirement)
+            .expect_err("unallowed runtime mode must be rejected");
+
+        assert_eq!(
+            err,
+            PolicyProvenanceError::RuntimeModeNotAllowed {
+                allowed: vec![PolicyRuntimeMode::Rust],
+                actual: PolicyRuntimeMode::SparkPrefer
+            }
+        );
+    }
+
+    #[test]
+    fn provenance_requirement_rejects_missing_contract_version() {
+        let decision = PolicyAuthorityDecision {
+            allow: true,
+            code: None,
+            reason: None,
+            decision_source: "unit.policy".to_string(),
+            runtime_mode: PolicyRuntimeMode::Rust,
+            policy_contract_version: None,
+            required_scopes: None,
+        };
+        let requirement = PolicyProvenanceRequirement::new().policy_contract_version("unit/v1");
+
+        let err = decision
+            .validate_provenance(&requirement)
+            .expect_err("missing contract version must be rejected");
+
+        assert_eq!(
+            err,
+            PolicyProvenanceError::PolicyContractVersionMissing {
+                expected: "unit/v1".to_string()
+            }
+        );
     }
 
     #[test]

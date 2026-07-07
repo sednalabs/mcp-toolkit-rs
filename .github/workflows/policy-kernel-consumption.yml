@@ -7,6 +7,8 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/mcp-toolkit-policy-*/**"
+      - "docs/auth-control-plane-policy.md"
+      - "docs/policy-kernel-provenance-acceptance.md"
       - "docs/sql-policy-kernel-conformance.md"
       - "scripts/sql_policy_kernel_conformance.sh"
   push:
@@ -18,6 +20,8 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/mcp-toolkit-policy-*/**"
+      - "docs/auth-control-plane-policy.md"
+      - "docs/policy-kernel-provenance-acceptance.md"
       - "docs/sql-policy-kernel-conformance.md"
       - "scripts/sql_policy_kernel_conformance.sh"
   workflow_dispatch:
@@ -275,6 +279,7 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
+          import hashlib
           import json
           import os
           from pathlib import Path
@@ -285,10 +290,20 @@ jobs:
           conformance_path = report_dir / "sql_policy_core_vs_kernel_report.json"
 
           conformance = json.loads(conformance_path.read_text(encoding="utf-8"))
+          def sha256_file(path):
+              digest = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
           downloaded_artifacts = []
           if artifact_dir.exists():
               downloaded_artifacts = [
-                  str(path.relative_to(workspace))
+                  {
+                      "path": str(path.relative_to(workspace)),
+                      "sha256": sha256_file(path),
+                  }
                   for path in sorted(artifact_dir.rglob("*"))
                   if path.is_file()
               ]

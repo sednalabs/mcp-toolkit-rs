@@ -55,5 +55,5 @@ pub use policy_authority::{
     das_observability_policy_authority, das_query_policy_authority, gateway_policy_authority,
     hello_server_policy_authority, sql_restricted_policy_authority, ClosurePolicyAuthority,
     HelloPolicyRequest, HelloServerProfile, PolicyAuthority, PolicyAuthorityDecision,
-    PolicyRuntimeMode, SharedPolicyAuthority,
+    PolicyProvenanceError, PolicyProvenanceRequirement, PolicyRuntimeMode, SharedPolicyAuthority,
 };

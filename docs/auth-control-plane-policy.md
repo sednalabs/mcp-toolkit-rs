@@ -9,6 +9,9 @@ The helper is intentionally narrow:
   `AuthSurfaceContext` into an `auth-control-plane/v1` envelope.
 - `AuthControlPlanePolicyAuthority` evaluates that envelope with the embedded
   policy kernel and emits `PolicyAuthorityDecision` provenance.
+- `PolicyProvenanceRequirement` validates that emitted decisions carry the
+  expected `decision_source`, `runtime_mode`, and `policy_contract_version`
+  before a server treats them as release evidence.
 - `PolicyAuthorityLayer` attaches allow decisions to request extensions and deny
   decisions to response extensions.
 
@@ -46,3 +49,8 @@ Server-specific business rules, token exchange execution, downstream client
 calls, and product-specific allowlists stay in service crates. The toolkit owns
 the shared request projection, fail-closed deny translation, and provenance
 plumbing.
+
+Use `docs/policy-kernel-provenance-acceptance.md` before claiming
+policy-kernel adoption for a server. It names the runtime metadata, hosted
+manifest, artifact identity, and deny-before-mutation evidence that consumers
+must preserve.
