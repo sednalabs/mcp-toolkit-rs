@@ -613,10 +613,7 @@ pub fn google_authorized_user_adc_metadata_from_slice(
 
     Ok(GoogleAuthorizedUserAdcMetadata {
         credential_type: "authorized_user".to_string(),
-        client_id_present: parsed
-            .client_id
-            .as_deref()
-            .is_some_and(has_non_empty_value),
+        client_id_present: parsed.client_id.as_deref().is_some_and(has_non_empty_value),
         client_secret_present: parsed
             .client_secret
             .as_deref()
