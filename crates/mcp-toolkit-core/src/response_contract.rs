@@ -112,10 +112,7 @@ impl MutationOutcome {
     /// Returns true when the outcome represents a dry-run mutation preview.
     #[must_use]
     pub const fn is_preview(self) -> bool {
-        matches!(
-            self,
-            Self::WouldAdd | Self::WouldRemove | Self::WouldUpdate
-        )
+        matches!(self, Self::WouldAdd | Self::WouldRemove | Self::WouldUpdate)
     }
 }
 
