@@ -37,3 +37,10 @@ pub mod query_evidence;
 pub mod rmcp_models;
 pub mod tool_inventory;
 pub mod tool_schema;
+
+/// Re-export the pinned RMCP SDK used by toolkit helpers.
+///
+/// Downstream MCP servers can import `mcp_toolkit_core::rmcp` to keep model
+/// types aligned with toolkit helper return values instead of independently
+/// drifting to a different RMCP version.
+pub use rmcp;

@@ -9,7 +9,7 @@ use mcp_toolkit::rmcp::{
     self,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolRequestParams, CallToolResult, Content, ListToolsResult, ServerCapabilities,
+        CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, ServerCapabilities,
         ServerInfo, Tool,
     },
     schemars,
@@ -321,7 +321,7 @@ impl ServerHandler for HostedHttpServer {
             )
             .map_err(profile_error)?;
         if !decision.allowed() {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 decision.caller_message(),
             )]));
         }
