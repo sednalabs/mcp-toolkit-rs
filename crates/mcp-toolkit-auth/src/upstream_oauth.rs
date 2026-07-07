@@ -354,6 +354,18 @@ struct RawGoogleAuthorizedUserAdc {
     quota_project_id: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct WritableGoogleAuthorizedUserAdc {
+    #[serde(rename = "type")]
+    credential_type: &'static str,
+    client_id: String,
+    client_secret: String,
+    refresh_token: String,
+    token_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quota_project_id: Option<String>,
+}
+
 /// Google authorized-user ADC metadata and refresh configuration.
 #[derive(Clone)]
 pub struct GoogleAuthorizedUserAdc {
@@ -519,6 +531,48 @@ pub fn google_authorized_user_adc_from_slice(
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
     })
+}
+
+/// Saves a Google authorized-user ADC file from a browser OAuth token response.
+///
+/// # Errors
+/// Returns `MissingRefreshToken` if the token response has no refresh token,
+/// `MissingField("client_secret")` if the OAuth client file lacks a client
+/// secret, or I/O/permission errors while writing the credential file.
+///
+/// # Security
+/// Writes through the same owner-only, non-symlink file path checks used by the
+/// refresh-token cache. The generated JSON contains a refresh token and client
+/// secret; callers must keep the path outside repositories and public sync
+/// folders.
+pub fn save_google_authorized_user_adc(
+    path: impl AsRef<Path>,
+    client: &OAuthClientConfig,
+    token_set: OAuthTokenSet,
+    quota_project_id: Option<&str>,
+) -> Result<(), UpstreamOAuthError> {
+    let refresh_token = token_set
+        .refresh_token
+        .filter(|token| !token.is_empty())
+        .ok_or(UpstreamOAuthError::MissingRefreshToken)?;
+    let client_secret = client
+        .client_secret
+        .as_ref()
+        .filter(|secret| !secret.is_empty())
+        .ok_or(UpstreamOAuthError::MissingField("client_secret"))?;
+    let raw = WritableGoogleAuthorizedUserAdc {
+        credential_type: "authorized_user",
+        client_id: client.client_id.clone(),
+        client_secret: client_secret.expose_secret().to_string(),
+        refresh_token: refresh_token.expose_secret().to_string(),
+        token_uri: client.token_endpoint.clone(),
+        quota_project_id: quota_project_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    };
+    let bytes = serde_json::to_vec_pretty(&raw)?;
+    write_secret_json_file(path.as_ref(), &bytes)
 }
 
 fn required_field(
@@ -1260,23 +1314,6 @@ impl RefreshTokenFileStore {
         if token.refresh_token.is_empty() {
             return Err(UpstreamOAuthError::MissingRefreshToken);
         }
-        ensure_token_cache_ancestors_safe(&self.path)?;
-        if let Some(parent) = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            let parent_preexisting = token_cache_path_exists(parent)?;
-            fs::create_dir_all(parent)
-                .map_err(|err| io_error("create token cache directory", err))?;
-            if !parent_preexisting {
-                harden_token_cache_directory(parent)?;
-            }
-            ensure_token_cache_directory(parent)?;
-        }
-        if token_cache_file_exists(&self.path)? {
-            let _ = open_token_file_for_read(&self.path)?;
-        }
         let raw = StoredRefreshTokenFile {
             version: 1,
             provider: token.provider.clone(),
@@ -1287,23 +1324,7 @@ impl RefreshTokenFileStore {
             refresh_token_expires_at_unix_seconds: token.refresh_token_expires_at_unix_seconds,
         };
         let bytes = serde_json::to_vec_pretty(&raw)?;
-        let temp_path = temporary_token_cache_path(&self.path);
-        let mut file = open_token_file_for_write(&temp_path)?;
-        let write_result = file
-            .write_all(&bytes)
-            .and_then(|()| file.write_all(b"\n"))
-            .and_then(|()| file.sync_all())
-            .map_err(|err| io_error("write token cache", err));
-        if let Err(err) = write_result {
-            let _ = fs::remove_file(&temp_path);
-            return Err(err);
-        }
-        drop(file);
-        if let Err(err) = fs::rename(&temp_path, &self.path) {
-            let _ = fs::remove_file(&temp_path);
-            return Err(io_error("rename token cache", err));
-        }
-        Ok(())
+        write_secret_json_file(&self.path, &bytes)
     }
 
     /// Removes the token cache if it exists.
@@ -1421,6 +1442,41 @@ fn token_cache_path_exists(path: &Path) -> Result<bool, UpstreamOAuthError> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(io_error("stat token cache directory", err)),
     }
+}
+
+fn write_secret_json_file(path: &Path, bytes: &[u8]) -> Result<(), UpstreamOAuthError> {
+    ensure_token_cache_ancestors_safe(path)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        let parent_preexisting = token_cache_path_exists(parent)?;
+        fs::create_dir_all(parent).map_err(|err| io_error("create token cache directory", err))?;
+        if !parent_preexisting {
+            harden_token_cache_directory(parent)?;
+        }
+        ensure_token_cache_directory(parent)?;
+    }
+    if token_cache_file_exists(path)? {
+        let _ = open_token_file_for_read(path)?;
+    }
+    let temp_path = temporary_token_cache_path(path);
+    let mut file = open_token_file_for_write(&temp_path)?;
+    let write_result = file
+        .write_all(bytes)
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.sync_all())
+        .map_err(|err| io_error("write token cache", err));
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    drop(file);
+    if let Err(err) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(io_error("rename token cache", err));
+    }
+    Ok(())
 }
 
 fn ensure_token_cache_ancestors_safe(path: &Path) -> Result<(), UpstreamOAuthError> {
@@ -1858,6 +1914,35 @@ impl PendingLoopbackAuthorization {
     /// Validates the callback `state` before exchanging the code.
     pub async fn finish(self) -> Result<OAuthTokenSet, UpstreamOAuthError> {
         let callback = self.wait_for_callback().await?;
+        self.finish_callback(callback).await
+    }
+
+    /// Exchanges a pasted loopback callback URL for tokens.
+    ///
+    /// Use this for SSH or headless environments where the browser cannot reach
+    /// the loopback listener. The operator opens `authorization_url`, copies the
+    /// final `http://127.0.0.1:...` redirect URL from the browser address bar,
+    /// and the caller passes that URL here.
+    ///
+    /// # Errors
+    /// Returns URL parsing, callback, state, HTTP, or token endpoint errors.
+    ///
+    /// # Security
+    /// Validates the callback `state` before exchanging the authorization code.
+    /// The pasted URL contains a secret authorization code and must not be
+    /// logged.
+    pub async fn finish_with_callback_url(
+        self,
+        callback_url: &str,
+    ) -> Result<OAuthTokenSet, UpstreamOAuthError> {
+        let callback = parse_loopback_callback_url(callback_url)?;
+        self.finish_callback(callback).await
+    }
+
+    async fn finish_callback(
+        self,
+        callback: LoopbackCallback,
+    ) -> Result<OAuthTokenSet, UpstreamOAuthError> {
         if callback.state.as_deref() != Some(self.state.secret()) {
             return Err(UpstreamOAuthError::StateMismatch);
         }
@@ -2180,6 +2265,37 @@ fn parse_loopback_request(request: &str) -> Result<LoopbackCallback, UpstreamOAu
     Ok(callback)
 }
 
+fn parse_loopback_callback_url(raw: &str) -> Result<LoopbackCallback, UpstreamOAuthError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(UpstreamOAuthError::CallbackMissingCode);
+    }
+    let url = Url::parse(trimmed).map_err(|_| UpstreamOAuthError::InvalidUrl {
+        field: "loopback_callback",
+        value: "<redacted>".to_string(),
+    })?;
+    if url.scheme() != "http" || !url_host_is_loopback(&url) {
+        return Err(UpstreamOAuthError::InvalidUrl {
+            field: "loopback_callback",
+            value: "<redacted>".to_string(),
+        });
+    }
+    let mut callback = LoopbackCallback {
+        code: None,
+        state: None,
+        error: None,
+    };
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "code" => callback.code = Some(value.into_owned()),
+            "state" => callback.state = Some(value.into_owned()),
+            "error" => callback.error = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    Ok(callback)
+}
+
 async fn write_loopback_response(
     stream: &mut tokio::net::TcpStream,
     body: &str,
@@ -2332,6 +2448,78 @@ mod tests {
         let debug = format!("{adc:?}");
         assert!(!debug.contains("client-secret"));
         assert!(!debug.contains("refresh-secret"));
+    }
+
+    #[test]
+    fn saves_google_authorized_user_adc_with_quota_project() {
+        let temp = unique_temp_dir("google-adc-save");
+        let path = temp
+            .join("app")
+            .join("application_default_credentials.json");
+        let client = google_oauth_client_from_slice(
+            br#"{
+                "installed": {
+                    "client_id": "client-id.apps.googleusercontent.com",
+                    "client_secret": "client-secret",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": ["http://127.0.0.1"]
+                }
+            }"#,
+        )
+        .expect("client");
+        let token_set = OAuthTokenSet {
+            access_token: Some(SecretString::new("access-secret")),
+            refresh_token: Some(SecretString::new("refresh-secret")),
+            expires_in: Some(3600),
+            scope: Some("scope-a".to_string()),
+            token_type: Some("Bearer".to_string()),
+            refresh_token_expires_in: None,
+        };
+
+        save_google_authorized_user_adc(&path, &client, token_set, Some(" quota-project "))
+            .expect("save adc");
+        let parsed = google_authorized_user_adc_from_file(&path, vec!["scope-a".to_string()])
+            .expect("parse saved adc");
+
+        assert_eq!(parsed.client_id(), "client-id.apps.googleusercontent.com");
+        assert_eq!(parsed.quota_project_id(), Some("quota-project"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn save_google_authorized_user_adc_requires_refresh_token() {
+        let temp = unique_temp_dir("google-adc-missing-refresh");
+        let path = temp.join("application_default_credentials.json");
+        let client = google_oauth_client_from_slice(
+            br#"{
+                "installed": {
+                    "client_id": "client-id.apps.googleusercontent.com",
+                    "client_secret": "client-secret",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token"
+                }
+            }"#,
+        )
+        .expect("client");
+        let token_set = OAuthTokenSet {
+            access_token: Some(SecretString::new("access-secret")),
+            refresh_token: None,
+            expires_in: Some(3600),
+            scope: Some("scope-a".to_string()),
+            token_type: Some("Bearer".to_string()),
+            refresh_token_expires_in: None,
+        };
+
+        let err = save_google_authorized_user_adc(&path, &client, token_set, None)
+            .expect_err("missing refresh token");
+
+        assert!(matches!(err, UpstreamOAuthError::MissingRefreshToken));
     }
 
     #[test]
@@ -3351,6 +3539,78 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn loopback_authorization_finishes_with_pasted_callback_url() {
+        let (endpoint, _) = spawn_token_endpoint();
+        let client = OAuthClientConfig::new_allow_insecure_loopback(
+            "client-id",
+            None,
+            GOOGLE_AUTH_ENDPOINT,
+            endpoint,
+        )
+        .expect("client config");
+        let pending = start_loopback_authorization(
+            client,
+            vec!["scope-a".to_string()],
+            LoopbackOAuthOptions::default(),
+        )
+        .await
+        .expect("start auth");
+        let callback_url = format!(
+            "{}?code=auth-code&state={}",
+            pending.redirect_uri(),
+            pending.state.secret()
+        );
+
+        let token_set = pending
+            .finish_with_callback_url(&callback_url)
+            .await
+            .expect("finish pasted callback");
+
+        assert_eq!(
+            token_set
+                .access_token
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("access-secret")
+        );
+        assert_eq!(
+            token_set
+                .refresh_token
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("refresh-secret")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pasted_loopback_callback_rejects_wrong_state() {
+        let (endpoint, token_requests) = spawn_token_endpoint();
+        let client = OAuthClientConfig::new_allow_insecure_loopback(
+            "client-id",
+            None,
+            GOOGLE_AUTH_ENDPOINT,
+            endpoint,
+        )
+        .expect("client config");
+        let pending = start_loopback_authorization(
+            client,
+            vec!["scope-a".to_string()],
+            LoopbackOAuthOptions::default(),
+        )
+        .await
+        .expect("start auth");
+        let callback_url = format!("{}?code=auth-code&state=wrong", pending.redirect_uri());
+
+        let err = pending
+            .finish_with_callback_url(&callback_url)
+            .await
+            .expect_err("wrong state rejected");
+
+        assert!(matches!(err, UpstreamOAuthError::StateMismatch));
+        assert_eq!(token_requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn loopback_callback_with_wrong_state_gets_error_page_and_waits_for_valid_callback() {
         let (endpoint, token_requests) = spawn_token_endpoint();
         let client = OAuthClientConfig::new_allow_insecure_loopback(
@@ -3593,11 +3853,17 @@ mod tests {
         ));
     }
 
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "mcp-toolkit-upstream-oauth-{label}-{}",
-            rand::random::<u64>()
-        ));
+    #[track_caller]
+    fn unique_temp_dir(_label: &str) -> PathBuf {
+        let caller = std::panic::Location::caller();
+        let path = PathBuf::from("target")
+            .join("mcp-toolkit-upstream-oauth-tests")
+            .join(format!(
+                "case-{}-{}.{}",
+                caller.line(),
+                std::process::id(),
+                rand::random::<u64>()
+            ));
         fs::create_dir_all(&path).expect("create temp dir");
         #[cfg(unix)]
         {
