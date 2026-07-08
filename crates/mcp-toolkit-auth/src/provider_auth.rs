@@ -697,14 +697,15 @@ impl GoogleProviderAuthConfig {
     ) -> GoogleProviderAuthLoginCommand {
         let client_id_file_placeholder = "/path/to/client_id.json";
         let command = match options.client_id_file.as_deref() {
-            Some(client_id_file) => self.adc_login_command_with_client_id_file(
-                options.headless,
-                client_id_file,
-            ),
+            Some(client_id_file) => {
+                self.adc_login_command_with_client_id_file(options.headless, client_id_file)
+            }
             None => self.adc_login_command(options.headless),
         };
         let headless_command = match options.client_id_file.as_deref() {
-            Some(client_id_file) => self.adc_login_command_with_client_id_file(true, client_id_file),
+            Some(client_id_file) => {
+                self.adc_login_command_with_client_id_file(true, client_id_file)
+            }
             None => self.adc_login_command(true),
         };
         let client_id_file_command =
@@ -1448,7 +1449,9 @@ mod tests {
             .with_client_id_file(Some("/tmp/client id.json".to_string()))
             .with_quota_project(Some("project-id".to_string()))
             .with_cloudsdk_config(Some("/tmp/gsc adc".to_string()))
-            .with_credential_file(Some("/tmp/gsc adc/application_default_credentials.json".to_string()))
+            .with_credential_file(Some(
+                "/tmp/gsc adc/application_default_credentials.json".to_string(),
+            ))
             .with_operator_scope_requested(false)
             .with_notes(vec!["No token or client secret is returned.".to_string()])
             .with_after_login("Restart the MCP client, then run auth_status.".to_string()),
@@ -1488,31 +1491,26 @@ mod tests {
             ]
         );
         assert_eq!(
-            object.get("command").and_then(|value| value.as_array()).map(Vec::len),
+            object
+                .get("command")
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
             Some(8)
         );
-        assert!(
-            object
-                .get("shell_command")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value.starts_with("CLOUDSDK_CONFIG='/tmp/gsc adc' gcloud auth"))
-        );
-        assert!(
-            object
-                .get("quota_project_command")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value.contains("set-quota-project YOUR_PROJECT"))
-        );
-        assert!(
-            object
-                .get("follow_up_commands")
-                .and_then(|value| value.as_array())
-                .is_some_and(|commands| commands
-                    .iter()
-                    .any(|value| value
-                        .as_str()
-                        .is_some_and(|command| command.contains("set-quota-project project-id"))))
-        );
+        assert!(object
+            .get("shell_command")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.starts_with("CLOUDSDK_CONFIG='/tmp/gsc adc' gcloud auth")));
+        assert!(object
+            .get("quota_project_command")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.contains("set-quota-project YOUR_PROJECT")));
+        assert!(object
+            .get("follow_up_commands")
+            .and_then(|value| value.as_array())
+            .is_some_and(|commands| commands.iter().any(|value| value
+                .as_str()
+                .is_some_and(|command| command.contains("set-quota-project project-id")))));
     }
 
     #[test]
