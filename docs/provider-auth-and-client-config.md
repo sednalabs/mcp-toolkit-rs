@@ -172,6 +172,12 @@ scopes and diagnostics consistent:
 - `GoogleProviderAuthConfig::adc_setup_plan()` returns a secret-safe,
   serializable command plan for browser login, headless login, client-id-file
   fallback, ADC quota project, and one-or-more API enablement hints;
+- `GoogleProviderAuthConfig::adc_login_command_contract()` returns the
+  canonical MCP auth-login helper shape: argv fields for execution, shell
+  fields for copy/paste use, quota/API follow-up commands, selected ADC paths,
+  scopes, and operator notes;
+- `ProviderAuthCheckStatus` gives status tools a shared secret-safe shape for
+  `token_check`, `access_check`, and other probe results;
 - `ProviderAuthCommand` carries both argv and a copyable shell rendering so
   MCP auth tools can avoid hand-rolled command strings;
 - `classify_google_provider_auth_error()` maps common Google failures into

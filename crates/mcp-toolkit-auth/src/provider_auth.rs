@@ -21,7 +21,10 @@
 //! Callers are responsible for probing the upstream provider, redacting raw
 //! provider responses before exposing them, and enforcing tool-level profiles.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Google scope required by local ADC for several Google APIs.
 pub const GOOGLE_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
@@ -115,6 +118,12 @@ pub struct ProviderQuotaProjectStatus {
     /// Optional redacted project hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_hint: Option<String>,
+    /// Optional source label such as an environment variable or ADC metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Optional redacted error message explaining why the status is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl ProviderQuotaProjectStatus {
@@ -123,6 +132,8 @@ impl ProviderQuotaProjectStatus {
         Self {
             configured: false,
             project_hint: None,
+            source: None,
+            error: None,
         }
     }
 
@@ -131,7 +142,26 @@ impl ProviderQuotaProjectStatus {
         Self {
             configured: true,
             project_hint: Some(project_hint.into()),
+            source: None,
+            error: None,
         }
+    }
+
+    /// Adds a public source label.
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    /// Adds a redacted error message.
+    ///
+    /// # Security
+    /// Callers must redact paths, tokens, credential JSON, and provider
+    /// responses before passing `error` when output may leave the operator's
+    /// trusted environment.
+    pub fn with_error(mut self, error: impl Into<String>) -> Self {
+        self.error = Some(error.into());
+        self
     }
 }
 
@@ -163,6 +193,94 @@ impl ProviderAuthVerification {
             kind: kind.into(),
             message: message.into(),
         }
+    }
+}
+
+/// Stable secret-safe check result for provider-auth status tools.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderAuthCheckStatus {
+    /// True when the server attempted the check.
+    pub checked: bool,
+    /// Probe outcome when a check was attempted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    /// Public reason when a check was skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Redacted public error when a check failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Optional public remediation hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Product-specific safe metadata for the check.
+    #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, Value>,
+}
+
+impl ProviderAuthCheckStatus {
+    /// Builds a skipped check result.
+    pub fn skipped() -> Self {
+        Self {
+            checked: false,
+            ok: None,
+            reason: None,
+            error: None,
+            hint: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    /// Builds a successful checked result.
+    pub fn ok() -> Self {
+        Self {
+            checked: true,
+            ok: Some(true),
+            reason: None,
+            error: None,
+            hint: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    /// Builds a failed checked result.
+    ///
+    /// # Security
+    /// `error` must already be redacted. Do not pass bearer tokens, refresh
+    /// tokens, private keys, credential JSON, authorization codes, or raw
+    /// provider responses.
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self {
+            checked: true,
+            ok: Some(false),
+            reason: None,
+            error: Some(error.into()),
+            hint: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    /// Adds a public skipped-check reason.
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    /// Adds a public remediation hint.
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// Adds one product-specific metadata field.
+    ///
+    /// # Security
+    /// Metadata must be secret-safe. Do not include tokens, private keys,
+    /// client secrets, credential JSON, authorization codes, or raw provider
+    /// responses.
+    pub fn with_metadata(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
     }
 }
 
@@ -287,6 +405,158 @@ pub struct GoogleProviderAuthSetupPlan {
     pub next_steps: Vec<String>,
     /// Safe notes for common Google auth footguns.
     pub notes: Vec<String>,
+}
+
+/// Canonical Google ADC login helper response for MCP auth tools.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoogleProviderAuthLoginCommand {
+    /// Primary login argv for the requested mode.
+    pub command: Vec<String>,
+    /// Primary login shell command for copy/paste use.
+    pub shell_command: String,
+    /// Headless login argv.
+    pub headless_command: Vec<String>,
+    /// Headless login shell command for copy/paste use.
+    pub headless_shell_command: String,
+    /// Browser-capable login argv with the client-id-file placeholder.
+    pub client_id_file_command: Vec<String>,
+    /// Browser-capable login shell command with the client-id-file placeholder.
+    pub client_id_file_shell_command: String,
+    /// Headless login argv with the client-id-file placeholder.
+    pub client_id_file_headless_command: Vec<String>,
+    /// Headless login shell command with the client-id-file placeholder.
+    pub client_id_file_headless_shell_command: String,
+    /// ADC quota-project shell command using the configured placeholder.
+    pub quota_project_command: String,
+    /// ADC quota-project argv using the configured placeholder.
+    pub quota_project_command_argv: Vec<String>,
+    /// Optional API enablement shell command.
+    pub api_enable_command: Option<String>,
+    /// Optional API enablement argv.
+    pub api_enable_command_argv: Option<Vec<String>>,
+    /// Follow-up shell commands customized for this request.
+    pub follow_up_commands: Vec<String>,
+    /// ADC login scopes.
+    pub adc_scopes: Vec<String>,
+    /// Optional Cloud SDK config directory used for server-specific ADC.
+    pub cloudsdk_config: Option<String>,
+    /// Optional ADC credential file path.
+    pub credential_file: Option<String>,
+    /// True when the conventional shared ADC file is intentionally targeted.
+    pub shared_adc: bool,
+    /// Requested provider scope string.
+    pub scope: String,
+    /// True when the request intentionally targets the operator/write scope.
+    pub operator_scope_requested: bool,
+    /// Optional quota project supplied with this request.
+    pub quota_project: Option<String>,
+    /// Ordered safe next-step summaries.
+    pub next_steps: Vec<String>,
+    /// Safe notes for common Google auth footguns.
+    pub notes: Vec<String>,
+    /// Restart or verification instruction after login.
+    pub after_login: String,
+}
+
+/// Inputs for building a Google ADC login helper response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleProviderAuthLoginOptions {
+    /// Requested provider scope string.
+    pub scope: String,
+    /// Whether the primary command should be headless.
+    pub headless: bool,
+    /// Optional request-specific OAuth client-id file.
+    pub client_id_file: Option<String>,
+    /// Optional quota project supplied with this request.
+    pub quota_project: Option<String>,
+    /// Optional Cloud SDK config directory used for server-specific ADC.
+    pub cloudsdk_config: Option<String>,
+    /// Optional ADC credential file path.
+    pub credential_file: Option<String>,
+    /// True when the conventional shared ADC file is intentionally targeted.
+    pub shared_adc: bool,
+    /// True when the request intentionally targets the operator/write scope.
+    pub operator_scope_requested: bool,
+    /// Safe notes for common Google auth footguns.
+    pub notes: Vec<String>,
+    /// Restart or verification instruction after login.
+    pub after_login: String,
+}
+
+impl GoogleProviderAuthLoginOptions {
+    /// Builds login-helper options for a scope.
+    ///
+    /// # Security
+    /// Fields are serialized in operator-facing auth output. Do not include
+    /// tokens, client secrets, credential JSON, or private keys.
+    pub fn new(scope: impl Into<String>) -> Self {
+        Self {
+            scope: scope.into(),
+            headless: false,
+            client_id_file: None,
+            quota_project: None,
+            cloudsdk_config: None,
+            credential_file: None,
+            shared_adc: false,
+            operator_scope_requested: false,
+            notes: Vec::new(),
+            after_login: "Restart stdio MCP clients that keep long-lived server processes, then call auth_status with verification enabled.".to_string(),
+        }
+    }
+
+    /// Sets whether the primary command should be headless.
+    pub fn with_headless(mut self, headless: bool) -> Self {
+        self.headless = headless;
+        self
+    }
+
+    /// Adds an OAuth client-id file path for the primary command.
+    pub fn with_client_id_file(mut self, client_id_file: Option<String>) -> Self {
+        self.client_id_file = client_id_file;
+        self
+    }
+
+    /// Adds a quota project to follow-up commands.
+    pub fn with_quota_project(mut self, quota_project: Option<String>) -> Self {
+        self.quota_project = quota_project;
+        self
+    }
+
+    /// Adds a Cloud SDK config directory for server-specific ADC.
+    pub fn with_cloudsdk_config(mut self, cloudsdk_config: Option<String>) -> Self {
+        self.cloudsdk_config = cloudsdk_config;
+        self
+    }
+
+    /// Adds the target ADC credential file path.
+    pub fn with_credential_file(mut self, credential_file: Option<String>) -> Self {
+        self.credential_file = credential_file;
+        self
+    }
+
+    /// Marks whether shared ADC is intentionally targeted.
+    pub fn with_shared_adc(mut self, shared_adc: bool) -> Self {
+        self.shared_adc = shared_adc;
+        self
+    }
+
+    /// Marks whether an operator/write scope is requested.
+    pub fn with_operator_scope_requested(mut self, operator_scope_requested: bool) -> Self {
+        self.operator_scope_requested = operator_scope_requested;
+        self
+    }
+
+    /// Adds safe operator-facing notes.
+    pub fn with_notes(mut self, notes: Vec<String>) -> Self {
+        self.notes = notes;
+        self
+    }
+
+    /// Adds the post-login instruction.
+    pub fn with_after_login(mut self, after_login: impl Into<String>) -> Self {
+        self.after_login = after_login.into();
+        self
+    }
 }
 
 /// Google provider-auth configuration used to build diagnostics.
@@ -417,6 +687,82 @@ impl GoogleProviderAuthConfig {
                 "Use the client-id-file command if Google rejects the provider scope during ADC login.".to_string(),
                 "For unattended deployments, prefer service-account or workload identity credentials over local user ADC.".to_string(),
             ],
+        }
+    }
+
+    /// Builds the canonical Google ADC login helper response.
+    pub fn adc_login_command_contract(
+        &self,
+        options: &GoogleProviderAuthLoginOptions,
+    ) -> GoogleProviderAuthLoginCommand {
+        let client_id_file_placeholder = "/path/to/client_id.json";
+        let command = match options.client_id_file.as_deref() {
+            Some(client_id_file) => self.adc_login_command_with_client_id_file(
+                options.headless,
+                client_id_file,
+            ),
+            None => self.adc_login_command(options.headless),
+        };
+        let headless_command = match options.client_id_file.as_deref() {
+            Some(client_id_file) => self.adc_login_command_with_client_id_file(true, client_id_file),
+            None => self.adc_login_command(true),
+        };
+        let client_id_file_command =
+            self.adc_login_command_with_client_id_file(false, client_id_file_placeholder);
+        let client_id_file_headless_command =
+            self.adc_login_command_with_client_id_file(true, client_id_file_placeholder);
+        let quota_project_command_argv = self.adc_quota_project_command();
+        let api_enable_command_argv = self.api_enable_command();
+        let cloudsdk_config = options.cloudsdk_config.as_deref();
+        let follow_up_commands = options
+            .quota_project
+            .as_deref()
+            .map(|project| {
+                vec![format_google_cloudsdk_command(
+                    &google_adc_quota_project_command(project),
+                    cloudsdk_config,
+                )]
+            })
+            .unwrap_or_default();
+
+        GoogleProviderAuthLoginCommand {
+            command: command.clone(),
+            shell_command: format_google_cloudsdk_command(&command, cloudsdk_config),
+            headless_command: headless_command.clone(),
+            headless_shell_command: format_google_cloudsdk_command(
+                &headless_command,
+                cloudsdk_config,
+            ),
+            client_id_file_command: client_id_file_command.clone(),
+            client_id_file_shell_command: format_google_cloudsdk_command(
+                &client_id_file_command,
+                cloudsdk_config,
+            ),
+            client_id_file_headless_command: client_id_file_headless_command.clone(),
+            client_id_file_headless_shell_command: format_google_cloudsdk_command(
+                &client_id_file_headless_command,
+                cloudsdk_config,
+            ),
+            quota_project_command: format_google_cloudsdk_command(
+                &quota_project_command_argv,
+                cloudsdk_config,
+            ),
+            quota_project_command_argv,
+            api_enable_command: api_enable_command_argv
+                .as_ref()
+                .map(|command| format_provider_auth_command(command)),
+            api_enable_command_argv,
+            follow_up_commands,
+            adc_scopes: self.adc_login_scopes(),
+            cloudsdk_config: options.cloudsdk_config.clone(),
+            credential_file: options.credential_file.clone(),
+            shared_adc: options.shared_adc,
+            scope: options.scope.clone(),
+            operator_scope_requested: options.operator_scope_requested,
+            quota_project: options.quota_project.clone(),
+            next_steps: self.adc_setup_plan().next_steps,
+            notes: options.notes.clone(),
+            after_login: options.after_login.clone(),
         }
     }
 }
@@ -867,6 +1213,37 @@ pub fn format_provider_auth_command(parts: &[String]) -> String {
         .join(" ")
 }
 
+/// Formats a provider-auth command argv with an optional `CLOUDSDK_CONFIG`.
+pub fn format_google_cloudsdk_command(parts: &[String], cloudsdk_config: Option<&str>) -> String {
+    let Some(dir) = cloudsdk_config
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return format_provider_auth_command(parts);
+    };
+    let dir_shell = format_provider_auth_command(&[dir.to_string()]);
+    let command = format_provider_auth_command(parts);
+    if command.is_empty() {
+        #[cfg(windows)]
+        {
+            format!("$env:CLOUDSDK_CONFIG={dir_shell}")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("CLOUDSDK_CONFIG={dir_shell}")
+        }
+    } else {
+        #[cfg(windows)]
+        {
+            format!("$env:CLOUDSDK_CONFIG={dir_shell}; {command}")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("CLOUDSDK_CONFIG={dir_shell} {command}")
+        }
+    }
+}
+
 fn shell_quote_provider_auth_arg(arg: &str) -> String {
     if arg.is_empty() {
         return "''".to_string();
@@ -1057,6 +1434,88 @@ mod tests {
     }
 
     #[test]
+    fn google_adc_login_contract_has_stable_helper_shape() {
+        let config = GoogleProviderAuthConfig::new(
+            "Search Console API",
+            vec!["https://www.googleapis.com/auth/webmasters.readonly".to_string()],
+        )
+        .with_api_service_name("searchconsole.googleapis.com");
+        let contract = config.adc_login_command_contract(
+            &GoogleProviderAuthLoginOptions::new(
+                "https://www.googleapis.com/auth/webmasters.readonly",
+            )
+            .with_headless(true)
+            .with_client_id_file(Some("/tmp/client id.json".to_string()))
+            .with_quota_project(Some("project-id".to_string()))
+            .with_cloudsdk_config(Some("/tmp/gsc adc".to_string()))
+            .with_credential_file(Some("/tmp/gsc adc/application_default_credentials.json".to_string()))
+            .with_operator_scope_requested(false)
+            .with_notes(vec!["No token or client secret is returned.".to_string()])
+            .with_after_login("Restart the MCP client, then run auth_status.".to_string()),
+        );
+
+        let value = serde_json::to_value(&contract).expect("serialize auth login contract");
+        let object = value.as_object().expect("object");
+        let mut keys = object.keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+
+        assert_eq!(
+            keys,
+            vec![
+                "adc_scopes",
+                "after_login",
+                "api_enable_command",
+                "api_enable_command_argv",
+                "client_id_file_command",
+                "client_id_file_headless_command",
+                "client_id_file_headless_shell_command",
+                "client_id_file_shell_command",
+                "cloudsdk_config",
+                "command",
+                "credential_file",
+                "follow_up_commands",
+                "headless_command",
+                "headless_shell_command",
+                "next_steps",
+                "notes",
+                "operator_scope_requested",
+                "quota_project",
+                "quota_project_command",
+                "quota_project_command_argv",
+                "scope",
+                "shared_adc",
+                "shell_command",
+            ]
+        );
+        assert_eq!(
+            object.get("command").and_then(|value| value.as_array()).map(Vec::len),
+            Some(8)
+        );
+        assert!(
+            object
+                .get("shell_command")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value.starts_with("CLOUDSDK_CONFIG='/tmp/gsc adc' gcloud auth"))
+        );
+        assert!(
+            object
+                .get("quota_project_command")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value.contains("set-quota-project YOUR_PROJECT"))
+        );
+        assert!(
+            object
+                .get("follow_up_commands")
+                .and_then(|value| value.as_array())
+                .is_some_and(|commands| commands
+                    .iter()
+                    .any(|value| value
+                        .as_str()
+                        .is_some_and(|command| command.contains("set-quota-project project-id"))))
+        );
+    }
+
+    #[test]
     fn google_adc_setup_plan_omits_blank_api_enable_command() {
         let config =
             GoogleProviderAuthConfig::new("Example API", Vec::new()).with_api_service_name("  ");
@@ -1199,5 +1658,39 @@ mod tests {
         assert!(!json.contains("ya29."));
         assert!(!json.contains("refresh_token"));
         assert!(!json.contains("private_key"));
+    }
+
+    #[test]
+    fn provider_auth_check_status_allows_safe_product_metadata() {
+        let check = ProviderAuthCheckStatus::ok()
+            .with_metadata("sample_resource_count", serde_json::json!(1))
+            .with_hint("safe hint");
+        let skipped = ProviderAuthCheckStatus::skipped().with_reason("not requested");
+        let failed = ProviderAuthCheckStatus::failed("redacted provider error");
+
+        assert_eq!(
+            serde_json::to_value(check).expect("serialize check"),
+            serde_json::json!({
+                "checked": true,
+                "ok": true,
+                "hint": "safe hint",
+                "sample_resource_count": 1
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(skipped).expect("serialize skipped"),
+            serde_json::json!({
+                "checked": false,
+                "reason": "not requested"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(failed).expect("serialize failed"),
+            serde_json::json!({
+                "checked": true,
+                "ok": false,
+                "error": "redacted provider error"
+            })
+        );
     }
 }
