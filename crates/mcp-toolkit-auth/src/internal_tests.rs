@@ -1,6 +1,6 @@
 pub(crate) use crate::auth_context_from_parts;
 pub(crate) use crate::auth_context_ref_from_parts;
-pub(crate) use crate::claims::{extract_scopes, supplemental_jwt_claims};
+pub(crate) use crate::claims::extract_scopes;
 pub(crate) use crate::{
     AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext, AuthSecurityProfile,
     Authenticator, ClientAuthMethod, InMemoryJtiReplayStore,
@@ -397,47 +397,6 @@ mod tests {
         assert_eq!(scopes, vec!["ops.read", "ops.write"]);
     }
 
-    #[test]
-    fn supplemental_jwt_claims_accepts_padded_trimmed_jwt_parts() {
-        let claims = json!({
-            "sub": "user-123",
-            "realm_access": {
-                "roles": ["kc-admin-access"]
-            }
-        });
-        let token = encode(
-            &Header::default(),
-            &claims,
-            &EncodingKey::from_secret(b"test-secret"),
-        )
-        .expect("token");
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        let padded = format!("  {}=.{}==.{}  ", parts[0], parts[1], parts[2]);
-
-        let decoded = super::supplemental_jwt_claims(&padded).expect("supplemental claims");
-
-        assert_eq!(decoded.get("sub"), Some(&json!("user-123")));
-        assert_eq!(
-            decoded
-                .pointer("/realm_access/roles/0")
-                .and_then(Value::as_str),
-            Some("kc-admin-access")
-        );
-    }
-
-    #[test]
-    fn supplemental_jwt_claims_rejects_non_object_payload() {
-        let token = encode(
-            &Header::default(),
-            &json!(["not", "an", "object"]),
-            &EncodingKey::from_secret(b"test-secret"),
-        )
-        .expect("token");
-
-        assert!(super::supplemental_jwt_claims(&token).is_none());
-    }
-
     /// Executes jti_not_required_for_token_bound_context.
     ///
     /// # Errors
@@ -757,33 +716,18 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn introspection_mode_merges_roles_from_active_jwt_payload() {
+    async fn introspection_mode_trusts_only_introspection_claims() {
         let exp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs()
             + 300;
-        let jwt_claims = json!({
-            "iss": "issuer",
-            "aud": "audience",
-            "sub": "user-123",
-            "exp": exp,
-            "scope": "untrusted-scope",
-            "realm_access": {
-                "roles": ["kc-admin-access"]
-            },
-            "resource_access": {
-                "realm-management": {
-                    "roles": ["view-users"]
-                }
-            }
-        });
-        let token = encode(
-            &Header::default(),
-            &jwt_claims,
-            &EncodingKey::from_secret(b"test-secret"),
-        )
-        .expect("token");
+        let token = [
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            "eyJpc3MiOiJpc3N1ZXIiLCJhdWQiOiJhdWRpZW5jZSIsInN1YiI6InVzZXItMTIzIiwic2NvcGUiOiJ1bnRydXN0ZWQtc2NvcGUiLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsia2MtYWRtaW4tYWNjZXNzIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsicmVhbG0tbWFuYWdlbWVudCI6eyJyb2xlcyI6WyJ2aWV3LXVzZXJzIl19fX0",
+            "invalid-signature-not-checked",
+        ]
+        .join(".");
         let payload = json!({
             "active": true,
             "iss": "issuer",
@@ -825,11 +769,10 @@ mod tests {
 
         let context = result.expect("expected introspection to succeed");
         assert_eq!(context.scopes, vec!["read"]);
-        assert_eq!(
-            context.roles,
-            vec!["kc-admin-access".to_string(), "view-users".to_string()]
-        );
+        assert_eq!(context.roles, Vec::<String>::new());
         assert_eq!(context.claims.get("active"), Some(&json!(true)));
+        assert_eq!(context.claims.get("realm_access"), None);
+        assert_eq!(context.claims.get("resource_access"), None);
     }
 
     /// Executes introspection_rejects_mismatched_issuer.
