@@ -356,6 +356,9 @@ Security reporting guidance is documented in `SECURITY.md`.
   manifest contract and links the example manifest files.
 - `docs/pattern-recipes.md` turns atlas archetypes into implementation recipes
   with crate ownership, proof expectations, and reference manifests.
+- `docs/policy-kernel-provenance-acceptance.md` defines the runtime metadata,
+  hosted manifest, artifact identity, and consumer evidence needed before
+  server adoption claims.
 - `docs/public-landing-policy.md` defines the public repository landing,
   hosted-check, and break-glass remediation policy.
 - `docs/provider-auth-and-client-config.md` explains provider auth setup,

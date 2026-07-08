@@ -155,8 +155,13 @@ token grant.
 When the server owns browser OAuth directly, use
 `mcp_toolkit_auth::upstream_oauth` instead of hand-rolled token exchange. Prefer
 a Desktop OAuth client for dynamic loopback ports. For SSH or remote hosts,
-print the authorization URL and use a loopback port forward, or use a two-step
-MCP login tool that starts the listener and completes after the callback.
+print the authorization URL and use a loopback port forward, ask the operator
+to paste the final loopback callback URL into
+`PendingLoopbackAuthorization::finish_with_callback_url`, or use a two-step MCP
+login tool that starts the listener and completes after the callback. When a
+Google server wants ADC-compatible runtime behavior after direct browser OAuth,
+store the token response with `save_google_authorized_user_adc` and then load it
+through `google_authorized_user_adc_from_file`.
 
 For Google ADC paths, use `mcp_toolkit_auth::provider_auth` helpers to keep
 scopes and diagnostics consistent:

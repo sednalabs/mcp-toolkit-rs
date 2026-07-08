@@ -4,7 +4,7 @@ This review records the custom MCP-adjacent layers the toolkit maintains on
 top of `rmcp` and the invariants that keep those layers aligned with the
 official MCP specification and the official Rust SDK.
 
-Review date: 2026-07-01.
+Review date: 2026-07-07.
 
 Primary references:
 
@@ -17,7 +17,7 @@ Primary references:
 
 Second-pass review note: the custom layers below were rechecked against the
 current public MCP specification, the public `rmcp` docs, and the exact
-workspace-pinned `rmcp` `1.8.0` source. The pinned SDK already owns Host
+workspace-pinned `rmcp` `2.1.0` source. The pinned SDK already owns Host
 validation, optional full `Origin` validation, Streamable HTTP session routing,
 protocol-version header checks, `Mcp-Session-Id`, `Last-Event-Id`, SSE event-id
 formatting, and `SessionManager` restoration hooks. Toolkit code must therefore
@@ -32,25 +32,29 @@ issuer URLs with path components, and validates the returned issuer and endpoint
 metadata before accepting a result.
 
 Fourth-pass review note: toolkit-owned protocol defaults were rechecked against
-the pinned SDK. `rmcp` 1.8.0 exposes `ProtocolVersion::LATEST` as `2025-11-25`,
-so toolkit-owned fallbacks should use the SDK latest value unless a compatibility
-test deliberately passes an older version. The stdio contract harness now
-defaults to `2025-11-25`, and `mcp-toolkit-gemini` uses `ProtocolVersion::LATEST`
-as its server fallback.
+the pinned SDK. Toolkit-owned fallbacks should use `ProtocolVersion::LATEST`
+from the pinned SDK unless a compatibility test deliberately passes an older
+version. The stdio contract harness now defaults to `2025-11-25`, and
+`mcp-toolkit-gemini` uses `ProtocolVersion::LATEST` as its server fallback.
+
+Fifth-pass review note: the workspace RMCP SDK pin has moved through the
+toolkit facade to `rmcp` and `rmcp-macros` `2.1.0`. `mcp-toolkit-core` now also
+re-exports the pinned SDK so facade consumers can route direct SDK model and
+macro support through toolkit-owned version policy.
 
 ## SDK Version Posture
 
 As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
-published runtime version, `=1.8.0`, and the lockfile resolves both crates to
-`1.8.0`. That is intentional: the toolkit facade owns the SDK version used by
+published runtime version, `=2.1.0`, and the lockfile resolves both crates to
+`2.1.0`. That is intentional: the toolkit facade owns the SDK version used by
 generated servers, and generated templates import the server-authoring surface
 through `mcp_toolkit::rmcp` instead of declaring their own direct `rmcp` or
 `rmcp-macros` dependencies.
 
-The upstream `modelcontextprotocol/rust-sdk` repository now advertises a
-`2.0.0` workspace/release line. Treat that as an SDK-major upgrade signal, not
-as a reason for generated servers to bypass the facade. Before moving this
-workspace to a 2.x SDK, re-run this alignment review and specifically compare:
+Treat future SDK-major or behavior-changing SDK-minor releases as coordinated
+facade upgrades, not as a reason for generated servers to bypass the facade.
+Before moving this workspace to the next such SDK version, re-run this
+alignment review and specifically compare:
 
 - `StreamableHttpService` and session-manager behavior against the toolkit's
   route-bundle preflight responses;
@@ -155,6 +159,9 @@ or server-authoring policy:
 12. HTTP route-bundle and Streamable HTTP tests now serialize
     `rmcp::model::ProtocolVersion::LATEST` in initialize fixtures instead of
     carrying a stale literal protocol version.
+13. The RMCP SDK pin now moves through the toolkit facade at `2.1.0`; direct
+    runtime and macro pins remain aligned, and facade consumers can import SDK
+    model types through toolkit-owned re-exports.
 
 ## Current Risk Notes
 
@@ -176,7 +183,7 @@ or server-authoring policy:
   the stdio harness. Keep the helper default aligned with the pinned SDK's
   latest stable protocol version.
 - HTTP route bundles rely on `rmcp` to process accepted JSON-RPC requests after
-  local preflight checks. When `rmcp` 2.x is adopted, compare accepted/missing
+  local preflight checks. On each future SDK upgrade, compare accepted/missing
   `MCP-Protocol-Version`, session-id, and SSE-resume behavior before landing.
 
 ## Invariants For New Servers
@@ -217,7 +224,8 @@ or server-authoring policy:
   changes discovery ordering, Client ID Metadata Document requirements, or
   PKCE metadata requirements.
 - Re-check facade feature flags and generated template imports before adopting
-  the next `rmcp` major release.
+  the next `rmcp` release that changes feature, macro, model, or transport
+  requirements.
 - Re-check whether route-bundle Host/Origin preflight can delegate to a public
   `rmcp` middleware or hook instead of local parsing.
 - Add generated contract probes for cursor pagination once probe fixtures cover

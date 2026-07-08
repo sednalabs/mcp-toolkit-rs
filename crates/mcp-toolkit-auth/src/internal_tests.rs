@@ -397,6 +397,45 @@ mod tests {
         assert_eq!(scopes, vec!["ops.read", "ops.write"]);
     }
 
+    #[test]
+    fn supplemental_jwt_claims_accepts_trimmed_jwt() {
+        let claims = json!({
+            "sub": "user-123",
+            "realm_access": {
+                "roles": ["kc-admin-access"]
+            }
+        });
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .expect("token");
+        let trimmed = format!("  {token}  ");
+
+        let decoded = super::supplemental_jwt_claims(&trimmed).expect("supplemental claims");
+
+        assert_eq!(decoded.get("sub"), Some(&json!("user-123")));
+        assert_eq!(
+            decoded
+                .pointer("/realm_access/roles/0")
+                .and_then(Value::as_str),
+            Some("kc-admin-access")
+        );
+    }
+
+    #[test]
+    fn supplemental_jwt_claims_rejects_non_object_payload() {
+        let token = encode(
+            &Header::default(),
+            &json!(["not", "an", "object"]),
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .expect("token");
+
+        assert!(super::supplemental_jwt_claims(&token).is_none());
+    }
+
     /// Executes jti_not_required_for_token_bound_context.
     ///
     /// # Errors
