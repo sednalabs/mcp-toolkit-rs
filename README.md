@@ -145,7 +145,8 @@ public `/health` route, and point clients at the generated `/mcp` URL with the
 published OAuth Protected Resource Metadata. If the server calls an upstream
 provider such as Google, add an `auth_status` or equivalent diagnostic before
 release; `docs/upstream-oauth.md` and `docs/easy-server-ergonomics.md` describe
-that pattern.
+that pattern. `docs/provider-auth-and-client-config.md` defines the shared
+Google MCP auth-login and status field contract for downstream servers.
 
 Keep the generated contract tests in CI. The generated GitHub workflow is the
 shared proof surface for review; local commands are useful while editing, but a
@@ -362,8 +363,9 @@ Security reporting guidance is documented in `SECURITY.md`.
 - `docs/public-landing-policy.md` defines the public repository landing,
   hosted-check, and break-glass remediation policy.
 - `docs/provider-auth-and-client-config.md` explains provider auth setup,
-  read-only/operator profile selection, Google quota-project troubleshooting,
-  service-account notes, and MCP client configuration.
+  the shared Google MCP auth-login/status contract, read-only/operator profile
+  selection, Google quota-project troubleshooting, service-account notes, and
+  MCP client configuration.
 - `docs/reference-server-atlas.md` maps reusable server patterns to real MCP
   services so new abstractions start from existing evidence instead of toy
   examples.

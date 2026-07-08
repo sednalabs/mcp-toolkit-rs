@@ -41,7 +41,7 @@ service-specific, but the behavior should stay consistent:
 
 | Tool or command | Purpose |
 | --- | --- |
-| `auth_status` or `connection_status` | Report credential sources, selected scopes, cache presence, quota project, profile, and last verification result. |
+| `auth_status` or `connection_status` | Report credential sources, selected scopes, cache presence, quota project, profile, and token/access verification results. |
 | `auth_login` or `auth_browser_login` | Run an explicit user login flow when browser OAuth is the easiest trial path. |
 | `auth_reauth` | Repeat login with forced consent when a refresh token is stale, rotated, or missing a new scope. |
 | `auth_logout` | Remove local cached credentials and explain provider-side revocation separately. |
@@ -97,12 +97,12 @@ Never include access tokens, refresh tokens, bearer headers, private keys,
 client secrets, raw credential JSON, service-account private-key material, or
 full provider responses in status output.
 
-Use `mcp_toolkit_auth::provider_auth::ProviderAuthStatus` for this shape when a
-server is implemented in Rust. Populate credential sources with
+Use `mcp_toolkit_auth::provider_auth::ProviderAuthStatus` for this broad shape
+when a server is implemented in Rust. Populate credential sources with
 `ProviderCredentialSourceStatus`, quota state with `ProviderQuotaProjectStatus`,
-and probe results with `ProviderAuthVerification`. Those types are deliberately
-secret-safe status containers; credential loading and provider probing still
-belong in the server or provider SDK.
+and broad probe results with `ProviderAuthVerification`. Those types are
+deliberately secret-safe status containers; credential loading and provider
+probing still belong in the server or provider SDK.
 
 ## Credential Source Order
 
@@ -186,6 +186,57 @@ scopes and diagnostics consistent:
   `reauth_required`;
 - `google_quota_project_next_steps()` returns the canonical ADC quota-project
   remediation sequence.
+
+## Google MCP Auth Contract
+
+Google MCP servers should expose the same auth helper contract even when their
+product scopes and access probes differ. This lets operators learn one setup
+shape for Search Console, Ad Manager, Analytics, and similar services.
+
+`auth_login_command` tools should serialize
+`GoogleProviderAuthConfig::adc_login_command_contract()` and keep these fields
+stable:
+
+- `command` and `shell_command` for the selected login mode;
+- `headless_command` and `headless_shell_command` for SSH-friendly login;
+- `client_id_file_command`, `client_id_file_shell_command`,
+  `client_id_file_headless_command`, and
+  `client_id_file_headless_shell_command` for Google OAuth client-file fallback;
+- `quota_project_command` and `quota_project_command_argv`;
+- `api_enable_command` and `api_enable_command_argv` when the Google API
+  service name is known;
+- `follow_up_commands` for request-specific quota-project commands;
+- `adc_scopes`, `cloudsdk_config`, `credential_file`, `shared_adc`, `scope`,
+  `operator_scope_requested`, `quota_project`, `next_steps`, `notes`, and
+  `after_login`.
+
+Downstream servers may add compatibility aliases such as `write_scope` or
+`manage_scope`, but the shared fields above should remain present and have the
+same meaning.
+
+Google `auth_status` tools should report these shared fields:
+
+- `token_check`: a `ProviderAuthCheckStatus` for access-token acquisition;
+- `access_check`: a `ProviderAuthCheckStatus` for the low-cost product probe,
+  such as `sites.list` or `networks.list`;
+- `operator_scope_check`: a `ProviderAuthCheckStatus` for mutation/operator
+  scope readiness;
+- `adc_quota_project`: a `ProviderQuotaProjectStatus` parsed from the selected
+  ADC file when local ADC is relevant;
+- `runtime_quota_project`: a `ProviderQuotaProjectStatus` for the runtime
+  header/config value that the server will actually send upstream.
+
+Keep `adc_quota_project` and `runtime_quota_project` separate. The ADC quota
+project helps Google tooling and local ADC flows; the runtime quota project is
+the server's own upstream request configuration, such as an `x-goog-user-project`
+header. A server may need both, and one being configured does not prove the
+other is configured.
+
+When multiple Google MCPs run under the same OS user, the default should be a
+server-specific `CLOUDSDK_CONFIG` directory. A conventional shared gcloud ADC
+file should be used only when the operator explicitly chooses it through a
+request flag or runtime setting such as `shared_adc=true` and the matching
+server environment variable.
 
 For unattended Google deployments, prefer a service-account file or workload
 identity path. Configure the service-account credential with the provider's
@@ -285,6 +336,9 @@ docs include:
 - the credential source precedence;
 - service-account or unattended deployment notes;
 - quota-project or billing-project requirements where applicable;
+- for Google MCPs, the shared `auth_login_command` fields and the
+  `token_check`, `access_check`, `operator_scope_check`, `adc_quota_project`,
+  and `runtime_quota_project` status fields;
 - client configuration examples for the served transport;
 - restart guidance for long-lived MCP clients;
 - redaction guarantees for status and error output.

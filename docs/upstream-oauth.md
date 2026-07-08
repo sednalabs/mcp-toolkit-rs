@@ -85,6 +85,13 @@ The conventional gcloud ADC file is global to the OS user; logging one Google
 MCP in with a narrower or different scope set can replace the grant another
 Google MCP expected.
 
+When exposing a Google ADC MCP helper, build the login response with
+`GoogleProviderAuthConfig::adc_login_command_contract()` and report status with
+the shared `token_check`, `access_check`, `operator_scope_check`,
+`adc_quota_project`, and `runtime_quota_project` fields described in
+`docs/provider-auth-and-client-config.md`. Keep shared ADC as an explicit
+operator choice; the default local-user path should remain server-specific.
+
 ## SSH And Headless Operation
 
 The loopback helper returns the authorization URL and redirect URI before it
