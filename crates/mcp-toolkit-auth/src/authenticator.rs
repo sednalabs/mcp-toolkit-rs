@@ -6,9 +6,7 @@ use reqwest::Client;
 use serde_json::json;
 
 use crate::bearer::parse_strict_bearer_authorization;
-use crate::claims::{
-    extract_roles, extract_scopes, merge_claims, supplemental_jwt_claims, validate_issuer_audience,
-};
+use crate::claims::{extract_roles, extract_scopes, merge_claims, validate_issuer_audience};
 use crate::providers::{IntrospectionCache, JwksCache};
 use crate::replay::{InMemoryJtiReplayStore, SharedJtiReplayStore};
 use crate::util::{auth_debug_event, hash_identifier, token_ref};
@@ -197,14 +195,7 @@ impl Authenticator {
                     self.decode_with_jwks(token).await?
                 }
             }
-            AuthMode::Introspection => {
-                let introspected = self.introspect_token(token).await?;
-                if let Some(jwt_claims) = supplemental_jwt_claims(token) {
-                    merge_claims(&jwt_claims, &introspected)
-                } else {
-                    introspected
-                }
-            }
+            AuthMode::Introspection => self.introspect_token(token).await?,
         };
 
         let subject_hint = claims

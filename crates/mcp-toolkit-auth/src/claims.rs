@@ -27,14 +27,11 @@
 
 use std::collections::HashSet;
 
-use jsonwebtoken::dangerous::insecure_decode;
 use jsonwebtoken::errors::ErrorKind;
 use serde_json::Value;
 use tracing::debug;
 
 use crate::{AuthConfig, AuthError};
-
-const JWT_SUPPLEMENTAL_TOKEN_MAX_BYTES: usize = 3 * 128 * 1024;
 
 /// Validates that the token issuer and audience match the security configuration.
 pub(crate) fn validate_issuer_audience(
@@ -206,16 +203,6 @@ pub(crate) fn extract_roles(claims: &Value) -> Vec<String> {
     roles.sort();
     roles.dedup();
     roles
-}
-
-pub(crate) fn supplemental_jwt_claims(token: &str) -> Option<Value> {
-    let token = token.trim();
-    if token.len() > JWT_SUPPLEMENTAL_TOKEN_MAX_BYTES {
-        return None;
-    }
-
-    let token_data: jsonwebtoken::TokenData<Value> = insecure_decode(token).ok()?;
-    token_data.claims.is_object().then_some(token_data.claims)
 }
 
 pub(crate) fn merge_claims(primary: &Value, secondary: &Value) -> Value {
