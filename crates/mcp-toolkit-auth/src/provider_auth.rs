@@ -511,26 +511,26 @@ impl GoogleProviderAuthLoginOptions {
     }
 
     /// Adds an OAuth client-id file path for the primary command.
-    pub fn with_client_id_file(mut self, client_id_file: Option<String>) -> Self {
-        self.client_id_file = client_id_file;
+    pub fn with_client_id_file(mut self, client_id_file: impl Into<String>) -> Self {
+        self.client_id_file = Some(client_id_file.into());
         self
     }
 
     /// Adds a quota project to follow-up commands.
-    pub fn with_quota_project(mut self, quota_project: Option<String>) -> Self {
-        self.quota_project = quota_project;
+    pub fn with_quota_project(mut self, quota_project: impl Into<String>) -> Self {
+        self.quota_project = Some(quota_project.into());
         self
     }
 
     /// Adds a Cloud SDK config directory for server-specific ADC.
-    pub fn with_cloudsdk_config(mut self, cloudsdk_config: Option<String>) -> Self {
-        self.cloudsdk_config = cloudsdk_config;
+    pub fn with_cloudsdk_config(mut self, cloudsdk_config: impl Into<String>) -> Self {
+        self.cloudsdk_config = Some(cloudsdk_config.into());
         self
     }
 
     /// Adds the target ADC credential file path.
-    pub fn with_credential_file(mut self, credential_file: Option<String>) -> Self {
-        self.credential_file = credential_file;
+    pub fn with_credential_file(mut self, credential_file: impl Into<String>) -> Self {
+        self.credential_file = Some(credential_file.into());
         self
     }
 
@@ -1446,12 +1446,10 @@ mod tests {
                 "https://www.googleapis.com/auth/webmasters.readonly",
             )
             .with_headless(true)
-            .with_client_id_file(Some("/tmp/client id.json".to_string()))
-            .with_quota_project(Some("project-id".to_string()))
-            .with_cloudsdk_config(Some("/tmp/gsc adc".to_string()))
-            .with_credential_file(Some(
-                "/tmp/gsc adc/application_default_credentials.json".to_string(),
-            ))
+            .with_client_id_file("/tmp/client id.json")
+            .with_quota_project("project-id")
+            .with_cloudsdk_config("/tmp/gsc adc")
+            .with_credential_file("/tmp/gsc adc/application_default_credentials.json")
             .with_operator_scope_requested(false)
             .with_notes(vec!["No token or client secret is returned.".to_string()])
             .with_after_login("Restart the MCP client, then run auth_status.".to_string()),
