@@ -13,6 +13,7 @@
     "operator-mutation"
   ],
   "toolkit_crates": [
+    "mcp-toolkit-auth",
     "mcp-toolkit-core",
     "mcp-toolkit-observability",
     "mcp-toolkit-scratchpad"
@@ -61,7 +62,7 @@
     "domain_contracts": "present",
     "hosted_validation": "present",
     "release_evidence": "planned",
-    "notes": "Use as evidence for Google auth diagnostics and profile-gated operator tools."
+    "notes": "Use as evidence for shared Google MCP auth helper/status diagnostics and profile-gated operator tools."
   },
   "references": [
     {

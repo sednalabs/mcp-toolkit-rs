@@ -35,10 +35,10 @@ boundary is generic enough to explain without provider vocabulary.
 | Archetype | Start here | Use when |
 | --- | --- | --- |
 | `minimal-stdio-intent` | `templates/curated-stdio-intent-server`; `sednalabs/google-admin-mcp` | A process-local server needs a small curated tool surface, schema snapshots, and a low-friction first useful call. |
-| `google-provider-read-only` | `sednalabs/google-admin-mcp`; `sednalabs/ga4-mcp`; `sednalabs/google-search-console-mcp` | A Google API server needs Application Default Credentials, quota-project guidance, redacted auth diagnostics, and read-only defaults. |
+| `google-provider-read-only` | `sednalabs/google-admin-mcp`; `sednalabs/ga4-mcp`; `sednalabs/google-search-console-mcp`; `sednalabs/google-ad-manager-mcp` | A Google API server needs Application Default Credentials, quota-project guidance, redacted auth diagnostics, and read-only defaults. |
 | `analytics-scratchpad` | `sednalabs/ga4-mcp`; `sednalabs/google-search-console-mcp` | Large analytical results need local DuckDB-backed sessions, bounded SQL, evidence export, and profile gating. |
 | `hosted-http-auth` | `templates/hosted-http-auth-server`; `sednalabs/cloudflare-mcp` | A server exposes Streamable HTTP and must serve OAuth metadata, bearer challenges, host guards, and session behavior. |
-| `operator-mutation` | `sednalabs/cloudflare-mcp`; `sednalabs/google-search-console-mcp`; `sednalabs/keycloak-admin-mcp` | Mutating tools must be explicit, profile-gated, separately documented, and hidden from read-only discovery where possible. |
+| `operator-mutation` | `sednalabs/cloudflare-mcp`; `sednalabs/google-search-console-mcp`; `sednalabs/google-ad-manager-mcp`; `sednalabs/keycloak-admin-mcp` | Mutating tools must be explicit, profile-gated, separately documented, and hidden from read-only discovery where possible. |
 | `database-policy` | `sednalabs/postgres-mcp`; `mcp-toolkit-policy-core`; `mcp-toolkit-policy-runtime` | SQL or database access needs read-only classification, capability guards, response profiles, startup checks, and release safety gates. |
 | `public-release-ready` | `templates/single-crate-public-stdio-server`; `sednalabs/cloudflare-mcp`; `sednalabs/postgres-mcp` | A new public MCP repository needs CI, CodeQL, dependency governance, schema snapshots, release evidence, and public wording hygiene. |
 
@@ -114,8 +114,8 @@ Reusable patterns:
   more weight than value.
 - Default read-only Search Console scope with explicit operator scope for site
   and sitemap mutations.
-- Auth-status and auth-login helper tools with clear restart guidance for
-  long-lived stdio clients.
+- Auth-status and auth-login helper tools using the shared Google MCP contract
+  with clear restart guidance for long-lived stdio clients.
 - `find_tools` and profile-filtered tool discovery.
 - Search Analytics scratchpad ingestion that keeps large evidence out of chat.
 
@@ -133,6 +133,34 @@ Do not extract:
 - Search Console site, sitemap, or URL Inspection semantics.
 - Search Console-specific ingest, metric, or evidence-bundle wording into the
   generic scratchpad crate.
+
+### `sednalabs/google-ad-manager-mcp`
+
+Use this as the Google provider reference where local ADC, quota-project
+diagnostics, guarded writes, and legacy SOAP coverage meet.
+
+Reusable patterns:
+
+- Shared Google MCP auth-login and status contracts with product-specific
+  scopes and `networks.list` access probing.
+- Server-specific ADC by default with explicit shared-ADC opt-in.
+- Preview/apply write gates that require runtime enablement, manage scope,
+  confirmation tokens, operator context, and readback where available.
+- Typed SOAP trafficking allowlists instead of a generic SOAP proxy.
+- Scratchpad ingestion for catalog, report, and parsed SOAP readback evidence.
+
+Source landmarks:
+
+- `README.md` and `docs/GETTING_STARTED.md` for the first-run auth flow.
+- `docs/TOOL_GUIDE.md` for setup, read, write, SOAP, and scratchpad tools.
+- `docs/SECURITY_MODEL.md` for credential and mutation boundaries.
+- `docs/ARCHITECTURE.md` for module ownership and upstream boundaries.
+- `src/auth_ux.rs` and `src/tools.rs` for CLI/MCP auth helper behavior.
+
+Do not extract:
+
+- Ad Manager resource names, SOAP payload templates, trafficking operations,
+  exchange/protection semantics, or write allowlists.
 
 ### `sednalabs/cloudflare-mcp`
 

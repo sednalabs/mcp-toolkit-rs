@@ -56,6 +56,9 @@ Minimal shape:
 
 - prefer Application Default Credentials and a browser or headless login helper;
 - include quota-project and missing-scope diagnostics;
+- use the shared Google auth-login response shape with argv, shell, headless,
+  client-id-file, quota-project, API-enable, selected ADC path, and shared-ADC
+  fields;
 - keep product scopes in the service repository;
 - default to a read-only profile;
 - separate operator scopes, write tools, and restart guidance from the happy
@@ -65,6 +68,8 @@ Required proof:
 
 - auth status covers missing credentials, missing scope, quota-project failure,
   and upstream denial;
+- auth status exposes `token_check`, `access_check`, `operator_scope_check`,
+  `adc_quota_project`, and `runtime_quota_project` with secret-safe values;
 - profile-filtered discovery hides operator tools from the read-only profile;
 - docs explain the client-id or quota-project path without requiring users to
   understand token exchange internals.
