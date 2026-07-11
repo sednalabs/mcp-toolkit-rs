@@ -32,17 +32,26 @@ implementation load only what it needs.
 
 ## Practical pattern
 
-Think of the flow as three layers:
+Think of the host flow as four ordered layers:
 
-- discovery: a small, cheap way to narrow candidate tools
-- publication: the inventory that defines what the session can actually see
-- execution: the deferred implementation that loads or initializes on demand
+- collection: drain every non-null opaque `nextCursor` and build one complete
+  catalogue
+- publication: atomically expose only that complete catalogue as the current
+  inventory
+- discovery: index the complete inventory for direct selection or deferred
+  search
+- execution: load or initialize the selected implementation on demand
 
-In practice, that usually means:
+`mcp-toolkit-core::pagination::collect_paginated_list` provides a bounded,
+cycle-safe collection seam for hosts or adapters whose metadata wrappers cannot
+use `rmcp::Peer::list_all_tools` directly. A failed or non-terminating walk must
+not publish its partial items. If a server advertises `listChanged`, the host
+should invalidate and rebuild the complete snapshot before updating its search
+index.
 
-- a lightweight search or browse tool for broad user intent
-- a curated inventory of the tools that are currently available
-- lazy construction of the expensive tool internals
+Some non-hosted clients may also use a lightweight search or browse tool to
+construct an `allowed_tools` subset. That is an application tool, not an MCP
+replacement for collecting `tools/list`.
 
 ## OpenAI Responses API
 
@@ -74,6 +83,11 @@ Local MCP discovery helpers such as `find_tools` are normal MCP tools; hosted
 OpenAI tool search does not call them automatically. Use a local discovery tool
 when non-hosted clients need a narrow `allowed_tools` list, optional schemas, or
 extra application-owned search results before making a follow-up request.
+
+MCP itself does not define a semantic `tools/search` operation. `tool_search`
+and `defer_loading` are OpenAI host/API mechanisms layered over the catalogue
+the host has collected. They cannot recover tools omitted because an MCP client
+stopped after page one.
 
 `mcp-toolkit-core::openai_tool_search` provides generic builders for two
 closely related shapes:
