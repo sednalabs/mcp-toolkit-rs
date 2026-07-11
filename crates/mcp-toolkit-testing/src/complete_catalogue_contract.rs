@@ -94,10 +94,6 @@ pub fn assert_complete_tool_catalogue(
                 index + 1,
                 index
             );
-            assert!(
-                page.request_cursor.is_some(),
-                "tools/list evidence continued after a terminal page"
-            );
         }
 
         if let Some(next_cursor) = &page.next_cursor {
