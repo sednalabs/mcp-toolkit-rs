@@ -186,9 +186,7 @@ where
     let mut seen_cursors = HashSet::new();
 
     for _ in 0..limits.max_pages {
-        let page = fetch_page(cursor)
-            .await
-            .map_err(ListDrainError::Fetch)?;
+        let page = fetch_page(cursor).await.map_err(ListDrainError::Fetch)?;
         let observed_items = items.len().saturating_add(page.items.len());
         if observed_items > limits.max_items {
             return Err(ListDrainError::ItemLimitExceeded {
