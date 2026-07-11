@@ -30,6 +30,7 @@ use oauth2::{
 use oauth2_reqwest::ReqwestClient;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -139,6 +140,8 @@ pub enum UpstreamOAuthError {
     MissingRequestedScopes(Vec<String>),
     #[error("OAuth loopback callback timed out")]
     CallbackTimeout,
+    #[error("OAuth authorization transaction expired")]
+    AuthorizationExpired,
     #[error("OAuth loopback callback did not include an authorization code")]
     CallbackMissingCode,
     #[error("OAuth loopback callback returned error: {0}")]
@@ -1342,6 +1345,54 @@ pub struct RefreshTokenFileStore {
     path: PathBuf,
 }
 
+/// Persists provider refresh tokens behind a secret-safe storage boundary.
+///
+/// Implementations may use an owner-only file, an operating-system keychain,
+/// or a deployment-owned encrypted store. Callers should keep provider and
+/// principal isolation in the storage key selected for each implementation.
+pub trait RefreshTokenStore: fmt::Debug + Send + Sync {
+    /// Loads the stored refresh-token record, when present.
+    ///
+    /// # Errors
+    /// Returns storage, decoding, validation, or secret-custody errors.
+    ///
+    /// # Security
+    /// Implementations must not log or expose the returned refresh token.
+    fn load(&self) -> Result<Option<StoredRefreshToken>, UpstreamOAuthError>;
+
+    /// Replaces the stored refresh-token record atomically where possible.
+    ///
+    /// # Errors
+    /// Returns storage, encoding, validation, or secret-custody errors.
+    ///
+    /// # Security
+    /// Implementations must protect token contents at rest and during writes.
+    fn save(&self, token: &StoredRefreshToken) -> Result<(), UpstreamOAuthError>;
+
+    /// Removes the stored refresh-token record.
+    ///
+    /// # Errors
+    /// Returns a storage error when the record cannot be removed safely.
+    ///
+    /// # Security
+    /// Clearing local state does not revoke the provider-side OAuth grant.
+    fn clear(&self) -> Result<(), UpstreamOAuthError>;
+}
+
+impl RefreshTokenStore for RefreshTokenFileStore {
+    fn load(&self) -> Result<Option<StoredRefreshToken>, UpstreamOAuthError> {
+        RefreshTokenFileStore::load(self)
+    }
+
+    fn save(&self, token: &StoredRefreshToken) -> Result<(), UpstreamOAuthError> {
+        RefreshTokenFileStore::save(self, token)
+    }
+
+    fn clear(&self) -> Result<(), UpstreamOAuthError> {
+        RefreshTokenFileStore::clear(self)
+    }
+}
+
 impl RefreshTokenFileStore {
     /// Creates a refresh-token file store at an explicit path.
     ///
@@ -1853,6 +1904,38 @@ impl fmt::Debug for StoredRefreshToken {
 }
 
 impl StoredRefreshToken {
+    /// Builds a provider-neutral stored token from a successful OAuth exchange.
+    ///
+    /// # Errors
+    /// Returns `MissingRefreshToken` if the exchange did not produce one or
+    /// `MissingRequestedScopes` if the provider reports a narrower scope set.
+    ///
+    /// # Security
+    /// The refresh token remains secret-bearing and must be persisted through
+    /// `RefreshTokenStore` or an equivalently protected store.
+    pub fn from_token_set(
+        provider: impl Into<String>,
+        client: &OAuthClientConfig,
+        scopes: Vec<String>,
+        token_set: OAuthTokenSet,
+    ) -> Result<Self, UpstreamOAuthError> {
+        let granted_scopes = granted_scopes_from_token_set(&scopes, token_set.scope.as_deref())?;
+        let refresh_token = token_set
+            .refresh_token
+            .filter(|token| !token.is_empty())
+            .ok_or(UpstreamOAuthError::MissingRefreshToken)?;
+        Ok(Self {
+            provider: provider.into(),
+            client_id: client.client_id.clone(),
+            refresh_token,
+            scopes: granted_scopes,
+            token_type: token_set.token_type,
+            refresh_token_expires_at_unix_seconds: token_set
+                .refresh_token_expires_in
+                .and_then(refresh_expiration_timestamp),
+        })
+    }
+
     /// Builds a stored token from a successful OAuth exchange.
     ///
     /// # Errors
@@ -1867,21 +1950,7 @@ impl StoredRefreshToken {
         scopes: Vec<String>,
         token_set: OAuthTokenSet,
     ) -> Result<Self, UpstreamOAuthError> {
-        let granted_scopes = granted_scopes_from_token_set(&scopes, token_set.scope.as_deref())?;
-        let refresh_token = token_set
-            .refresh_token
-            .filter(|token| !token.is_empty())
-            .ok_or(UpstreamOAuthError::MissingRefreshToken)?;
-        Ok(Self {
-            provider: "google".to_string(),
-            client_id: client.client_id.clone(),
-            refresh_token,
-            scopes: granted_scopes,
-            token_type: token_set.token_type,
-            refresh_token_expires_at_unix_seconds: token_set
-                .refresh_token_expires_in
-                .and_then(refresh_expiration_timestamp),
-        })
+        Self::from_token_set("google", client, scopes, token_set)
     }
 }
 
@@ -1940,6 +2009,190 @@ pub enum BrowserLaunchMode {
     RequiredSystem,
     /// Run an explicit browser-launch command.
     Command { program: String, args: Vec<String> },
+}
+
+/// Options for an authorization-code flow completed by a caller-owned callback.
+#[derive(Debug, Clone)]
+pub struct OAuthAuthorizationOptions {
+    /// Absolute callback URI registered with the upstream OAuth provider.
+    pub redirect_uri: String,
+    /// Maximum lifetime of the prepared authorization transaction.
+    pub timeout: Duration,
+    /// Extra provider-specific authorization query parameters.
+    pub extra_authorization_params: Vec<(String, String)>,
+}
+
+impl OAuthAuthorizationOptions {
+    /// Builds hosted authorization options for one callback URI.
+    pub fn new(redirect_uri: impl Into<String>) -> Self {
+        Self {
+            redirect_uri: redirect_uri.into(),
+            timeout: DEFAULT_LOOPBACK_TIMEOUT,
+            extra_authorization_params: Vec::new(),
+        }
+    }
+
+    /// Replaces the authorization transaction lifetime.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Appends a provider-specific authorization query parameter.
+    #[must_use]
+    pub fn with_extra_authorization_param(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.extra_authorization_params
+            .push((key.into(), value.into()));
+        self
+    }
+}
+
+/// Prepared PKCE authorization transaction for a caller-owned callback route.
+///
+/// Hold this value in a bounded, principal-scoped transaction store and remove
+/// it before calling `finish`. Use `correlation_key` to index the transaction
+/// without storing the raw OAuth `state` value as a map key.
+pub struct PendingOAuthAuthorization {
+    client: OAuthClientConfig,
+    scopes: Vec<String>,
+    state: CsrfToken,
+    code_verifier: PkceCodeVerifier,
+    redirect_uri: String,
+    authorization_url: String,
+    expires_at: Instant,
+}
+
+impl fmt::Debug for PendingOAuthAuthorization {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingOAuthAuthorization")
+            .field("client", &self.client)
+            .field("scopes", &self.scopes)
+            .field("state", &"<redacted>")
+            .field("code_verifier", &"<redacted>")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("authorization_url", &"<redacted>")
+            .field("expired", &self.is_expired())
+            .finish()
+    }
+}
+
+impl PendingOAuthAuthorization {
+    /// Returns the upstream authorization URL to open in the user's browser.
+    ///
+    /// # Security
+    /// The URL contains a CSRF state value. Return it only to the intended
+    /// operator and do not write it to public logs.
+    pub fn authorization_url(&self) -> &str {
+        &self.authorization_url
+    }
+
+    /// Returns the registered callback URI for this transaction.
+    pub fn redirect_uri(&self) -> &str {
+        &self.redirect_uri
+    }
+
+    /// Returns the requested scope list.
+    pub fn scopes(&self) -> &[String] {
+        &self.scopes
+    }
+
+    /// Returns a stable SHA-256 key for storing this pending transaction.
+    ///
+    /// # Security
+    /// The digest avoids using the raw state value as a storage key. It does
+    /// not replace the state validation performed by `finish`.
+    pub fn correlation_key(&self) -> String {
+        oauth_callback_correlation_key(self.state.secret())
+    }
+
+    /// Returns whether the transaction lifetime has elapsed.
+    pub fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
+
+    /// Validates a hosted callback and exchanges its authorization code.
+    ///
+    /// # Errors
+    /// Returns expiration, callback, state, HTTP, token endpoint, or malformed
+    /// response errors.
+    ///
+    /// # Security
+    /// Consumes the transaction so a successful authorization code cannot be
+    /// exchanged twice through this value. Callers should remove it atomically
+    /// from their transaction store before invoking this method.
+    pub async fn finish(
+        self,
+        code: Option<&str>,
+        state: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<OAuthTokenSet, UpstreamOAuthError> {
+        if self.is_expired() {
+            return Err(UpstreamOAuthError::AuthorizationExpired);
+        }
+        if state != Some(self.state.secret()) {
+            return Err(UpstreamOAuthError::StateMismatch);
+        }
+        if let Some(error) = error {
+            return Err(UpstreamOAuthError::CallbackError(redact_oauth_text(error)));
+        }
+        let code = code.ok_or(UpstreamOAuthError::CallbackMissingCode)?;
+        exchange_authorization_code(&self.client, code, self.code_verifier, &self.redirect_uri)
+            .await
+    }
+}
+
+/// Builds the storage correlation key for a callback `state` value.
+///
+/// # Security
+/// Treat the raw state as request-confidential input. Store and compare the
+/// returned digest instead of logging or persisting the raw value.
+pub fn oauth_callback_correlation_key(state: &str) -> String {
+    let digest = Sha256::digest(state.as_bytes());
+    format!("{digest:x}")
+}
+
+/// Prepares a provider-neutral PKCE authorization-code transaction.
+///
+/// # Errors
+/// Returns scope, URL, or registered-redirect validation errors.
+///
+/// # Security
+/// Uses PKCE S256 and a random CSRF state value. Callers must keep the returned
+/// transaction principal-scoped, bounded, and single-use.
+pub fn prepare_authorization(
+    client: OAuthClientConfig,
+    scopes: Vec<String>,
+    options: OAuthAuthorizationOptions,
+) -> Result<PendingOAuthAuthorization, UpstreamOAuthError> {
+    if scopes.is_empty() {
+        return Err(UpstreamOAuthError::EmptyScopes);
+    }
+    validate_endpoint_url("redirect_uri", &options.redirect_uri, true)?;
+    validate_client_redirect_uri(&client, &options.redirect_uri)?;
+    let oauth_client = oauth2_client(&client, Some(&options.redirect_uri))?;
+    let (code_challenge, code_verifier) = PkceCodeChallenge::new_random_sha256();
+    let mut authorization_request = oauth_client
+        .authorize_url(CsrfToken::new_random)
+        .add_scopes(scopes.iter().cloned().map(Scope::new))
+        .set_pkce_challenge(code_challenge);
+    for (key, value) in &options.extra_authorization_params {
+        authorization_request = authorization_request.add_extra_param(key.as_str(), value.as_str());
+    }
+    let (authorization_url, state) = authorization_request.url();
+    Ok(PendingOAuthAuthorization {
+        client,
+        scopes,
+        state,
+        code_verifier,
+        redirect_uri: options.redirect_uri,
+        authorization_url: authorization_url.to_string(),
+        expires_at: Instant::now() + options.timeout,
+    })
 }
 
 /// Options for a loopback browser authorization.
@@ -2009,13 +2262,7 @@ impl LoopbackOAuthOptions {
 /// A prepared loopback authorization waiting for browser completion.
 pub struct PendingLoopbackAuthorization {
     listener: TcpListener,
-    client: OAuthClientConfig,
-    scopes: Vec<String>,
-    state: CsrfToken,
-    code_verifier: PkceCodeVerifier,
-    redirect_uri: String,
-    authorization_url: String,
-    timeout: Duration,
+    authorization: PendingOAuthAuthorization,
     browser: BrowserLaunchMode,
     success_html: String,
     error_html: String,
@@ -2024,17 +2271,17 @@ pub struct PendingLoopbackAuthorization {
 impl PendingLoopbackAuthorization {
     /// Returns the URL that the operator should open in a system browser.
     pub fn authorization_url(&self) -> &str {
-        &self.authorization_url
+        self.authorization.authorization_url()
     }
 
     /// Returns the loopback redirect URI for this authorization.
     pub fn redirect_uri(&self) -> &str {
-        &self.redirect_uri
+        self.authorization.redirect_uri()
     }
 
     /// Returns the requested scope list.
     pub fn scopes(&self) -> &[String] {
-        &self.scopes
+        self.authorization.scopes()
     }
 
     /// Attempts to launch the configured browser.
@@ -2047,7 +2294,7 @@ impl PendingLoopbackAuthorization {
     /// The authorization URL contains request metadata and a CSRF state value,
     /// but no access or refresh token.
     pub fn launch_browser(&self) -> Result<bool, UpstreamOAuthError> {
-        launch_browser(&self.browser, &self.authorization_url)
+        launch_browser(&self.browser, self.authorization.authorization_url())
     }
 
     /// Waits for the loopback callback and exchanges the authorization code.
@@ -2088,25 +2335,21 @@ impl PendingLoopbackAuthorization {
         self,
         callback: LoopbackCallback,
     ) -> Result<OAuthTokenSet, UpstreamOAuthError> {
-        if callback.state.as_deref() != Some(self.state.secret()) {
-            return Err(UpstreamOAuthError::StateMismatch);
-        }
-        if let Some(error) = callback.error {
-            return Err(UpstreamOAuthError::CallbackError(redact_oauth_text(&error)));
-        }
-        let code = callback
-            .code
-            .ok_or(UpstreamOAuthError::CallbackMissingCode)?;
-        exchange_authorization_code(&self.client, &code, self.code_verifier, &self.redirect_uri)
+        self.authorization
+            .finish(
+                callback.code.as_deref(),
+                callback.state.as_deref(),
+                callback.error.as_deref(),
+            )
             .await
     }
 
     async fn wait_for_callback(&self) -> Result<LoopbackCallback, UpstreamOAuthError> {
-        let started_at = Instant::now();
         loop {
             let remaining = self
-                .timeout
-                .checked_sub(started_at.elapsed())
+                .authorization
+                .expires_at
+                .checked_duration_since(Instant::now())
                 .ok_or(UpstreamOAuthError::CallbackTimeout)?;
             let callback = time::timeout(remaining, self.accept_loopback_callback())
                 .await
@@ -2135,7 +2378,7 @@ impl PendingLoopbackAuthorization {
         let should_finish = callback
             .as_ref()
             .map(|item| {
-                item.state.as_deref() == Some(self.state.secret())
+                item.state.as_deref() == Some(self.authorization.state.secret())
                     && (item.error.is_some() || item.code.is_some())
             })
             .unwrap_or(false);
@@ -2144,7 +2387,7 @@ impl PendingLoopbackAuthorization {
             .map(|item| {
                 item.error.is_none()
                     && item.code.is_some()
-                    && item.state.as_deref() == Some(self.state.secret())
+                    && item.state.as_deref() == Some(self.authorization.state.secret())
             })
             .unwrap_or(false)
         {
@@ -2189,26 +2432,19 @@ pub async fn start_loopback_authorization(
         .map_err(|err| io_error("read OAuth loopback listener address", err))?;
     let redirect_uri = format_loopback_redirect_uri(local_addr, &options.callback_path);
     validate_client_redirect_uri(&client, &redirect_uri)?;
-    let oauth_client = oauth2_client(&client, Some(&redirect_uri))?;
-    let (code_challenge, code_verifier) = PkceCodeChallenge::new_random_sha256();
-    let mut authorization_request = oauth_client
-        .authorize_url(CsrfToken::new_random)
-        .add_scopes(scopes.iter().cloned().map(Scope::new))
-        .set_pkce_challenge(code_challenge);
-    for (key, value) in &options.extra_authorization_params {
-        authorization_request = authorization_request.add_extra_param(key.as_str(), value.as_str());
-    }
-    let (authorization_url, state) = authorization_request.url();
+    let authorization = prepare_authorization(
+        client,
+        scopes,
+        OAuthAuthorizationOptions {
+            redirect_uri,
+            timeout: options.timeout,
+            extra_authorization_params: options.extra_authorization_params,
+        },
+    )?;
 
     Ok(PendingLoopbackAuthorization {
         listener,
-        client,
-        scopes,
-        state,
-        code_verifier,
-        redirect_uri,
-        authorization_url: authorization_url.to_string(),
-        timeout: options.timeout,
+        authorization,
         browser: options.browser,
         success_html: options.success_html,
         error_html: options.error_html,
@@ -2910,6 +3146,143 @@ mod tests {
                 field: "token_endpoint"
             }
         ));
+    }
+
+    #[test]
+    fn provider_neutral_hosted_authorization_uses_pkce_and_hashed_correlation() {
+        let client = OAuthClientConfig::new(
+            "client-id",
+            None,
+            "https://provider.example/oauth/authorize",
+            "https://provider.example/oauth/token",
+        )
+        .expect("client");
+        let pending = prepare_authorization(
+            client,
+            vec!["resource.read".to_string(), "resource.write".to_string()],
+            OAuthAuthorizationOptions::new("https://mcp.example/oauth/callback")
+                .with_timeout(Duration::from_secs(60))
+                .with_extra_authorization_param("audience", "resource-api"),
+        )
+        .expect("prepare authorization");
+
+        let url = Url::parse(pending.authorization_url()).expect("authorization URL");
+        let query = url
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = query.get("state").expect("state");
+        assert_eq!(
+            query
+                .get("code_challenge_method")
+                .map(|value| value.as_ref()),
+            Some("S256")
+        );
+        assert!(query.contains_key("code_challenge"));
+        assert_eq!(
+            query.get("redirect_uri").map(|value| value.as_ref()),
+            Some("https://mcp.example/oauth/callback")
+        );
+        assert_eq!(
+            query.get("audience").map(|value| value.as_ref()),
+            Some("resource-api")
+        );
+        assert_eq!(
+            pending.correlation_key(),
+            oauth_callback_correlation_key(state)
+        );
+        assert_eq!(pending.scopes(), &["resource.read", "resource.write"]);
+
+        let debug = format!("{pending:?}");
+        assert!(!debug.contains(state.as_ref()));
+        assert!(!debug.contains(pending.authorization_url()));
+    }
+
+    #[tokio::test]
+    async fn hosted_authorization_rejects_expired_transaction_before_exchange() {
+        let client = OAuthClientConfig::new(
+            "client-id",
+            None,
+            "https://provider.example/oauth/authorize",
+            "https://provider.example/oauth/token",
+        )
+        .expect("client");
+        let pending = prepare_authorization(
+            client,
+            vec!["resource.read".to_string()],
+            OAuthAuthorizationOptions::new("https://mcp.example/oauth/callback")
+                .with_timeout(Duration::ZERO),
+        )
+        .expect("prepare authorization");
+        let state = Url::parse(pending.authorization_url())
+            .expect("authorization URL")
+            .query_pairs()
+            .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+            .expect("state");
+
+        let error = pending
+            .finish(Some("unused-code"), Some(&state), None)
+            .await
+            .expect_err("expired transaction");
+        assert!(matches!(error, UpstreamOAuthError::AuthorizationExpired));
+    }
+
+    #[tokio::test]
+    async fn hosted_authorization_rejects_wrong_state_before_exchange() {
+        let client = OAuthClientConfig::new(
+            "client-id",
+            None,
+            "https://provider.example/oauth/authorize",
+            "https://provider.example/oauth/token",
+        )
+        .expect("client");
+        let pending = prepare_authorization(
+            client,
+            vec!["resource.read".to_string()],
+            OAuthAuthorizationOptions::new("https://mcp.example/oauth/callback"),
+        )
+        .expect("prepare authorization");
+
+        let error = pending
+            .finish(Some("unused-code"), Some("wrong-state"), None)
+            .await
+            .expect_err("state mismatch");
+        assert!(matches!(error, UpstreamOAuthError::StateMismatch));
+    }
+
+    #[test]
+    fn file_store_implements_refresh_token_store_contract() {
+        fn assert_store<T: RefreshTokenStore>() {}
+        assert_store::<RefreshTokenFileStore>();
+    }
+
+    #[test]
+    fn provider_neutral_token_set_preserves_provider_metadata_and_redacts_secret() {
+        let client = OAuthClientConfig::new(
+            "client-id",
+            None,
+            "https://provider.example/oauth/authorize",
+            "https://provider.example/oauth/token",
+        )
+        .expect("client");
+        let stored = StoredRefreshToken::from_token_set(
+            "provider",
+            &client,
+            vec!["resource.read".to_string()],
+            OAuthTokenSet {
+                access_token: Some(SecretString::new("access-secret")),
+                refresh_token: Some(SecretString::new("refresh-secret")),
+                expires_in: Some(3600),
+                scope: Some("resource.read".to_string()),
+                token_type: Some("Bearer".to_string()),
+                refresh_token_expires_in: Some(7200),
+            },
+        )
+        .expect("stored token");
+
+        assert_eq!(stored.provider, "provider");
+        assert_eq!(stored.client_id, "client-id");
+        assert_eq!(stored.scopes, ["resource.read"]);
+        assert!(!format!("{stored:?}").contains("refresh-secret"));
     }
 
     #[test]
