@@ -2184,6 +2184,9 @@ pub fn prepare_authorization(
         authorization_request = authorization_request.add_extra_param(key.as_str(), value.as_str());
     }
     let (authorization_url, state) = authorization_request.url();
+    let expires_at = Instant::now()
+        .checked_add(options.timeout)
+        .ok_or(UpstreamOAuthError::AuthorizationExpired)?;
     Ok(PendingOAuthAuthorization {
         client,
         scopes,
@@ -2191,7 +2194,7 @@ pub fn prepare_authorization(
         code_verifier,
         redirect_uri: options.redirect_uri,
         authorization_url: authorization_url.to_string(),
-        expires_at: Instant::now() + options.timeout,
+        expires_at,
     })
 }
 
@@ -4224,7 +4227,7 @@ mod tests {
         let callback_url = format!(
             "{}?code=auth-code&state={}",
             pending.redirect_uri(),
-            pending.state.secret()
+            pending.authorization.state.secret()
         );
 
         let token_set = pending

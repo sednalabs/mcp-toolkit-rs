@@ -69,6 +69,13 @@ transaction is single-use, expires after its configured timeout, and keeps the
 PKCE verifier and raw state out of formatted output. Hash an incoming state with
 `oauth_callback_correlation_key` before looking up the transaction.
 
+`PendingOAuthAuthorization` is intentionally an in-process value: it contains
+the PKCE verifier and monotonic expiry state and is not serializable. A
+multi-instance service must use sticky routing for the complete authorization
+transaction or wrap provider-specific serializable transaction state in a
+shared, encrypted coordination layer. Do not assume an arbitrary callback can
+finish on a different instance.
+
 `RefreshTokenStore` is the provider-neutral persistence boundary.
 `RefreshTokenFileStore` implements it for single-host services; distributed
 deployments should provide an encrypted implementation with principal/account
