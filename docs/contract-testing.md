@@ -223,10 +223,27 @@ profile.assert_tool_descriptor(&apps_tool_descriptor_json);
 profile.assert_tool_result_authenticate_meta(&tool_result_meta_json);
 ```
 
-For large tool catalogs, validate the first paginated `tools/list` page as a
-deliberate host discovery surface. This catches regressions where critical
-tools exist on later pages but a client chooses tools from the initial page or a
-deferred tool index is populated incompletely.
+For large tool catalogues, the mandatory host-facing proof is a complete cursor
+drain with an exact count and a required sentinel deliberately placed beyond
+page one. Recording each request cursor prevents a first-page sample from being
+mistaken for the catalogue contract.
+
+```rust
+use mcp_toolkit_testing::complete_catalogue_contract::{
+    ToolListPageEvidence, assert_complete_tool_catalogue,
+};
+
+assert_complete_tool_catalogue(
+    &observed_tool_list_pages,
+    94,
+    &["items.repair"],
+);
+```
+
+Per-page budgets and first-page ordering may still be useful compatibility
+hints for hosts with constrained previews. They are adjunct checks only: a
+first-page assertion does not prove that a host collected, indexed, or can call
+later-page tools.
 
 ```rust
 profile.assert_tool_list_page(

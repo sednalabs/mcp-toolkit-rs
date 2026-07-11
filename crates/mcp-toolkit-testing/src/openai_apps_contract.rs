@@ -519,10 +519,11 @@ impl<'a> OpenAiAppsConformanceProfile<'a> {
         self.assert_tool_descriptors(descriptors);
     }
 
-    /// Asserts that the first `tools/list` page contains required discovery tools.
+    /// Asserts that the first `tools/list` page contains compatibility-priority tools.
     ///
-    /// Use this with large Apps connector tool catalogs where hosts may decide
-    /// routing from the initial page before fetching every `nextCursor` page.
+    /// Use this only as an adjunct for host previews that emphasize the initial
+    /// page. It does not satisfy complete-catalogue conformance; pair it with
+    /// `complete_catalogue_contract::assert_complete_tool_catalogue`.
     ///
     /// # Panics
     /// Panics when the page is empty, has duplicate names, omits any required

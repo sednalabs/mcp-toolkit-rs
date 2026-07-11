@@ -4,7 +4,7 @@ This review records the custom MCP-adjacent layers the toolkit maintains on
 top of `rmcp` and the invariants that keep those layers aligned with the
 official MCP specification and the official Rust SDK.
 
-Review date: 2026-07-07.
+Review date: 2026-07-11.
 
 Primary references:
 
@@ -94,6 +94,8 @@ or server-authoring policy:
 - profile-aware tool inventory and capability projection;
 - generated server templates and schema snapshots;
 - cursor pagination helpers for list operations;
+- bounded complete-list collection for clients that wrap standard list results
+  with host-specific metadata;
 - host and Origin guards around Streamable HTTP route bundles;
 - bounded session manager composition;
 - OAuth metadata and protected-resource helpers;
@@ -107,6 +109,7 @@ or server-authoring policy:
 | stdio transport | `mcp-toolkit-server::stdio` delegates to `rmcp::serve_server(..., stdio())`. | Keep. The toolkit must not write non-MCP data to stdout; diagnostics belong on stderr/logging. |
 | Server macros | Templates use `#[tool_router]`, `#[tool_handler]`, and `ToolRouter`. | Keep. This matches official Rust SDK idioms while still allowing profile gates. |
 | `tools/list` | Templates filter tools by profile and now delegate cursor mechanics to `server::tools::list_tools_result`. | Keep. Custom visibility is service policy; pagination is centralized protocol hygiene. |
+| complete list collection | `core::pagination::collect_paginated_list` drains opaque cursors with page/item limits and cycle rejection, returning items only after terminal success. | Keep as the narrow extension seam for clients whose metadata wrappers cannot call `rmcp::Peer::list_all_tools` directly. Do not publish partial walks. |
 | Tool-call denial | Hidden or profile-denied tools return `CallToolResult::error` with a caller-facing message. | Keep for profile denials. Unknown tool/protocol-shape errors should continue to use `rmcp` protocol errors where the tool router sees them. |
 | Tool annotations and schemas | `mcp-toolkit-core::capability` projects safety hints, input schemas, output schemas, and metadata into `rmcp::model::Tool`. | Keep. Tool annotations are hints, not authorization. Runtime policy must still enforce scopes and risk posture. |
 | Tool inventory defaults | `ToolInventoryPolicy::default()` is fail-closed for unknown tools, with an explicit `permissive()` migration helper for incomplete legacy catalogs. | Keep. Generated and public-facing servers should not list or call unregistered tools by accident. |
@@ -228,8 +231,9 @@ or server-authoring policy:
   requirements.
 - Re-check whether route-bundle Host/Origin preflight can delegate to a public
   `rmcp` middleware or hook instead of local parsing.
-- Add generated contract probes for cursor pagination once probe fixtures cover
-  multi-page tool lists.
+- Keep generated and host-profile contract probes on the complete-catalogue
+  contract: exact page chain, exact count, and at least one required later-page
+  sentinel. First-page budgets are compatibility hints, not discovery proof.
 - Review tool-name validation through the `rmcp` router during each SDK upgrade;
   the toolkit should avoid duplicating SDK validation unless it is enforcing a
   stricter public template policy.

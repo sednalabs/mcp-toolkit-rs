@@ -220,31 +220,35 @@ stable public surface:
    are probe-visible without adding production `find_tools` workarounds.
 5. Use `mcp-toolkit-testing::assert_tool_schema_snapshot` to lock the exported
    `tools/list` contract.
-6. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
+6. For paginated catalogues, use
+   `mcp_toolkit_testing::complete_catalogue_contract` to prove the full opaque
+   cursor chain, exact count, and a required later-page sentinel. First-page
+   budgets are compatibility hints, not complete discovery evidence.
+7. Use `mcp-toolkit-core::openai_tool_search` when large OpenAI-facing MCP
    catalogs should publish a reusable `defer_loading` plus `tool_search`
    request fragment, a richer documentation/resource template, and a local
    `allowed_tools` discovery envelope.
-7. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
+8. Use `mcp-toolkit-http::oauth` and `mcp-toolkit-auth::surface` when serving
    MCP over HTTP with OAuth discovery, Protected Resource Metadata, and
    device-authorization metadata for headless MCP client login.
-8. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
+9. Use `mcp-toolkit-server` when you want the toolkit to assemble stdio startup,
    local Streamable HTTP runtime pieces, host guarding, auth-surface layers, and
    the default MCP route bundle. Server authors can import the underlying
    `rmcp` authoring surface through `mcp_toolkit::rmcp` or
    `mcp_toolkit_server::rmcp` instead of declaring `rmcp` directly.
-9. Use `mcp-toolkit-scratchpad` when a read-only or analytics server needs to
+10. Use `mcp-toolkit-scratchpad` when a read-only or analytics server needs to
    keep large rowsets out of chat while still giving agents bounded DuckDB SQL,
    table inventory, query projections, and cleanup/export affordances. Enable
    `mcp-toolkit-scratchpad/tokio` or the umbrella `scratchpad-tokio` feature
    when calling scratchpad operations from Tokio-backed async MCP handlers; use
    `run_scratchpad_blocking` so DuckDB work stays off the async executor. Keep
    provider-specific ingest and evidence wording in the service repository.
-10. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
+11. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
    and optional tracing/metrics integration.
-11. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
+12. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.
-12. Add policy crates only when the service has an authorization, SQL
+13. Add policy crates only when the service has an authorization, SQL
    read-only, or capability-guard boundary that needs reusable enforcement.
 
 For a legacy backend, first map source authority and blocked operations using
