@@ -60,6 +60,27 @@ For Google upstream APIs, the toolkit provides:
 - `RefreshTokenProvider` for cached access-token refreshes, including
   provider-issued replacement refresh tokens.
 
+Provider-neutral hosted deployments can use `prepare_authorization` with
+`OAuthAuthorizationOptions` instead of binding a loopback listener. Store the
+returned `PendingOAuthAuthorization` in a bounded, principal-scoped transaction
+store keyed by `correlation_key()`, remove it atomically when the callback
+arrives, and call `finish` with the callback code, state, and error fields. The
+transaction is single-use, expires after its configured timeout, and keeps the
+PKCE verifier and raw state out of formatted output. Hash an incoming state with
+`oauth_callback_correlation_key` before looking up the transaction.
+
+`PendingOAuthAuthorization` is intentionally an in-process value: it contains
+the PKCE verifier and monotonic expiry state and is not serializable. A
+multi-instance service must use sticky routing for the complete authorization
+transaction or wrap provider-specific serializable transaction state in a
+shared, encrypted coordination layer. Do not assume an arbitrary callback can
+finish on a different instance.
+
+`RefreshTokenStore` is the provider-neutral persistence boundary.
+`RefreshTokenFileStore` implements it for single-host services; distributed
+deployments should provide an encrypted implementation with principal/account
+isolation and atomic replacement when the provider rotates refresh tokens.
+
 The helper uses `oauth2` for authorization URL construction, PKCE, code
 exchange, refresh-token exchange, and response parsing. Token endpoint HTTP is
 toolkit-owned and disables redirects, so downstream servers do not need to pass
@@ -110,6 +131,12 @@ final `http://127.0.0.1:...` browser redirect URL from the address bar and pass
 it to `PendingLoopbackAuthorization::finish_with_callback_url`. Treat that URL
 as secret-bearing because it contains an authorization code. Do not log it or
 return it from MCP tools.
+
+For a hosted MCP server, prefer a registered HTTPS callback and
+`prepare_authorization` over exposing or forwarding the server's loopback port.
+Keep the callback route narrowly scoped, bind each pending transaction to the
+authenticated principal in the service-owned store, consume the transaction
+before exchanging the code, and return only a generic success or failure page.
 
 ## Token Handling Rules
 
