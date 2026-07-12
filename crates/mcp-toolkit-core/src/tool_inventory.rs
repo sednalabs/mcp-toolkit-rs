@@ -525,11 +525,9 @@ impl RankedToolSearchResponse {
                 summary.normalized_query_terms.clear();
                 summary.excluded_query_terms.clear();
                 summary.ignored_query_terms.clear();
-                return with_match_summary(
-                    ToolSearchResponse::find_tools(None, None, response.read_only, Vec::new())
-                        .compact_value_from_bounded_fields(),
-                    &summary,
-                );
+                response.query = None;
+                response.group = None;
+                return with_match_summary(response.compact_value_from_bounded_fields(), &summary);
             }
             summary.returned_count = response.results.len();
         }
@@ -2485,6 +2483,9 @@ impl ToolInventory {
         let mut ranked = visible
             .into_iter()
             .filter_map(|document| {
+                if fail_closed_query {
+                    return None;
+                }
                 if browse_query {
                     return Some((
                         0_u64,
@@ -2493,8 +2494,7 @@ impl ToolInventory {
                         document,
                     ));
                 }
-                if fail_closed_query
-                    || query_concepts.is_empty()
+                if query_concepts.is_empty()
                     || excluded_query_concepts
                         .iter()
                         .any(|concept| document.query_concept_score(concept) > 0)
@@ -2948,6 +2948,9 @@ fn add_negative_action_variants(source: &str, variants: &mut Vec<String>) {
     if let Some(base) = source.strip_suffix("ing").filter(|base| base.len() >= 3) {
         candidates.push(base.to_string());
         candidates.push(format!("{base}e"));
+        if base.ends_with("ck") {
+            candidates.push(base[..base.len() - 1].to_string());
+        }
         if let Some(shortened) = strip_doubled_final_character(base) {
             candidates.push(shortened);
         }
@@ -2957,6 +2960,9 @@ fn add_negative_action_variants(source: &str, variants: &mut Vec<String>) {
     } else if let Some(base) = source.strip_suffix("ed").filter(|base| base.len() >= 3) {
         candidates.push(base.to_string());
         candidates.push(format!("{base}e"));
+        if base.ends_with("ck") {
+            candidates.push(base[..base.len() - 1].to_string());
+        }
         if let Some(shortened) = strip_doubled_final_character(base) {
             candidates.push(shortened);
         }
@@ -3739,6 +3745,42 @@ mod tests {
             es_actions.match_summary.excluded_query_terms,
             vec!["publishes", "pushes", "dispatches", "refreshes"]
         );
+
+        for query in [
+            "preview campaign without trafficking",
+            "preview campaign without trafficked",
+        ] {
+            let traffic = ToolInventory::from_capabilities([
+                ToolCapability::new("campaign.traffic")
+                    .with_risk_posture(GuardedActionPosture::guarded_apply()),
+                ToolCapability::new("campaign.preview")
+                    .with_risk_posture(GuardedActionPosture::preview()),
+            ])
+            .expect("traffic inventory")
+            .search_ranked(
+                &ToolSearchFilter {
+                    query: Some(query.to_string()),
+                    ..ToolSearchFilter::default()
+                },
+                ToolOperation::List,
+                &ToolInventoryPolicy::strict(),
+            );
+            assert_eq!(
+                traffic
+                    .response
+                    .results
+                    .iter()
+                    .map(|result| result.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["campaign.preview"],
+                "query: {query}"
+            );
+            assert_eq!(
+                traffic.to_compact_value()["openai_allowed_tools"],
+                json!(["campaign.preview"]),
+                "query: {query}"
+            );
+        }
     }
 
     #[test]
@@ -3801,6 +3843,21 @@ mod tests {
             assert!(ranked.response.results.is_empty(), "query: {query}");
             assert_eq!(ranked.match_summary.total_matches, 0, "query: {query}");
         }
+
+        let truncated_blank = inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some(" ".repeat(RANKED_SEARCH_MAX_QUERY_CHARS + 1)),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(truncated_blank.response.results.is_empty());
+        assert_eq!(truncated_blank.match_summary.total_matches, 0);
+        assert!(truncated_blank
+            .match_summary
+            .truncation_reasons
+            .contains(&"query_input".to_string()));
     }
 
     #[test]
@@ -4342,6 +4399,56 @@ mod tests {
                 .as_str()
                 .map(str::len),
             Some(RANKED_SEARCH_MAX_KEYWORD_CHARS)
+        );
+
+        let distinct_unicode_terms = |count: usize| {
+            (0..count)
+                .map(|index| {
+                    format!(
+                        "{index:03}{}",
+                        "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 3)
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut custom_response =
+            ToolSearchResponse::find_tools(None, None, Some(true), Vec::new());
+        custom_response.operation = "custom_ranked_discovery".to_string();
+        let custom = RankedToolSearchResponse {
+            response: custom_response,
+            match_summary: ToolSearchMatchSummary {
+                total_matches: 0,
+                returned_count: 0,
+                result_limit: 20,
+                truncated: false,
+                truncation_reasons: Vec::new(),
+                normalized_query_terms: distinct_unicode_terms(RANKED_SEARCH_MAX_QUERY_TERMS),
+                excluded_query_terms: distinct_unicode_terms(RANKED_SEARCH_MAX_EXCLUDED_TERMS),
+                ignored_query_terms: distinct_unicode_terms(RANKED_SEARCH_MAX_IGNORED_TERMS),
+            },
+        };
+        let (bounded_summary, _) = super::compact_match_summary(&custom.match_summary);
+        let pre_fallback = super::with_match_summary(
+            custom.response.compact_value_from_bounded_fields(),
+            &bounded_summary,
+        );
+        assert!(
+            serde_json::to_vec(&pre_fallback)
+                .expect("pre-fallback ranked response serializes")
+                .len()
+                > RANKED_SEARCH_COMPACT_MAX_BYTES
+        );
+        let custom_compact = custom.to_compact_value();
+        assert_eq!(custom_compact["operation"], "custom_ranked_discovery");
+        assert_eq!(
+            custom_compact["match_summary"]["normalized_query_terms"],
+            json!([])
+        );
+        assert!(
+            serde_json::to_vec(&custom_compact)
+                .expect("custom compact ranked response serializes")
+                .len()
+                <= RANKED_SEARCH_COMPACT_MAX_BYTES
         );
     }
 
