@@ -110,16 +110,25 @@ Use `ToolInventory::search` when a caller depends on strict all-terms substring
 matching. Use the additive `ToolInventory::search_ranked` or
 `ToolCatalog::ranked_search_response` path for natural-language agent queries.
 Ranked search ignores common conversational stop words, down-weights query terms
-that appear across most visible tools, and uses guarded-action posture only as a
-tie-break so equally relevant read/preview tools precede apply tools. Its
-`match_summary` reports the normalized and ignored terms, total matches, returned
-count, and whether the caller's limit truncated the result.
+that appear across most visible tools, matches conservative canonical tokens
+rather than unsafe substrings, and uses guarded-action posture as a deterministic
+tie-break. A genuine browse request is safety-ordered; a supplied query that has
+no searchable terms returns no matches instead of widening to the whole catalog.
+Ranked search defaults to 20 results, hard-caps requested limits at 100, and
+bounds query and result metadata. Its `match_summary` reports normalized and
+ignored terms, total matches, returned count, the effective result limit, and
+stable reasons for every applied truncation.
 
 Both standard and ranked response types provide `to_compact_value()` for the
 selection step. The compact shape retains result metadata and
 `openai_allowed_tools`, but deliberately omits schemas and hosted-client metadata.
-Call `to_value()` when the same response must also carry schemas and deferred-load
-configuration.
+Ranked compact serialization additionally enforces a 32 KiB byte budget by
+dropping lowest-ranked results and recording `compact_response_bytes` in the
+truncation reasons. Call `to_value()` when the same response must also carry
+schemas and deferred-load configuration; the full shape is intentionally not
+subject to the compact byte budget. Use the ranked response's
+`into_openai_response()` builder when adding companion allowed tools, extra
+results, or custom deferred-loading metadata so the match summary is preserved.
 
 The default OpenAI MCP config leaves `require_approval` unset. If a trusted
 workflow wants to reduce approval friction for read-only tools, supply an
