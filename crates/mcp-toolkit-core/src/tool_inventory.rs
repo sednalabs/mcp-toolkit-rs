@@ -3010,7 +3010,8 @@ mod tests {
         ToolInventoryDenialReason, ToolInventoryPolicy, ToolOperation, ToolSearchMatchSummary,
         OPERATOR_PROFILE_KEY, RANKED_SEARCH_COMPACT_MAX_BYTES, RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
         RANKED_SEARCH_MAX_EXCLUDED_TERMS, RANKED_SEARCH_MAX_GROUP_CHARS,
-        RANKED_SEARCH_MAX_KEYWORDS, RANKED_SEARCH_MAX_KEYWORD_CHARS, READ_ONLY_PROFILE_KEY,
+        RANKED_SEARCH_MAX_KEYWORDS, RANKED_SEARCH_MAX_KEYWORD_CHARS, RANKED_SEARCH_MAX_QUERY_CHARS,
+        READ_ONLY_PROFILE_KEY,
     };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse};
     use crate::guarded_action::{GuardedActionOperationClass, GuardedActionPosture};
