@@ -128,9 +128,10 @@ additional action roots register them explicitly with
 `ToolCapability::with_action_lexemes` or the matching
 `ToolCatalogEntry::with_action_lexemes` builder so their own inflected exclusions
 remain fail-closed without widening the global matcher. Provider roots are
-bounded in count and length at registration and under an aggregate per-search
-cap; overflow is reported as truncated result metadata and makes negative-intent
-search fail closed. Negated
+validated as canonical alphanumeric roots, bounded in count and length at
+registration, and subject to an aggregate per-search cap. Invalid, too-short,
+or overflowing metadata is reported as truncated result metadata and makes
+negative-intent search fail closed. Negated
 terms are reported separately in `excluded_query_terms`. A truncated query,
 dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
@@ -161,7 +162,11 @@ omits echoed query, group, and term diagnostics before removing valid inventory
 results. It retains counts and the byte-budget reason. Call
 `to_value()` when the same response must also carry
 schemas and deferred-load configuration; the full shape is intentionally not
-subject to the compact byte budget. Use the ranked response's
+subject to the compact byte budget and is intended for bounded debug, human, or
+configuration surfaces. Agent-facing discovery tools should emit the compact
+shape and may impose a stricter adapter-level context budget; the 32 KiB limit
+is a deterministic encoded-byte ceiling, not a tokenizer-specific token promise.
+Use the ranked response's
 `into_openai_response()` builder when adding companion allowed tools, extra
 results, or custom deferred-loading metadata so the match summary is preserved.
 Both OpenAI response builders also provide `to_compact_value()`. Their compact

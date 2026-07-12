@@ -56,6 +56,7 @@ const RANKED_SEARCH_MAX_KEYWORDS: usize = 32;
 const RANKED_SEARCH_MAX_KEYWORD_CHARS: usize = 128;
 const RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY: usize = 32;
 const RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL: usize = 256;
+const RANKED_SEARCH_MIN_ACTION_LEXEME_CHARS: usize = 3;
 const RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS: usize = 64;
 const RANKED_SEARCH_COMPACT_MAX_BYTES: usize = 32 * 1_024;
 const COMPACT_SEARCH_MAX_RESULTS: usize = 100;
@@ -178,7 +179,8 @@ impl ToolCapability {
     ///
     /// Exact matching remains available without this metadata. Register roots here when a
     /// provider uses action verbs outside the toolkit's conservative built-in vocabulary and
-    /// expects inflected exclusions such as `without purging` to match `purge`.
+    /// expects inflected exclusions such as `without purging` to match `purge`. Roots must be
+    /// canonical ASCII-alphanumeric tokens of 3-64 characters.
     pub fn with_action_lexemes<I, S>(mut self, lexemes: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -197,7 +199,7 @@ impl ToolCapability {
                 truncate_search_text(lexeme.as_ref(), RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS);
             let lexeme = lexeme.trim().to_ascii_lowercase();
             if truncated
-                || lexeme.is_empty()
+                || lexeme.len() < RANKED_SEARCH_MIN_ACTION_LEXEME_CHARS
                 || !lexeme
                     .chars()
                     .all(|character| character.is_ascii_alphanumeric())
@@ -249,6 +251,22 @@ impl ToolCapability {
     /// Return optional guarded-action posture metadata.
     pub fn risk_posture(&self) -> Option<&GuardedActionPosture> {
         self.risk_posture.as_ref()
+    }
+
+    /// Return provider-specific canonical action roots in stable order.
+    pub fn action_lexemes(&self) -> Vec<&str> {
+        let mut lexemes = self
+            .action_lexemes
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        lexemes.sort_unstable();
+        lexemes
+    }
+
+    /// Return true when provider action-root metadata exceeded its registration bounds.
+    pub fn action_lexemes_truncated(&self) -> bool {
+        self.action_lexemes_truncated
     }
 }
 
@@ -918,6 +936,11 @@ impl OpenAiToolSearchResponse {
         }
         let extra_limit_truncated = extra_source_count > COMPACT_OPENAI_MAX_EXTRA_RESULTS;
 
+        let inventory_truncated = base
+            .truncation_reasons
+            .iter()
+            .any(|reason| matches!(reason.as_str(), "result_metadata" | "result_limit"));
+        let base_truncated = base.truncated;
         let mut truncation_reasons = base.truncation_reasons;
         if companion_metadata_truncated {
             push_unique_reason(&mut truncation_reasons, "companion_tool_metadata");
@@ -939,7 +962,8 @@ impl OpenAiToolSearchResponse {
             companion_allowed_tools,
             extra_source_count,
             extra_results,
-            truncated: base.truncated
+            inventory_truncated,
+            truncated: base_truncated
                 || companion_metadata_truncated
                 || companion_limit_truncated
                 || extra_metadata_truncated
@@ -996,7 +1020,7 @@ impl RankedOpenAiToolSearchResponse {
     pub fn to_compact_value(&self) -> Value {
         let mut projection = self.response.compact_projection();
         let (mut summary, summary_truncated) = compact_match_summary(&self.match_summary);
-        if projection.truncated || summary_truncated {
+        if projection.inventory_truncated || summary_truncated {
             summary.truncated = true;
             push_unique_reason(&mut summary.truncation_reasons, "compact_response_bytes");
         }
@@ -1011,21 +1035,32 @@ impl RankedOpenAiToolSearchResponse {
             }
             projection.truncated = true;
             push_unique_reason(&mut projection.truncation_reasons, "compact_response_bytes");
-            summary.truncated = true;
-            push_unique_reason(&mut summary.truncation_reasons, "compact_response_bytes");
             if !diagnostics_compacted {
                 projection.response.query = None;
                 projection.response.group = None;
+                let summary_diagnostics_removed = !summary.normalized_query_terms.is_empty()
+                    || !summary.excluded_query_terms.is_empty()
+                    || !summary.ignored_query_terms.is_empty();
                 summary.normalized_query_terms.clear();
                 summary.excluded_query_terms.clear();
                 summary.ignored_query_terms.clear();
+                if summary_diagnostics_removed {
+                    summary.truncated = true;
+                    push_unique_reason(&mut summary.truncation_reasons, "compact_response_bytes");
+                }
                 diagnostics_compacted = true;
                 continue;
             }
-            if !projection.shrink_auxiliary_payload() && !projection.shrink_inventory_result() {
-                summary.returned_count = 0;
-                return with_match_summary(projection.to_value(), &summary);
+            if projection.shrink_auxiliary_payload() {
+                continue;
             }
+            if projection.shrink_inventory_result() {
+                summary.truncated = true;
+                push_unique_reason(&mut summary.truncation_reasons, "compact_response_bytes");
+                continue;
+            }
+            summary.returned_count = 0;
+            return with_match_summary(projection.to_value(), &summary);
         }
     }
 }
@@ -1033,6 +1068,7 @@ impl RankedOpenAiToolSearchResponse {
 struct CompactOpenAiSearchProjection {
     response: ToolSearchResponse,
     source_count: usize,
+    inventory_truncated: bool,
     companion_source_count: usize,
     companion_allowed_tools: Vec<String>,
     extra_source_count: usize,
@@ -2527,7 +2563,13 @@ impl ToolInventory {
         let mut action_lexemes = default_search_action_lexemes();
         let mut action_lexemes_truncated = false;
         'documents: for document in &visible {
-            for lexeme in &document.capability.action_lexemes {
+            let mut document_lexemes = document
+                .capability
+                .action_lexemes
+                .iter()
+                .collect::<Vec<_>>();
+            document_lexemes.sort_unstable();
+            for lexeme in document_lexemes {
                 if action_lexemes.len() == RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL
                     && !action_lexemes.contains(lexeme)
                 {
@@ -2928,9 +2970,16 @@ fn normalize_ranked_query(query: &str, action_lexemes: &HashSet<String>) -> Norm
             continue;
         }
         if negative_scope && is_search_negation_filler(&raw) {
-            ignored_terms_truncated |=
-                push_bounded_unique(&mut ignored_terms, raw, RANKED_SEARCH_MAX_IGNORED_TERMS);
-            continue;
+            let mut action_variants = search_token_variants(&raw);
+            add_negative_action_variants(&raw, &mut action_variants, action_lexemes);
+            if !action_variants
+                .iter()
+                .any(|variant| action_lexemes.contains(variant))
+            {
+                ignored_terms_truncated |=
+                    push_bounded_unique(&mut ignored_terms, raw, RANKED_SEARCH_MAX_IGNORED_TERMS);
+                continue;
+            }
         }
         if is_search_stop_word(&raw) {
             ignored_terms_truncated |=
@@ -3461,6 +3510,8 @@ fn catalog_entry_value(entry: &ToolCatalogEntry) -> Value {
         "exposure": exposure_label(entry.capability.exposure()),
         "discovery": entry.capability.discovery().map(discovery_value),
         "risk_posture": entry.capability.risk_posture(),
+        "action_lexemes": entry.capability.action_lexemes(),
+        "action_lexemes_truncated": entry.capability.action_lexemes_truncated(),
         "handler": entry.handler(),
         "tags": entry.tags(),
         "input_schema": entry.input_schema(),
@@ -3504,8 +3555,8 @@ fn profile_value(profile: &ToolCatalogProfile) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        RankedToolSearchResponse, ToolCapability, ToolCatalog, ToolCatalogEntry,
-        ToolCatalogExample, ToolCatalogProfile, ToolExposure, ToolInventory,
+        default_search_action_lexemes, RankedToolSearchResponse, ToolCapability, ToolCatalog,
+        ToolCatalogEntry, ToolCatalogExample, ToolCatalogProfile, ToolExposure, ToolInventory,
         ToolInventoryDenialReason, ToolInventoryPolicy, ToolOperation, ToolSearchMatchSummary,
         COMPACT_SEARCH_MAX_TOOL_NAME_CHARS, OPERATOR_PROFILE_KEY, RANKED_SEARCH_COMPACT_MAX_BYTES,
         RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY, RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL,
@@ -3517,7 +3568,7 @@ mod tests {
     };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse, ToolSearchResult};
     use crate::guarded_action::{GuardedActionOperationClass, GuardedActionPosture};
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn strict_policy_blocks_unregistered_tools() {
@@ -3754,6 +3805,33 @@ mod tests {
         );
         assert_eq!(plural.response.results[0].name, "ad.preview");
         assert_eq!(plural.response.results[1].name, "ads.delete");
+
+        let equal_rank = ToolInventory::from_capabilities([
+            ToolCapability::new("zeta.read")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new("Read metrics.", ["metrics"])),
+            ToolCapability::new("alpha.read")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new("Read metrics.", ["metrics"])),
+        ])
+        .expect("equal-rank inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("metrics".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            equal_rank
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha.read", "zeta.read"]
+        );
     }
 
     #[test]
@@ -4094,6 +4172,28 @@ mod tests {
             vec!["session.preview", "session.canva"]
         );
 
+        let coordinated_filler_actions = ToolInventory::from_capabilities([
+            ToolCapability::new("campaign.call")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("campaign.delete")
+                .with_risk_posture(GuardedActionPosture::destructive()),
+            ToolCapability::new("campaign.preview")
+                .with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("coordinated filler-action inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("preview campaign without call or delete".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            coordinated_filler_actions.to_compact_value()["openai_allowed_tools"],
+            json!(["campaign.preview"])
+        );
+
         let extended_actions = ToolInventory::from_capabilities([
             ToolCapability::new("cache.purge")
                 .with_risk_posture(GuardedActionPosture::destructive()),
@@ -4155,6 +4255,24 @@ mod tests {
             json!(["cache.preview"])
         );
 
+        let artifact_catalog = ToolCatalog::from_entries([ToolCatalogEntry::new("cache.evict")
+            .with_action_lexemes(["evict"])
+            .with_risk_posture(GuardedActionPosture::destructive())])
+        .expect("catalog action artifact");
+        let artifact = artifact_catalog.to_value();
+        assert_eq!(artifact["tools"][0]["action_lexemes"], json!(["evict"]));
+        assert_eq!(artifact["tools"][0]["action_lexemes_truncated"], false);
+
+        let exact_roots = ToolCapability::new("cache.preview").with_action_lexemes(
+            (0..RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
+                .map(|index| format!("action{index}")),
+        );
+        assert_eq!(
+            exact_roots.action_lexemes().len(),
+            RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY
+        );
+        assert!(!exact_roots.action_lexemes_truncated());
+
         let bounded_roots = ToolCapability::new("cache.preview").with_action_lexemes(
             (0..=RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
                 .map(|index| format!("action{index}")),
@@ -4169,6 +4287,38 @@ mod tests {
             .with_action_lexemes(["x".repeat(RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS + 1)]);
         assert!(overlong_root.action_lexemes.is_empty());
         assert!(overlong_root.action_lexemes_truncated);
+
+        let max_length_root = "x".repeat(RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS);
+        let exact_length =
+            ToolCapability::new("cache.preview").with_action_lexemes([max_length_root.clone()]);
+        assert_eq!(
+            exact_length.action_lexemes(),
+            vec![max_length_root.as_str()]
+        );
+        assert!(!exact_length.action_lexemes_truncated());
+
+        let short_root = ToolCapability::new("workflow.go").with_action_lexemes(["go"]);
+        assert!(short_root.action_lexemes().is_empty());
+        assert!(short_root.action_lexemes_truncated());
+        let short_root_search = ToolInventory::from_capabilities([
+            short_root.with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("workflow.preview")
+                .with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("short action-root inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("preview workflow without going".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(short_root_search.response.results.is_empty());
+        assert!(short_root_search
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
 
         let truncated_catalog = ToolCatalog::from_entries([ToolCatalogEntry::new("cache.preview")
             .with_action_lexemes(
@@ -4187,6 +4337,65 @@ mod tests {
         );
         assert!(truncated_catalog.response.results.is_empty());
         assert!(truncated_catalog
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+
+        let built_in_action_count = default_search_action_lexemes().len();
+        assert!(built_in_action_count < RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL);
+        let exact_provider_action_count =
+            RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL - built_in_action_count;
+        let mut exact_aggregate_capabilities = Vec::new();
+        let mut next_action = 0;
+        while next_action < exact_provider_action_count {
+            let action_count = (exact_provider_action_count - next_action)
+                .min(RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY);
+            let capability_index = exact_aggregate_capabilities.len();
+            exact_aggregate_capabilities.push(
+                ToolCapability::new(format!("cache.exact{capability_index}"))
+                    .with_action_lexemes(
+                        (next_action..next_action + action_count)
+                            .map(|index| format!("provideraction{index}")),
+                    )
+                    .with_risk_posture(GuardedActionPosture::preview()),
+            );
+            next_action += action_count;
+        }
+        let exact_aggregate =
+            ToolInventory::from_capabilities(exact_aggregate_capabilities.clone())
+                .expect("exact aggregate action inventory")
+                .search_ranked(
+                    &ToolSearchFilter {
+                        query: Some("cache without evicting".to_string()),
+                        ..ToolSearchFilter::default()
+                    },
+                    ToolOperation::List,
+                    &ToolInventoryPolicy::strict(),
+                );
+        assert!(!exact_aggregate.response.results.is_empty());
+        assert!(!exact_aggregate
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+
+        let aggregate_boundary_overflow = ToolInventory::from_capabilities(
+            exact_aggregate_capabilities
+                .into_iter()
+                .chain([ToolCapability::new("zzzz.overflow")
+                    .with_action_lexemes(["overflowaction"])
+                    .with_risk_posture(GuardedActionPosture::preview())]),
+        )
+        .expect("aggregate boundary overflow inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("cache without evicting".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(aggregate_boundary_overflow.response.results.is_empty());
+        assert!(aggregate_boundary_overflow
             .match_summary
             .truncation_reasons
             .contains(&"result_metadata".to_string()));
@@ -4214,6 +4423,37 @@ mod tests {
             );
         assert!(aggregate_overflow.response.results.is_empty());
         assert!(aggregate_overflow
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+
+        let hidden_overflow = ToolInventory::from_capabilities(
+            [ToolCapability::new("cache.preview")
+                .with_risk_posture(GuardedActionPosture::preview())]
+            .into_iter()
+            .chain((0..capability_count).map(|capability_index| {
+                ToolCapability::new(format!("hidden.{capability_index}"))
+                    .with_action_lexemes(
+                        (0..RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
+                            .map(|index| format!("hiddenaction{capability_index}x{index}")),
+                    )
+                    .with_exposure(ToolExposure::Disabled)
+            })),
+        )
+        .expect("hidden overflow inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("cache without evicting".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            hidden_overflow.to_compact_value()["openai_allowed_tools"],
+            json!(["cache.preview"])
+        );
+        assert!(!hidden_overflow
             .match_summary
             .truncation_reasons
             .contains(&"result_metadata".to_string()));
@@ -5348,6 +5588,85 @@ mod tests {
             .as_array()
             .is_some_and(|reasons| reasons.contains(&json!("extra_result_metadata"))));
 
+        assert!(super::compact_extra_result_fits(&json!(vec![
+            Value::Null;
+            super::COMPACT_OPENAI_MAX_EXTRA_RESULT_NODES
+                - 1
+        ])));
+        assert!(!super::compact_extra_result_fits(&json!(vec![
+            Value::Null;
+            super::COMPACT_OPENAI_MAX_EXTRA_RESULT_NODES
+        ])));
+
+        let pressure_keywords = (0..RANKED_SEARCH_MAX_KEYWORDS)
+            .map(|index| {
+                format!(
+                    "{index:03}-{}",
+                    "k".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 4)
+                )
+            })
+            .collect::<Vec<_>>();
+        let plain_pressure = ToolSearchResponse::find_tools(
+            Some("inventory".to_string()),
+            None,
+            Some(true),
+            (0..12)
+                .map(|index| ToolSearchResult {
+                    name: format!("pressure.{index:03}"),
+                    group: Some("inventory".to_string()),
+                    read_only: true,
+                    description: Some("d ".repeat(RANKED_SEARCH_MAX_DESCRIPTION_CHARS / 2)),
+                    keywords: pressure_keywords.clone(),
+                    risk_posture: Some(GuardedActionPosture::read_only()),
+                })
+                .collect(),
+        )
+        .into_openai_response()
+        .to_compact_value();
+        assert!(
+            serde_json::to_vec(&plain_pressure)
+                .expect("plain pressure response serializes")
+                .len()
+                <= RANKED_SEARCH_COMPACT_MAX_BYTES
+        );
+        let pressure_returned = plain_pressure["compact_summary"]["returned_count"]
+            .as_u64()
+            .expect("plain pressure returned count") as usize;
+        assert!(pressure_returned > 0 && pressure_returned < 12);
+        assert_eq!(
+            plain_pressure["results"]
+                .as_array()
+                .expect("plain pressure results")
+                .iter()
+                .map(|result| result["name"].as_str().expect("pressure result name"))
+                .collect::<Vec<_>>(),
+            (0..pressure_returned)
+                .map(|index| format!("pressure.{index:03}"))
+                .collect::<Vec<_>>()
+        );
+
+        let retained_name = ToolSearchResponse::find_tools(
+            None,
+            None,
+            Some(true),
+            vec![ToolSearchResult {
+                name: "inventory.read".to_string(),
+                group: Some("g".repeat(RANKED_SEARCH_MAX_GROUP_CHARS + 1)),
+                read_only: true,
+                description: Some("d".repeat(RANKED_SEARCH_MAX_DESCRIPTION_CHARS + 1)),
+                keywords: vec!["k".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS + 1)],
+                risk_posture: Some(GuardedActionPosture::read_only()),
+            }],
+        )
+        .into_openai_response()
+        .to_compact_value();
+        assert_eq!(retained_name["results"][0]["name"], "inventory.read");
+        assert_eq!(retained_name["results"][0]["description"], Value::Null);
+        assert_eq!(retained_name["results"][0]["keywords"], json!([]));
+        assert!(retained_name["compact_summary"]["truncation_reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.contains(&json!("result_metadata"))));
+
         let companion_compact = ToolSearchResponse::find_tools(None, None, None, Vec::new())
             .into_openai_response()
             .with_companion_allowed_tools([
@@ -5373,6 +5692,46 @@ mod tests {
         assert!(companion_compact["compact_summary"]["truncation_reasons"]
             .as_array()
             .is_some_and(|reasons| reasons.contains(&json!("companion_tool_metadata"))));
+
+        let auxiliary_only = RankedToolSearchResponse {
+            response: ToolSearchResponse::find_tools(
+                Some("inventory".to_string()),
+                None,
+                Some(true),
+                vec![ToolSearchResult {
+                    name: "inventory.read".to_string(),
+                    group: Some("inventory".to_string()),
+                    read_only: true,
+                    description: Some("Read inventory".to_string()),
+                    keywords: vec!["inventory".to_string()],
+                    risk_posture: Some(GuardedActionPosture::read_only()),
+                }],
+            ),
+            match_summary: ToolSearchMatchSummary {
+                total_matches: 1,
+                returned_count: 1,
+                result_limit: 20,
+                truncated: false,
+                truncation_reasons: Vec::new(),
+                normalized_query_terms: vec!["inventory".to_string()],
+                excluded_query_terms: Vec::new(),
+                ignored_query_terms: Vec::new(),
+            },
+        }
+        .into_openai_response()
+        .with_companion_allowed_tools(
+            (0..=super::COMPACT_OPENAI_MAX_COMPANION_TOOLS)
+                .map(|index| format!("companion.{index:03}")),
+        )
+        .to_compact_value();
+        assert_eq!(auxiliary_only["match_summary"]["truncated"], false);
+        assert_eq!(
+            auxiliary_only["match_summary"]["truncation_reasons"],
+            json!([])
+        );
+        assert!(auxiliary_only["compact_summary"]["truncation_reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.contains(&json!("companion_tool_limit"))));
 
         let keywords = (0..RANKED_SEARCH_MAX_KEYWORDS)
             .map(|index| format!("{index:03}-{}", "k".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS)))
@@ -5784,6 +6143,20 @@ mod tests {
             ranked_compact["match_summary"],
             ranked_full["match_summary"]
         );
+
+        let ranked_profile = catalog.ranked_search_response_for_profile(
+            &ToolSearchFilter {
+                query: Some("items".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &catalog.profiles()[0],
+        );
+        assert_eq!(
+            ranked_profile.to_compact_value()["openai_allowed_tools"],
+            json!(["items.search"])
+        );
+        assert_eq!(ranked_profile.match_summary.total_matches, 1);
 
         let contracts = catalog.profile_contracts(ToolOperation::List);
         assert_eq!(contracts.len(), 1);
