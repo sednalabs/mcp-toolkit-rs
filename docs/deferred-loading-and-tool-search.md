@@ -106,6 +106,21 @@ needs companion allowed tools or extra result records, wrap it with
 `ToolSearchResponse::into_openai_response()` and add those OpenAI-specific
 extensions there.
 
+Use `ToolInventory::search` when a caller depends on strict all-terms substring
+matching. Use the additive `ToolInventory::search_ranked` or
+`ToolCatalog::ranked_search_response` path for natural-language agent queries.
+Ranked search ignores common conversational stop words, down-weights query terms
+that appear across most visible tools, and uses guarded-action posture only as a
+tie-break so equally relevant read/preview tools precede apply tools. Its
+`match_summary` reports the normalized and ignored terms, total matches, returned
+count, and whether the caller's limit truncated the result.
+
+Both standard and ranked response types provide `to_compact_value()` for the
+selection step. The compact shape retains result metadata and
+`openai_allowed_tools`, but deliberately omits schemas and hosted-client metadata.
+Call `to_value()` when the same response must also carry schemas and deferred-load
+configuration.
+
 The default OpenAI MCP config leaves `require_approval` unset. If a trusted
 workflow wants to reduce approval friction for read-only tools, supply an
 explicit reviewed read-only override with service-owned tool names. The toolkit

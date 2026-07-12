@@ -243,6 +243,29 @@ pub struct ToolSearchResult {
     pub risk_posture: Option<GuardedActionPosture>,
 }
 
+/// Completeness metadata for one ranked inventory search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSearchMatchSummary {
+    pub total_matches: usize,
+    pub returned_count: usize,
+    pub truncated: bool,
+    pub normalized_query_terms: Vec<String>,
+    pub ignored_query_terms: Vec<String>,
+}
+
+impl ToolSearchMatchSummary {
+    /// Serialize the match summary into its stable JSON shape.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "total_matches": self.total_matches,
+            "returned_count": self.returned_count,
+            "truncated": self.truncated,
+            "normalized_query_terms": self.normalized_query_terms,
+            "ignored_query_terms": self.ignored_query_terms,
+        })
+    }
+}
+
 /// Standard JSON envelope for tool-search/deferred-loading responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSearchResponse {
@@ -318,10 +341,65 @@ impl ToolSearchResponse {
         })
     }
 
+    /// Serialize the search result without schemas or hosted-client metadata.
+    pub fn to_compact_value(&self) -> Value {
+        let result_values = self
+            .results
+            .iter()
+            .map(tool_search_result_value)
+            .collect::<Vec<_>>();
+        json!({
+            "operation": self.operation,
+            "query": self.query,
+            "group": self.group,
+            "read_only": self.read_only,
+            "results": result_values,
+            "openai_allowed_tools": self.openai_allowed_tools(),
+        })
+    }
+
     /// Wrap this response in an OpenAI-oriented builder with extra result support.
     pub fn into_openai_response(self) -> OpenAiToolSearchResponse {
         OpenAiToolSearchResponse::from_response(self)
     }
+}
+
+/// Ranked tool-search response with explicit completeness metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedToolSearchResponse {
+    pub response: ToolSearchResponse,
+    pub match_summary: ToolSearchMatchSummary,
+}
+
+impl RankedToolSearchResponse {
+    /// Attach optional MCP tool schemas keyed by tool name.
+    pub fn with_schemas(mut self, schemas: Option<Value>) -> Self {
+        self.response = self.response.with_schemas(schemas);
+        self
+    }
+
+    /// Attach a compatibility label for hosted-client metadata.
+    pub fn with_metadata_label(mut self, label: impl Into<String>) -> Self {
+        self.response = self.response.with_metadata_label(label);
+        self
+    }
+
+    /// Serialize the ranked response with schemas and hosted-client metadata.
+    pub fn to_value(&self) -> Value {
+        with_match_summary(self.response.to_value(), &self.match_summary)
+    }
+
+    /// Serialize the ranked response without schemas or hosted-client metadata.
+    pub fn to_compact_value(&self) -> Value {
+        with_match_summary(self.response.to_compact_value(), &self.match_summary)
+    }
+}
+
+fn with_match_summary(mut value: Value, summary: &ToolSearchMatchSummary) -> Value {
+    if let Value::Object(object) = &mut value {
+        object.insert("match_summary".to_string(), summary.to_value());
+    }
+    value
 }
 
 /// Additive OpenAI response builder for local tool-search helpers.
@@ -1387,6 +1465,34 @@ impl ToolCatalog {
         self.search_response(filter, operation, profile.policy())
     }
 
+    /// Search catalog inventory with relevance ranking and completeness metadata.
+    pub fn ranked_search_response(
+        &self,
+        filter: &ToolSearchFilter,
+        operation: ToolOperation,
+        policy: &ToolInventoryPolicy,
+    ) -> RankedToolSearchResponse {
+        let response = self.inventory().search_ranked(filter, operation, policy);
+        let schemas = self.schemas_by_tool_names(
+            response
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str()),
+        );
+        response.with_schemas(Some(schemas))
+    }
+
+    /// Search catalog inventory with relevance ranking through a named profile.
+    pub fn ranked_search_response_for_profile(
+        &self,
+        filter: &ToolSearchFilter,
+        operation: ToolOperation,
+        profile: &ToolCatalogProfile,
+    ) -> RankedToolSearchResponse {
+        self.ranked_search_response(filter, operation, profile.policy())
+    }
+
     /// Build profile contracts for every registered profile.
     pub fn profile_contracts(&self, operation: ToolOperation) -> Vec<ToolCatalogContract> {
         let inventory = self.inventory();
@@ -1689,6 +1795,162 @@ impl ToolInventory {
         }
         results
     }
+
+    /// Search registered tool metadata using natural-language relevance ranking.
+    ///
+    /// Unlike [`Self::search`], ranked search uses any meaningful query-term
+    /// match, down-weights terms common across the visible catalog, and uses
+    /// guarded-action posture as a deterministic tie-break so preview/read
+    /// surfaces appear before apply surfaces with equal relevance.
+    ///
+    /// # Examples
+    /// ```
+    /// use mcp_toolkit_core::tool_inventory::{
+    ///     ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryPolicy,
+    ///     ToolOperation, ToolSearchFilter,
+    /// };
+    ///
+    /// let inventory = ToolInventory::from_capabilities([
+    ///     ToolCapability::new("campaign.preview")
+    ///         .with_read_only(true)
+    ///         .with_discovery(ToolDiscoveryMetadata::new(
+    ///             "Preview a campaign plan",
+    ///             ["campaign", "plan", "preview"],
+    ///         )),
+    ///     ToolCapability::new("campaign.apply")
+    ///         .with_discovery(ToolDiscoveryMetadata::new(
+    ///             "Apply a reviewed campaign plan",
+    ///             ["campaign", "apply"],
+    ///         )),
+    /// ])?;
+    /// let response = inventory.search_ranked(
+    ///     &ToolSearchFilter {
+    ///         query: Some("help me plan a campaign".to_string()),
+    ///         limit: Some(1),
+    ///         ..ToolSearchFilter::default()
+    ///     },
+    ///     ToolOperation::List,
+    ///     &ToolInventoryPolicy::strict(),
+    /// );
+    ///
+    /// assert_eq!(response.response.results[0].name, "campaign.preview");
+    /// assert_eq!(response.match_summary.total_matches, 2);
+    /// assert!(response.match_summary.truncated);
+    /// # Ok::<(), mcp_toolkit_core::tool_inventory::ToolInventoryError>(())
+    /// ```
+    pub fn search_ranked(
+        &self,
+        filter: &ToolSearchFilter,
+        operation: ToolOperation,
+        policy: &ToolInventoryPolicy,
+    ) -> RankedToolSearchResponse {
+        let query = filter.query.as_deref().unwrap_or_default();
+        let (query_terms, ignored_query_terms) = normalize_ranked_query(query);
+        let group = filter
+            .group
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        let visible = self
+            .capabilities()
+            .into_iter()
+            .filter(|capability| policy.allows_capability(capability, operation))
+            .filter(|capability| {
+                group.is_none_or(|group| capability.group.as_deref() == Some(group))
+            })
+            .filter(|capability| {
+                filter
+                    .read_only
+                    .is_none_or(|read_only| capability.read_only == read_only)
+            })
+            .collect::<Vec<_>>();
+
+        let document_frequencies = query_terms
+            .iter()
+            .map(|term| {
+                visible
+                    .iter()
+                    .filter(|capability| capability.query_term_score(term) > 0)
+                    .count()
+            })
+            .collect::<Vec<_>>();
+        let document_count = visible.len();
+
+        let mut ranked = visible
+            .into_iter()
+            .filter_map(|capability| {
+                if query_terms.is_empty() {
+                    return Some((
+                        0_u64,
+                        0_usize,
+                        capability_safety_rank(capability),
+                        capability,
+                    ));
+                }
+
+                let mut score = 0_u64;
+                let mut matched_terms = 0_usize;
+                for (term, document_frequency) in
+                    query_terms.iter().zip(document_frequencies.iter())
+                {
+                    let field_score = capability.query_term_score(term);
+                    if field_score == 0 {
+                        continue;
+                    }
+                    matched_terms += 1;
+                    let rarity_multiplier = (document_count + 1) / (document_frequency + 1);
+                    score += (field_score * rarity_multiplier.max(1)) as u64;
+                }
+
+                (score > 0).then_some((
+                    score,
+                    matched_terms,
+                    capability_safety_rank(capability),
+                    capability,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        if query_terms.is_empty() {
+            ranked.sort_by(|left, right| left.3.name.cmp(&right.3.name));
+        } else {
+            ranked.sort_by(|left, right| {
+                right
+                    .0
+                    .cmp(&left.0)
+                    .then_with(|| right.1.cmp(&left.1))
+                    .then_with(|| left.2.cmp(&right.2))
+                    .then_with(|| left.3.name.cmp(&right.3.name))
+            });
+        }
+
+        let total_matches = ranked.len();
+        if let Some(limit) = filter.limit {
+            ranked.truncate(limit);
+        }
+        let results = ranked
+            .into_iter()
+            .map(|(_, _, _, capability)| capability.to_search_result())
+            .collect::<Vec<_>>();
+        let returned_count = results.len();
+
+        RankedToolSearchResponse {
+            response: ToolSearchResponse::find_tools(
+                filter.query.clone(),
+                filter.group.clone(),
+                filter.read_only,
+                results,
+            ),
+            match_summary: ToolSearchMatchSummary {
+                total_matches,
+                returned_count,
+                truncated: returned_count < total_matches,
+                normalized_query_terms: query_terms,
+                ignored_query_terms,
+            },
+        }
+    }
 }
 
 impl ToolCapability {
@@ -1712,6 +1974,171 @@ impl ToolCapability {
         }
         terms.iter().all(|term| haystack.contains(term))
     }
+
+    fn to_search_result(&self) -> ToolSearchResult {
+        ToolSearchResult {
+            name: self.name.clone(),
+            group: self.group.clone(),
+            read_only: self.read_only,
+            description: self
+                .discovery
+                .as_ref()
+                .map(|discovery| discovery.description.clone()),
+            keywords: self
+                .discovery
+                .as_ref()
+                .map(|discovery| discovery.keywords.clone())
+                .unwrap_or_default(),
+            risk_posture: self.risk_posture,
+        }
+    }
+
+    fn query_term_score(&self, term: &str) -> usize {
+        let mut score = token_field_score(term, tokenize_search_text(&self.name).iter(), 64, 48);
+        if let Some(group) = &self.group {
+            score = score.max(token_field_score(
+                term,
+                tokenize_search_text(group).iter(),
+                24,
+                18,
+            ));
+        }
+        if let Some(discovery) = &self.discovery {
+            score = score.max(token_field_score(
+                term,
+                tokenize_search_text(&discovery.description).iter(),
+                12,
+                8,
+            ));
+            for keyword in &discovery.keywords {
+                score = score.max(token_field_score(
+                    term,
+                    tokenize_search_text(keyword).iter(),
+                    36,
+                    28,
+                ));
+            }
+        }
+        score
+    }
+}
+
+fn capability_safety_rank(capability: &ToolCapability) -> usize {
+    capability.risk_posture.map_or_else(
+        || if capability.read_only { 0 } else { 5 },
+        |posture| match posture.operation_class {
+            crate::guarded_action::GuardedActionOperationClass::Read => 0,
+            crate::guarded_action::GuardedActionOperationClass::SensitiveRead => 1,
+            crate::guarded_action::GuardedActionOperationClass::NoMutationProof => 2,
+            crate::guarded_action::GuardedActionOperationClass::Preview => 3,
+            crate::guarded_action::GuardedActionOperationClass::GuardedApply => 4,
+            crate::guarded_action::GuardedActionOperationClass::Mutating => 5,
+            crate::guarded_action::GuardedActionOperationClass::SendAdjacent => 6,
+            crate::guarded_action::GuardedActionOperationClass::Destructive => 7,
+        },
+    )
+}
+
+fn normalize_ranked_query(query: &str) -> (Vec<String>, Vec<String>) {
+    let mut normalized = Vec::new();
+    let mut ignored = Vec::new();
+    for token in tokenize_search_text(query) {
+        let target = if is_search_stop_word(&token) {
+            &mut ignored
+        } else {
+            &mut normalized
+        };
+        if !target.contains(&token) {
+            target.push(token);
+        }
+    }
+    (normalized, ignored)
+}
+
+fn tokenize_search_text(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter_map(normalize_search_token)
+        .collect()
+}
+
+fn normalize_search_token(raw: &str) -> Option<String> {
+    let mut token = raw.trim().to_ascii_lowercase();
+    if token.len() > 4 && token.ends_with("ies") {
+        token.truncate(token.len() - 3);
+        token.push('y');
+    } else if (token == "ads" || token.len() > 4)
+        && token.ends_with('s')
+        && !token.ends_with("ss")
+        && !token.ends_with("us")
+        && !token.ends_with("is")
+    {
+        token.pop();
+    }
+    (!token.is_empty()).then_some(token)
+}
+
+fn is_search_stop_word(term: &str) -> bool {
+    matches!(
+        term,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "be"
+            | "by"
+            | "can"
+            | "could"
+            | "do"
+            | "does"
+            | "for"
+            | "from"
+            | "have"
+            | "how"
+            | "i"
+            | "in"
+            | "is"
+            | "it"
+            | "me"
+            | "my"
+            | "of"
+            | "on"
+            | "please"
+            | "should"
+            | "show"
+            | "that"
+            | "the"
+            | "this"
+            | "to"
+            | "want"
+            | "we"
+            | "would"
+            | "with"
+            | "you"
+            | "your"
+    )
+}
+
+fn token_field_score<'a>(
+    query_term: &str,
+    field_terms: impl Iterator<Item = &'a String>,
+    exact_score: usize,
+    partial_score: usize,
+) -> usize {
+    field_terms
+        .map(|field_term| {
+            if query_term == field_term {
+                exact_score
+            } else if query_term.len() >= 4
+                && field_term.len() >= 4
+                && (query_term.contains(field_term) || field_term.contains(query_term))
+            {
+                partial_score
+            } else {
+                0
+            }
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Stable error type for inventory registration failures.
@@ -1952,6 +2379,253 @@ mod tests {
     }
 
     #[test]
+    fn ranked_search_handles_natural_language_and_plural_terms() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("campaign.plan")
+                .with_group("trafficking")
+                .with_risk_posture(GuardedActionPosture::preview())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Preview line items and creatives before trafficking.",
+                    ["campaign", "creative", "line item", "plan"],
+                )),
+            ToolCapability::new("report.read")
+                .with_group("reporting")
+                .with_risk_posture(GuardedActionPosture::read_only())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Read campaign delivery reports.",
+                    ["campaign", "report"],
+                )),
+        ])
+        .expect("inventory");
+
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some(
+                    "please help me plan campaigns with line items and creatives".to_string(),
+                ),
+                limit: Some(1),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        assert_eq!(ranked.response.results[0].name, "campaign.plan");
+        assert_eq!(ranked.match_summary.total_matches, 2);
+        assert!(ranked.match_summary.truncated);
+        assert!(ranked
+            .match_summary
+            .normalized_query_terms
+            .contains(&"creative".to_string()));
+        assert!(ranked
+            .match_summary
+            .ignored_query_terms
+            .contains(&"please".to_string()));
+    }
+
+    #[test]
+    fn ranked_search_preserves_strict_search_behavior() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("cache.purge")
+            .with_read_only(true)
+            .with_discovery(ToolDiscoveryMetadata::new(
+                "Purge cache entries",
+                ["invalidate"],
+            ))])
+        .expect("inventory");
+        let filter = ToolSearchFilter {
+            query: Some("invalidate unavailable".to_string()),
+            ..ToolSearchFilter::default()
+        };
+
+        assert!(inventory
+            .search(&filter, ToolOperation::List, &ToolInventoryPolicy::strict())
+            .is_empty());
+        assert_eq!(
+            inventory
+                .search_ranked(&filter, ToolOperation::List, &ToolInventoryPolicy::strict())
+                .response
+                .results[0]
+                .name,
+            "cache.purge"
+        );
+    }
+
+    #[test]
+    fn ranked_search_downweights_catalog_wide_terms() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("provider.auth")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Verify provider access and authentication.",
+                    ["provider", "access", "verify"],
+                )),
+            ToolCapability::new("provider.inventory")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "List provider inventory.",
+                    ["provider", "inventory"],
+                )),
+            ToolCapability::new("provider.report")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Read provider reports.",
+                    ["provider", "report"],
+                )),
+        ])
+        .expect("inventory");
+
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some("provider verify access".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        assert_eq!(ranked.response.results[0].name, "provider.auth");
+    }
+
+    #[test]
+    fn ranked_search_uses_safety_only_as_a_tie_break() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("campaign.apply")
+                .with_risk_posture(GuardedActionPosture::guarded_apply())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Run campaign workflow.",
+                    ["campaign", "workflow"],
+                )),
+            ToolCapability::new("campaign.preview")
+                .with_risk_posture(GuardedActionPosture::preview())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Run campaign workflow.",
+                    ["campaign", "workflow"],
+                )),
+        ])
+        .expect("inventory");
+
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some("campaign workflow".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        assert_eq!(ranked.response.results[0].name, "campaign.preview");
+        assert_eq!(ranked.response.results[1].name, "campaign.apply");
+    }
+
+    #[test]
+    fn ranked_search_reports_limits_and_keeps_empty_query_name_order() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("zeta.apply")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("alpha.read").with_risk_posture(GuardedActionPosture::read_only()),
+            ToolCapability::new("beta.preview").with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("inventory");
+
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                limit: Some(2),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        assert_eq!(ranked.match_summary.total_matches, 3);
+        assert_eq!(ranked.match_summary.returned_count, 2);
+        assert!(ranked.match_summary.truncated);
+        assert_eq!(
+            ranked
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha.read", "beta.preview"]
+        );
+    }
+
+    #[test]
+    fn ranked_search_serializers_make_completeness_and_payload_cost_explicit() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("ads.read")
+            .with_read_only(true)
+            .with_discovery(ToolDiscoveryMetadata::new(
+                "Read advertising inventory",
+                ["ad", "inventory"],
+            ))])
+        .expect("inventory");
+        let ranked = inventory
+            .search_ranked(
+                &ToolSearchFilter {
+                    query: Some("show me ads".to_string()),
+                    ..ToolSearchFilter::default()
+                },
+                ToolOperation::List,
+                &ToolInventoryPolicy::strict(),
+            )
+            .with_schemas(Some(json!({"ads.read": {"input": {"type": "object"}}})))
+            .with_metadata_label("unit-test");
+
+        let full = ranked.to_value();
+        assert_eq!(full["match_summary"]["total_matches"], json!(1));
+        assert_eq!(full["match_summary"]["returned_count"], json!(1));
+        assert_eq!(full["match_summary"]["truncated"], json!(false));
+        assert_eq!(
+            full["match_summary"]["normalized_query_terms"],
+            json!(["ad"])
+        );
+        assert_eq!(
+            full["match_summary"]["ignored_query_terms"],
+            json!(["show", "me"])
+        );
+        assert!(full.get("schemas").is_some());
+        assert!(full.get("openai_deferred_loading").is_some());
+
+        let compact = ranked.to_compact_value();
+        assert_eq!(compact["match_summary"], full["match_summary"]);
+        assert!(compact.get("schemas").is_none());
+        assert!(compact.get("openai_deferred_loading").is_none());
+    }
+
+    #[test]
+    fn ranked_search_honors_policy_group_and_read_only_filters() {
+        let inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("inventory.read")
+                .with_group("inventory")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new("Read inventory", ["inventory"])),
+            ToolCapability::new("inventory.write")
+                .with_group("inventory")
+                .with_discovery(ToolDiscoveryMetadata::new("Write inventory", ["inventory"])),
+            ToolCapability::new("admin.inventory")
+                .with_group("admin")
+                .with_read_only(true)
+                .with_feature_flag("admin")
+                .with_discovery(ToolDiscoveryMetadata::new("Read inventory", ["inventory"])),
+        ])
+        .expect("inventory");
+
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some("inventory".to_string()),
+                group: Some("inventory".to_string()),
+                read_only: Some(true),
+                limit: None,
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict_read_only().with_allowed_groups(["inventory"]),
+        );
+
+        assert_eq!(ranked.match_summary.total_matches, 1);
+        assert_eq!(ranked.response.results[0].name, "inventory.read");
+    }
+
+    #[test]
     fn group_and_feature_flag_filters_are_applied() {
         let result = ToolInventory::from_capabilities([
             ToolCapability::new("ops.list")
@@ -2013,6 +2687,11 @@ mod tests {
             json!("gpt-5.5")
         );
         assert_eq!(value["schemas"]["cache.list"]["name"], json!("cache.list"));
+
+        let compact = response.to_compact_value();
+        assert!(compact.get("schemas").is_none());
+        assert!(compact.get("openai_deferred_loading").is_none());
+        assert_eq!(compact["openai_allowed_tools"], json!(["cache.list"]));
     }
 
     #[test]
