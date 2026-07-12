@@ -122,7 +122,11 @@ the exclusion, for example `campaign preview without apply or delete`. Negated
 action forms are canonicalized on both the query and visible capability sides,
 so `without traffic` also excludes metadata that says `trafficking` or
 `trafficked`. Inflection expansion is restricted to recognized operational
-verbs, avoiding collisions such as `canvas`/`canva` or `adding`/`ad`. Negated
+verbs, avoiding collisions such as `canvas`/`canva` or `adding`/`ad`. The
+toolkit carries a conservative built-in action vocabulary; providers with
+additional action roots register them explicitly with
+`ToolCapability::with_action_lexemes` so their own inflected exclusions remain
+fail-closed without widening the global matcher. Negated
 terms are reported separately in `excluded_query_terms`. A truncated query,
 dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
@@ -138,7 +142,8 @@ per visible capability, so caller-supplied names, groups, descriptions, or
 keywords cannot multiply unbounded work across every query variant.
 Raw query, group, and compact companion inputs are bounded before trimming, and
 metadata truncated inside an alphanumeric token drops that partial token instead
-of manufacturing a false exact match at the boundary.
+of manufacturing a false exact match at the boundary. Empty description or
+keyword fragments produced by that boundary rule are omitted from results.
 
 Both standard and ranked response types provide `to_compact_value()` for the
 selection step. The compact shape retains result metadata and
@@ -147,9 +152,9 @@ Both compact serializers bound input and result fields before materializing JSON
 and enforce a 32 KiB byte budget. The standard response adds `compact_summary`
 with source/returned counts and truncation reasons. The ranked response preserves
 its match counts and records `compact_response_bytes` when selection metadata or
-results must be reduced. If bounded selection metadata alone exceeds the budget
-after all results are removed, the compact fallback omits echoed query, group,
-and term lists while retaining counts and the byte-budget reason. Call
+results must be reduced. When the byte budget is exceeded, the compact fallback
+omits echoed query, group, and term diagnostics before removing valid inventory
+results. It retains counts and the byte-budget reason. Call
 `to_value()` when the same response must also carry
 schemas and deferred-load configuration; the full shape is intentionally not
 subject to the compact byte budget. Use the ranked response's
