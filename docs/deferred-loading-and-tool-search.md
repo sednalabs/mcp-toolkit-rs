@@ -115,9 +115,12 @@ rather than unsafe substrings, and uses guarded-action posture as a deterministi
 tie-break. It preserves original terms while adding conservative singular
 variants as one scoring concept, and excludes tools matching explicitly negated
 terms such as `not apply`, `don't delete`, or `without deleting`; coordinated
-`and`/`or` negative lists remain excluded. Negated terms are reported separately in
-`excluded_query_terms`. A truncated query, dangling negation, or truncated
-negative-term list fails closed. A genuine
+`and`/`or` negative lists remain excluded. To avoid turning an unfamiliar modifier
+or punctuation pattern back into positive intent, an explicit negative marker
+keeps the remaining content terms in exclusion scope. Put positive intent before
+the exclusion, for example `campaign preview without apply or delete`. Negated
+terms are reported separately in `excluded_query_terms`. A truncated query,
+dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
 returns no matches instead of widening to the whole catalog.
 Ranked search defaults to 20 results, hard-caps requested limits at 100, and
@@ -143,6 +146,10 @@ schemas and deferred-load configuration; the full shape is intentionally not
 subject to the compact byte budget. Use the ranked response's
 `into_openai_response()` builder when adding companion allowed tools, extra
 results, or custom deferred-loading metadata so the match summary is preserved.
+Both OpenAI response builders also provide `to_compact_value()`. Their compact
+projection bounds companion names and extra result records before cloning them,
+retains inventory and extra-result prefixes while shrinking, reports source and
+returned counts for every extension, and enforces the same 32 KiB budget.
 
 The default OpenAI MCP config leaves `require_approval` unset. If a trusted
 workflow wants to reduce approval friction for read-only tools, supply an
