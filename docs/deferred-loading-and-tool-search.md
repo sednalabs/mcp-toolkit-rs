@@ -127,7 +127,10 @@ toolkit carries a conservative built-in action vocabulary; providers with
 additional action roots register them explicitly with
 `ToolCapability::with_action_lexemes` or the matching
 `ToolCatalogEntry::with_action_lexemes` builder so their own inflected exclusions
-remain fail-closed without widening the global matcher. Negated
+remain fail-closed without widening the global matcher. Provider roots are
+bounded in count and length at registration and under an aggregate per-search
+cap; overflow is reported as truncated result metadata and makes negative-intent
+search fail closed. Negated
 terms are reported separately in `excluded_query_terms`. A truncated query,
 dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms

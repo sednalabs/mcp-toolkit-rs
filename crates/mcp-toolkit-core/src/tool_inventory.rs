@@ -54,6 +54,9 @@ const RANKED_SEARCH_MAX_GROUP_CHARS: usize = 128;
 const RANKED_SEARCH_MAX_DESCRIPTION_CHARS: usize = 512;
 const RANKED_SEARCH_MAX_KEYWORDS: usize = 32;
 const RANKED_SEARCH_MAX_KEYWORD_CHARS: usize = 128;
+const RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY: usize = 32;
+const RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL: usize = 256;
+const RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS: usize = 64;
 const RANKED_SEARCH_COMPACT_MAX_BYTES: usize = 32 * 1_024;
 const COMPACT_SEARCH_MAX_RESULTS: usize = 100;
 const COMPACT_SEARCH_MAX_OPERATION_CHARS: usize = 64;
@@ -110,6 +113,7 @@ pub struct ToolCapability {
     discovery: Option<ToolDiscoveryMetadata>,
     risk_posture: Option<GuardedActionPosture>,
     action_lexemes: HashSet<String>,
+    action_lexemes_truncated: bool,
 }
 
 impl ToolCapability {
@@ -124,6 +128,7 @@ impl ToolCapability {
             discovery: None,
             risk_posture: None,
             action_lexemes: HashSet::new(),
+            action_lexemes_truncated: false,
         }
     }
 
@@ -179,11 +184,35 @@ impl ToolCapability {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.action_lexemes
-            .extend(lexemes.into_iter().filter_map(|lexeme| {
-                let lexeme = lexeme.as_ref().trim().to_ascii_lowercase();
-                (!lexeme.is_empty()).then_some(lexeme)
-            }));
+        for (index, lexeme) in lexemes
+            .into_iter()
+            .take(RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY + 1)
+            .enumerate()
+        {
+            if index == RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY {
+                self.action_lexemes_truncated = true;
+                break;
+            }
+            let (lexeme, truncated) =
+                truncate_search_text(lexeme.as_ref(), RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS);
+            let lexeme = lexeme.trim().to_ascii_lowercase();
+            if truncated
+                || lexeme.is_empty()
+                || !lexeme
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+            {
+                self.action_lexemes_truncated = true;
+                continue;
+            }
+            if self.action_lexemes.len() == RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY
+                && !self.action_lexemes.contains(&lexeme)
+            {
+                self.action_lexemes_truncated = true;
+                continue;
+            }
+            self.action_lexemes.insert(lexeme);
+        }
         self
     }
 
@@ -1844,6 +1873,7 @@ impl ToolCatalog {
                 discovery: capability.discovery,
                 risk_posture: capability.risk_posture,
                 action_lexemes: capability.action_lexemes,
+                action_lexemes_truncated: capability.action_lexemes_truncated,
             },
             input_schema,
             output_schema,
@@ -2165,6 +2195,7 @@ impl ToolInventory {
                 discovery: capability.discovery,
                 risk_posture: capability.risk_posture,
                 action_lexemes: capability.action_lexemes,
+                action_lexemes_truncated: capability.action_lexemes_truncated,
             },
         );
         Ok(())
@@ -2494,8 +2525,17 @@ impl ToolInventory {
             .map(RankedCapabilityDocument::new)
             .collect::<Vec<_>>();
         let mut action_lexemes = default_search_action_lexemes();
-        for document in &visible {
-            action_lexemes.extend(document.capability.action_lexemes.iter().cloned());
+        let mut action_lexemes_truncated = false;
+        'documents: for document in &visible {
+            for lexeme in &document.capability.action_lexemes {
+                if action_lexemes.len() == RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL
+                    && !action_lexemes.contains(lexeme)
+                {
+                    action_lexemes_truncated = true;
+                    break 'documents;
+                }
+                action_lexemes.insert(lexeme.clone());
+            }
         }
         for document in &mut visible {
             document.build_exclusion_terms(&action_lexemes);
@@ -2518,7 +2558,8 @@ impl ToolInventory {
         if normalized_query.dangling_negation {
             push_unique_reason(&mut truncation_reasons, "query_intent_ambiguous");
         }
-        let visible_metadata_truncated = visible.iter().any(|document| document.metadata_truncated);
+        let visible_metadata_truncated =
+            action_lexemes_truncated || visible.iter().any(|document| document.metadata_truncated);
         if visible_metadata_truncated {
             push_unique_reason(&mut truncation_reasons, "result_metadata");
         }
@@ -2675,7 +2716,7 @@ impl ToolCapability {
     }
 
     fn to_ranked_search_result(&self) -> (ToolSearchResult, bool) {
-        let mut metadata_truncated = false;
+        let mut metadata_truncated = self.action_lexemes_truncated;
         let group = self.group.as_deref().map(|group| {
             let (group, truncated) = truncate_search_text(group, RANKED_SEARCH_MAX_GROUP_CHARS);
             metadata_truncated |= truncated;
@@ -2738,7 +2779,8 @@ impl<'a> RankedCapabilityDocument<'a> {
             || (String::new(), false),
             |group| truncate_search_text_at_token_boundary(group, RANKED_SEARCH_MAX_GROUP_CHARS),
         );
-        let mut metadata_truncated = name_truncated || group_truncated;
+        let mut metadata_truncated =
+            capability.action_lexemes_truncated || name_truncated || group_truncated;
         let mut description_terms = Vec::new();
         let mut keyword_terms = Vec::new();
         if let Some(discovery) = &capability.discovery {
@@ -3466,8 +3508,10 @@ mod tests {
         ToolCatalogExample, ToolCatalogProfile, ToolExposure, ToolInventory,
         ToolInventoryDenialReason, ToolInventoryPolicy, ToolOperation, ToolSearchMatchSummary,
         COMPACT_SEARCH_MAX_TOOL_NAME_CHARS, OPERATOR_PROFILE_KEY, RANKED_SEARCH_COMPACT_MAX_BYTES,
-        RANKED_SEARCH_MAX_DESCRIPTION_CHARS, RANKED_SEARCH_MAX_EXCLUDED_TERMS,
-        RANKED_SEARCH_MAX_GROUP_CHARS, RANKED_SEARCH_MAX_IGNORED_TERMS, RANKED_SEARCH_MAX_KEYWORDS,
+        RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY, RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL,
+        RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS, RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
+        RANKED_SEARCH_MAX_EXCLUDED_TERMS, RANKED_SEARCH_MAX_GROUP_CHARS,
+        RANKED_SEARCH_MAX_IGNORED_TERMS, RANKED_SEARCH_MAX_KEYWORDS,
         RANKED_SEARCH_MAX_KEYWORD_CHARS, RANKED_SEARCH_MAX_QUERY_CHARS,
         RANKED_SEARCH_MAX_QUERY_TERMS, READ_ONLY_PROFILE_KEY,
     };
@@ -4110,6 +4154,69 @@ mod tests {
             catalog_actions.to_compact_value()["openai_allowed_tools"],
             json!(["cache.preview"])
         );
+
+        let bounded_roots = ToolCapability::new("cache.preview").with_action_lexemes(
+            (0..=RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
+                .map(|index| format!("action{index}")),
+        );
+        assert_eq!(
+            bounded_roots.action_lexemes.len(),
+            RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY
+        );
+        assert!(bounded_roots.action_lexemes_truncated);
+
+        let overlong_root = ToolCapability::new("cache.preview")
+            .with_action_lexemes(["x".repeat(RANKED_SEARCH_MAX_ACTION_LEXEME_CHARS + 1)]);
+        assert!(overlong_root.action_lexemes.is_empty());
+        assert!(overlong_root.action_lexemes_truncated);
+
+        let truncated_catalog = ToolCatalog::from_entries([ToolCatalogEntry::new("cache.preview")
+            .with_action_lexemes(
+                (0..=RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
+                    .map(|index| format!("action{index}")),
+            )
+            .with_risk_posture(GuardedActionPosture::preview())])
+        .expect("truncated catalog action inventory")
+        .ranked_search_response(
+            &ToolSearchFilter {
+                query: Some("cache without evicting".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(truncated_catalog.response.results.is_empty());
+        assert!(truncated_catalog
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+
+        let capability_count = (RANKED_SEARCH_MAX_ACTION_LEXEMES_TOTAL
+            / RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
+            + 2;
+        let aggregate_overflow =
+            ToolInventory::from_capabilities((0..capability_count).map(|capability_index| {
+                ToolCapability::new(format!("cache.{capability_index}"))
+                    .with_action_lexemes(
+                        (0..RANKED_SEARCH_MAX_ACTION_LEXEMES_PER_CAPABILITY)
+                            .map(|lexeme_index| format!("action{capability_index}x{lexeme_index}")),
+                    )
+                    .with_risk_posture(GuardedActionPosture::preview())
+            }))
+            .expect("aggregate action inventory")
+            .search_ranked(
+                &ToolSearchFilter {
+                    query: Some("cache without evicting".to_string()),
+                    ..ToolSearchFilter::default()
+                },
+                ToolOperation::List,
+                &ToolInventoryPolicy::strict(),
+            );
+        assert!(aggregate_overflow.response.results.is_empty());
+        assert!(aggregate_overflow
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
     }
 
     #[test]
