@@ -583,16 +583,19 @@ fn compact_search_result(result: &ToolSearchResult) -> Option<(ToolSearchResult,
         RANKED_SEARCH_MAX_GROUP_CHARS,
         &mut truncated,
     );
-    let description = bounded_optional_search_text(
-        result.description.as_deref(),
-        RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
-        &mut truncated,
-    );
+    let description = result.description.as_deref().map(|description| {
+        let (description, description_truncated) = truncate_search_text_at_token_boundary(
+            description,
+            RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
+        );
+        truncated |= description_truncated;
+        description
+    });
     truncated |= result.keywords.len() > RANKED_SEARCH_MAX_KEYWORDS;
     let mut keywords = Vec::new();
     for keyword in result.keywords.iter().take(RANKED_SEARCH_MAX_KEYWORDS) {
         let (keyword, keyword_truncated) =
-            truncate_search_text(keyword, RANKED_SEARCH_MAX_KEYWORD_CHARS);
+            truncate_search_text_at_token_boundary(keyword, RANKED_SEARCH_MAX_KEYWORD_CHARS);
         truncated |= keyword_truncated;
         if !keywords.contains(&keyword) {
             keywords.push(keyword);
@@ -823,7 +826,8 @@ impl OpenAiToolSearchResponse {
             .take(COMPACT_OPENAI_MAX_COMPANION_TOOLS)
         {
             let (tool_name, truncated) =
-                truncate_search_text(tool_name.trim(), COMPACT_SEARCH_MAX_TOOL_NAME_CHARS);
+                truncate_search_text(tool_name, COMPACT_SEARCH_MAX_TOOL_NAME_CHARS);
+            let tool_name = tool_name.trim().to_string();
             companion_metadata_truncated |= truncated || tool_name.is_empty();
             if !tool_name.is_empty() && !truncated && !companion_allowed_tools.contains(&tool_name)
             {
@@ -2396,15 +2400,15 @@ impl ToolInventory {
         operation: ToolOperation,
         policy: &ToolInventoryPolicy,
     ) -> RankedToolSearchResponse {
-        let browse_query = filter
-            .query
-            .as_deref()
-            .is_none_or(|query| query.trim().is_empty());
         let (bounded_query, query_input_truncated) = filter
             .query
             .as_deref()
             .map(|query| truncate_search_text(query, RANKED_SEARCH_MAX_QUERY_CHARS))
             .map_or((None, false), |(query, truncated)| (Some(query), truncated));
+        let browse_query = !query_input_truncated
+            && bounded_query
+                .as_deref()
+                .is_none_or(|query| query.trim().is_empty());
         let normalized_query = normalize_ranked_query(bounded_query.as_deref().unwrap_or_default());
         let query_concepts = &normalized_query.positive_concepts;
         let excluded_query_concepts = &normalized_query.excluded_concepts;
@@ -2432,10 +2436,11 @@ impl ToolInventory {
         let (bounded_group, group_input_truncated) = filter
             .group
             .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
             .map(|group| truncate_search_text(group, RANKED_SEARCH_MAX_GROUP_CHARS))
-            .map_or((None, false), |(group, truncated)| (Some(group), truncated));
+            .map_or((None, false), |(group, truncated)| {
+                let group = group.trim().to_string();
+                ((!group.is_empty()).then_some(group), truncated)
+            });
         if group_input_truncated {
             push_unique_reason(&mut truncation_reasons, "group_input");
         }
@@ -2497,7 +2502,7 @@ impl ToolInventory {
                 if query_concepts.is_empty()
                     || excluded_query_concepts
                         .iter()
-                        .any(|concept| document.query_concept_score(concept) > 0)
+                        .any(|concept| document.matches_excluded_concept(concept))
                 {
                     return None;
                 }
@@ -2620,8 +2625,10 @@ impl ToolCapability {
             group
         });
         let description = self.discovery.as_ref().map(|discovery| {
-            let (description, truncated) =
-                truncate_search_text(&discovery.description, RANKED_SEARCH_MAX_DESCRIPTION_CHARS);
+            let (description, truncated) = truncate_search_text_at_token_boundary(
+                &discovery.description,
+                RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
+            );
             metadata_truncated |= truncated;
             description
         });
@@ -2629,8 +2636,10 @@ impl ToolCapability {
         if let Some(discovery) = &self.discovery {
             metadata_truncated |= discovery.keywords.len() > RANKED_SEARCH_MAX_KEYWORDS;
             for keyword in discovery.keywords.iter().take(RANKED_SEARCH_MAX_KEYWORDS) {
-                let (keyword, truncated) =
-                    truncate_search_text(keyword, RANKED_SEARCH_MAX_KEYWORD_CHARS);
+                let (keyword, truncated) = truncate_search_text_at_token_boundary(
+                    keyword,
+                    RANKED_SEARCH_MAX_KEYWORD_CHARS,
+                );
                 metadata_truncated |= truncated;
                 if !keywords.contains(&keyword) {
                     keywords.push(keyword);
@@ -2657,30 +2666,37 @@ struct RankedCapabilityDocument<'a> {
     group_terms: Vec<String>,
     description_terms: Vec<String>,
     keyword_terms: Vec<String>,
+    exclusion_terms: HashSet<String>,
     metadata_truncated: bool,
     name_selectable: bool,
 }
 
 impl<'a> RankedCapabilityDocument<'a> {
     fn new(capability: &'a ToolCapability) -> Self {
-        let (name, name_truncated) =
-            truncate_search_text(&capability.name, COMPACT_SEARCH_MAX_TOOL_NAME_CHARS);
+        let (name, name_truncated) = truncate_search_text_at_token_boundary(
+            &capability.name,
+            COMPACT_SEARCH_MAX_TOOL_NAME_CHARS,
+        );
         let (group, group_truncated) = capability.group.as_deref().map_or_else(
             || (String::new(), false),
-            |group| truncate_search_text(group, RANKED_SEARCH_MAX_GROUP_CHARS),
+            |group| truncate_search_text_at_token_boundary(group, RANKED_SEARCH_MAX_GROUP_CHARS),
         );
         let mut metadata_truncated = name_truncated || group_truncated;
         let mut description_terms = Vec::new();
         let mut keyword_terms = Vec::new();
         if let Some(discovery) = &capability.discovery {
-            let (description, description_truncated) =
-                truncate_search_text(&discovery.description, RANKED_SEARCH_MAX_DESCRIPTION_CHARS);
+            let (description, description_truncated) = truncate_search_text_at_token_boundary(
+                &discovery.description,
+                RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
+            );
             metadata_truncated |= description_truncated;
             description_terms = tokenize_search_text(&description);
             metadata_truncated |= discovery.keywords.len() > RANKED_SEARCH_MAX_KEYWORDS;
             for keyword in discovery.keywords.iter().take(RANKED_SEARCH_MAX_KEYWORDS) {
-                let (keyword, keyword_truncated) =
-                    truncate_search_text(keyword, RANKED_SEARCH_MAX_KEYWORD_CHARS);
+                let (keyword, keyword_truncated) = truncate_search_text_at_token_boundary(
+                    keyword,
+                    RANKED_SEARCH_MAX_KEYWORD_CHARS,
+                );
                 metadata_truncated |= keyword_truncated;
                 for term in tokenize_search_text(&keyword) {
                     if !keyword_terms.contains(&term) {
@@ -2689,12 +2705,28 @@ impl<'a> RankedCapabilityDocument<'a> {
                 }
             }
         }
+        let name_terms = tokenize_search_text(&name);
+        let group_terms = tokenize_search_text(&group);
+        let mut exclusion_terms = HashSet::new();
+        for term in name_terms
+            .iter()
+            .chain(group_terms.iter())
+            .chain(description_terms.iter())
+            .chain(keyword_terms.iter())
+        {
+            let mut variants = search_token_variants(term);
+            add_negative_action_variants(term, &mut variants);
+            for variant in variants {
+                exclusion_terms.insert(variant);
+            }
+        }
         Self {
             capability,
-            name_terms: tokenize_search_text(&name),
-            group_terms: tokenize_search_text(&group),
+            name_terms,
+            group_terms,
             description_terms,
             keyword_terms,
+            exclusion_terms,
             metadata_truncated,
             name_selectable: !name_truncated && !name.is_empty(),
         }
@@ -2714,6 +2746,13 @@ impl<'a> RankedCapabilityDocument<'a> {
             .map(|variant| self.query_term_score(variant))
             .max()
             .unwrap_or(0)
+    }
+
+    fn matches_excluded_concept(&self, concept: &RankedQueryConcept) -> bool {
+        concept
+            .variants
+            .iter()
+            .any(|variant| self.exclusion_terms.contains(variant))
     }
 }
 
@@ -3137,6 +3176,29 @@ fn truncate_search_text(value: &str, max_chars: usize) -> (String, bool) {
     let mut characters = value.chars();
     let bounded = characters.by_ref().take(max_chars).collect::<String>();
     (bounded, characters.next().is_some())
+}
+
+fn truncate_search_text_at_token_boundary(value: &str, max_chars: usize) -> (String, bool) {
+    let mut characters = value.chars();
+    let mut bounded = characters.by_ref().take(max_chars).collect::<String>();
+    let next = characters.next();
+    let truncated = next.is_some();
+    if truncated
+        && next.is_some_and(|character| character.is_ascii_alphanumeric())
+        && bounded
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+    {
+        while bounded
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        {
+            bounded.pop();
+        }
+    }
+    (bounded, truncated)
 }
 
 /// Stable error type for inventory registration failures.
@@ -3781,6 +3843,47 @@ mod tests {
                 "query: {query}"
             );
         }
+
+        let symmetric = ToolInventory::from_capabilities([
+            ToolCapability::new("campaign.trafficking")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("campaign.delivery")
+                .with_risk_posture(GuardedActionPosture::guarded_apply())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Trafficked campaign mutation.",
+                    ["campaign"],
+                )),
+            ToolCapability::new("campaign.run")
+                .with_risk_posture(GuardedActionPosture::guarded_apply())
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Run a campaign mutation.",
+                    ["campaign", "trafficking"],
+                )),
+            ToolCapability::new("campaign.preview")
+                .with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("symmetric exclusion inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("preview campaign without traffic".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            symmetric
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["campaign.preview"]
+        );
+        assert_eq!(
+            symmetric.to_compact_value()["openai_allowed_tools"],
+            json!(["campaign.preview"])
+        );
     }
 
     #[test]
@@ -3858,6 +3961,23 @@ mod tests {
             .match_summary
             .truncation_reasons
             .contains(&"query_input".to_string()));
+
+        let truncated_blank_group = inventory.search_ranked(
+            &ToolSearchFilter {
+                group: Some(format!(
+                    "{}inventory",
+                    " ".repeat(RANKED_SEARCH_MAX_GROUP_CHARS + 1)
+                )),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(truncated_blank_group.response.results.is_empty());
+        assert!(truncated_blank_group
+            .match_summary
+            .truncation_reasons
+            .contains(&"group_input".to_string()));
     }
 
     #[test]
@@ -4248,6 +4368,43 @@ mod tests {
             .truncation_reasons
             .contains(&"result_metadata".to_string()));
 
+        let split_description = format!(
+            "{} applydanger",
+            "x".repeat(RANKED_SEARCH_MAX_DESCRIPTION_CHARS - 6)
+        );
+        let split_keyword = format!(
+            "{} applydanger",
+            "x".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 6)
+        );
+        let partial_tokens = ToolInventory::from_capabilities([
+            ToolCapability::new("bounded.description.partial")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    split_description,
+                    std::iter::empty::<&str>(),
+                )),
+            ToolCapability::new("bounded.keyword.partial")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Bounded keyword.",
+                    [split_keyword],
+                )),
+        ])
+        .expect("partial-token inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("apply".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(partial_tokens.response.results.is_empty());
+        assert!(partial_tokens
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+
         let identifier_bounds = ToolInventory::from_capabilities([
             ToolCapability::new("x".repeat(COMPACT_SEARCH_MAX_TOOL_NAME_CHARS + 1))
                 .with_read_only(true),
@@ -4404,9 +4561,10 @@ mod tests {
         let distinct_unicode_terms = |count: usize| {
             (0..count)
                 .map(|index| {
+                    let unique = char::from_u32(0x1F600 + index as u32).expect("valid emoji");
                     format!(
-                        "{index:03}{}",
-                        "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 3)
+                        "{unique}{}",
+                        "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 1)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -4829,6 +4987,32 @@ mod tests {
             .as_array()
             .is_some_and(|reasons| reasons.contains(&json!("extra_result_metadata"))));
 
+        let companion_compact = ToolSearchResponse::find_tools(None, None, None, Vec::new())
+            .into_openai_response()
+            .with_companion_allowed_tools([
+                format!(
+                    "{}campaign.apply",
+                    " ".repeat(COMPACT_SEARCH_MAX_TOOL_NAME_CHARS + 1)
+                ),
+                "inventory.read".to_string(),
+            ])
+            .to_compact_value();
+        assert_eq!(
+            companion_compact["openai_allowed_tools"],
+            json!(["inventory.read"])
+        );
+        assert_eq!(
+            companion_compact["compact_summary"]["companion_source_count"],
+            2
+        );
+        assert_eq!(
+            companion_compact["compact_summary"]["companion_returned_count"],
+            1
+        );
+        assert!(companion_compact["compact_summary"]["truncation_reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.contains(&json!("companion_tool_metadata"))));
+
         let keywords = (0..RANKED_SEARCH_MAX_KEYWORDS)
             .map(|index| format!("{index:03}-{}", "k".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS)))
             .collect::<Vec<_>>();
@@ -4926,9 +5110,10 @@ mod tests {
         let unicode_terms = |count: usize| {
             (0..count)
                 .map(|index| {
+                    let unique = char::from_u32(0x1F600 + index as u32).expect("valid emoji");
                     format!(
-                        "{index:03}{}",
-                        "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 3)
+                        "{unique}{}",
+                        "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 1)
                     )
                 })
                 .collect::<Vec<_>>()

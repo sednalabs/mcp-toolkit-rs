@@ -119,7 +119,9 @@ terms such as `not apply`, `don't delete`, or `without deleting`; coordinated
 or punctuation pattern back into positive intent, an explicit negative marker
 keeps the remaining content terms in exclusion scope. Put positive intent before
 the exclusion, for example `campaign preview without apply or delete`. Negated
-terms are reported separately in `excluded_query_terms`. A truncated query,
+action forms are canonicalized on both the query and visible capability sides,
+so `without traffic` also excludes metadata that says `trafficking` or
+`trafficked`. Terms are reported separately in `excluded_query_terms`. A truncated query,
 dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
 returns no matches instead of widening to the whole catalog.
@@ -132,6 +134,9 @@ across the visible search corpus are reported even when the bounded-away text
 would otherwise hide a match. Ranked matching tokenizes a bounded document once
 per visible capability, so caller-supplied names, groups, descriptions, or
 keywords cannot multiply unbounded work across every query variant.
+Raw query, group, and compact companion inputs are bounded before trimming, and
+metadata truncated inside an alphanumeric token drops that partial token instead
+of manufacturing a false exact match at the boundary.
 
 Both standard and ranked response types provide `to_compact_value()` for the
 selection step. The compact shape retains result metadata and
