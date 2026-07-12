@@ -121,7 +121,9 @@ keeps the remaining content terms in exclusion scope. Put positive intent before
 the exclusion, for example `campaign preview without apply or delete`. Negated
 action forms are canonicalized on both the query and visible capability sides,
 so `without traffic` also excludes metadata that says `trafficking` or
-`trafficked`. Terms are reported separately in `excluded_query_terms`. A truncated query,
+`trafficked`. Inflection expansion is restricted to recognized operational
+verbs, avoiding collisions such as `canvas`/`canva` or `adding`/`ad`. Negated
+terms are reported separately in `excluded_query_terms`. A truncated query,
 dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
 returns no matches instead of widening to the whole catalog.

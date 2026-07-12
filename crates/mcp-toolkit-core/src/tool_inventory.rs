@@ -3007,10 +3007,55 @@ fn add_negative_action_variants(source: &str, variants: &mut Vec<String>) {
         }
     }
     for candidate in candidates {
-        if !variants.contains(&candidate) {
+        if is_search_action_lexeme(&candidate) && !variants.contains(&candidate) {
             variants.push(candidate);
         }
     }
+}
+
+fn is_search_action_lexeme(term: &str) -> bool {
+    matches!(
+        term,
+        "add"
+            | "apply"
+            | "archive"
+            | "call"
+            | "close"
+            | "create"
+            | "deactivate"
+            | "delete"
+            | "dispatch"
+            | "drop"
+            | "execute"
+            | "fetch"
+            | "find"
+            | "get"
+            | "ingest"
+            | "inspect"
+            | "invoke"
+            | "launch"
+            | "list"
+            | "mutate"
+            | "open"
+            | "preview"
+            | "publish"
+            | "push"
+            | "query"
+            | "read"
+            | "refresh"
+            | "remove"
+            | "rename"
+            | "retarget"
+            | "run"
+            | "search"
+            | "select"
+            | "send"
+            | "start"
+            | "stop"
+            | "traffic"
+            | "update"
+            | "write"
+    )
 }
 
 fn strip_doubled_final_character(value: &str) -> Option<String> {
@@ -3884,6 +3929,55 @@ mod tests {
             symmetric.to_compact_value()["openai_allowed_tools"],
             json!(["campaign.preview"])
         );
+
+        let collision_inventory = ToolInventory::from_capabilities([
+            ToolCapability::new("session.adding")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("session.canva")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("session.preview")
+                .with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("negative collision inventory");
+        let non_actions = collision_inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some("preview session without canvas or ads".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            non_actions
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session.preview", "session.adding", "session.canva"]
+        );
+        assert_eq!(
+            non_actions.to_compact_value()["openai_allowed_tools"],
+            json!(["session.adding", "session.canva", "session.preview"])
+        );
+
+        let recognized_action = collision_inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some("preview session without add".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            recognized_action
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session.preview", "session.canva"]
+        );
     }
 
     #[test]
@@ -4192,7 +4286,7 @@ mod tests {
         let inventory = ToolInventory::from_capabilities([ToolCapability::new("bounded.tool")
             .with_read_only(true)
             .with_discovery(ToolDiscoveryMetadata::new(
-                "d".repeat(RANKED_SEARCH_MAX_DESCRIPTION_CHARS + 50),
+                "d ".repeat((RANKED_SEARCH_MAX_DESCRIPTION_CHARS + 50) / 2 + 1),
                 (0..(RANKED_SEARCH_MAX_KEYWORDS + 5)).map(|index| {
                     format!(
                         "{index:03}-{}",
