@@ -49,6 +49,7 @@ const RANKED_SEARCH_MAX_LIMIT: usize = 100;
 const RANKED_SEARCH_MAX_QUERY_CHARS: usize = 1_024;
 const RANKED_SEARCH_MAX_QUERY_TERMS: usize = 32;
 const RANKED_SEARCH_MAX_IGNORED_TERMS: usize = 16;
+const RANKED_SEARCH_MAX_GROUP_CHARS: usize = 128;
 const RANKED_SEARCH_MAX_DESCRIPTION_CHARS: usize = 512;
 const RANKED_SEARCH_MAX_KEYWORDS: usize = 32;
 const RANKED_SEARCH_MAX_KEYWORD_CHARS: usize = 128;
@@ -411,14 +412,23 @@ impl RankedToolSearchResponse {
             let value = with_match_summary(response.to_compact_value(), &summary);
             if serde_json::to_vec(&value)
                 .is_ok_and(|bytes| bytes.len() <= RANKED_SEARCH_COMPACT_MAX_BYTES)
-                || response.results.is_empty()
             {
                 return value;
             }
-            response.results.pop();
-            summary.returned_count = response.results.len();
             summary.truncated = true;
             push_unique_reason(&mut summary.truncation_reasons, "compact_response_bytes");
+            if response.results.pop().is_none() {
+                summary.returned_count = 0;
+                summary.truncation_reasons = vec!["compact_response_bytes".to_string()];
+                summary.normalized_query_terms.clear();
+                summary.ignored_query_terms.clear();
+                return with_match_summary(
+                    ToolSearchResponse::find_tools(None, None, response.read_only, Vec::new())
+                        .to_compact_value(),
+                    &summary,
+                );
+            }
+            summary.returned_count = response.results.len();
         }
     }
 
@@ -1956,18 +1966,25 @@ impl ToolInventory {
         if requested_limit > RANKED_SEARCH_MAX_LIMIT {
             push_unique_reason(&mut truncation_reasons, "result_limit_clamped");
         }
-        let group = filter
+        let (bounded_group, group_input_truncated) = filter
             .group
             .as_deref()
             .map(str::trim)
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
+            .map(|group| truncate_search_text(group, RANKED_SEARCH_MAX_GROUP_CHARS))
+            .map_or((None, false), |(group, truncated)| (Some(group), truncated));
+        if group_input_truncated {
+            push_unique_reason(&mut truncation_reasons, "group_input");
+        }
+        let group = bounded_group.as_deref();
 
         let visible = self
             .capabilities()
             .into_iter()
             .filter(|capability| policy.allows_capability(capability, operation))
             .filter(|capability| {
-                group.is_none_or(|group| capability.group.as_deref() == Some(group))
+                !group_input_truncated
+                    && group.is_none_or(|group| capability.group.as_deref() == Some(group))
             })
             .filter(|capability| {
                 filter
@@ -1975,6 +1992,12 @@ impl ToolInventory {
                     .is_none_or(|read_only| capability.read_only == read_only)
             })
             .collect::<Vec<_>>();
+        if visible
+            .iter()
+            .any(|capability| capability.ranked_search_metadata_truncated())
+        {
+            push_unique_reason(&mut truncation_reasons, "result_metadata");
+        }
 
         let document_frequencies = query_terms
             .iter()
@@ -2064,7 +2087,7 @@ impl ToolInventory {
         RankedToolSearchResponse {
             response: ToolSearchResponse::find_tools(
                 bounded_query,
-                filter.group.clone(),
+                bounded_group,
                 filter.read_only,
                 results,
             ),
@@ -2082,6 +2105,17 @@ impl ToolInventory {
 }
 
 impl ToolCapability {
+    fn ranked_search_metadata_truncated(&self) -> bool {
+        self.discovery.as_ref().is_some_and(|discovery| {
+            discovery.description.chars().count() > RANKED_SEARCH_MAX_DESCRIPTION_CHARS
+                || discovery.keywords.len() > RANKED_SEARCH_MAX_KEYWORDS
+                || discovery
+                    .keywords
+                    .iter()
+                    .any(|keyword| keyword.chars().count() > RANKED_SEARCH_MAX_KEYWORD_CHARS)
+        })
+    }
+
     fn matches_query(&self, terms: &[String]) -> bool {
         if terms.is_empty() {
             return true;
@@ -2460,10 +2494,12 @@ fn profile_value(profile: &ToolCatalogProfile) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCapability, ToolCatalog, ToolCatalogEntry, ToolCatalogExample, ToolCatalogProfile,
-        ToolExposure, ToolInventory, ToolInventoryDenialReason, ToolInventoryPolicy, ToolOperation,
+        RankedToolSearchResponse, ToolCapability, ToolCatalog, ToolCatalogEntry,
+        ToolCatalogExample, ToolCatalogProfile, ToolExposure, ToolInventory,
+        ToolInventoryDenialReason, ToolInventoryPolicy, ToolOperation, ToolSearchMatchSummary,
         OPERATOR_PROFILE_KEY, RANKED_SEARCH_COMPACT_MAX_BYTES, RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
-        RANKED_SEARCH_MAX_KEYWORDS, RANKED_SEARCH_MAX_KEYWORD_CHARS, READ_ONLY_PROFILE_KEY,
+        RANKED_SEARCH_MAX_GROUP_CHARS, RANKED_SEARCH_MAX_KEYWORDS, RANKED_SEARCH_MAX_KEYWORD_CHARS,
+        READ_ONLY_PROFILE_KEY,
     };
     use super::{ToolDiscoveryMetadata, ToolSearchFilter, ToolSearchResponse};
     use crate::guarded_action::{GuardedActionOperationClass, GuardedActionPosture};
@@ -2934,6 +2970,65 @@ mod tests {
     }
 
     #[test]
+    fn ranked_search_reports_metadata_bounds_that_can_hide_a_match() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("bounded.tool")
+            .with_read_only(true)
+            .with_discovery(ToolDiscoveryMetadata::new(
+                format!("{} needle", "d".repeat(RANKED_SEARCH_MAX_DESCRIPTION_CHARS)),
+                std::iter::empty::<&str>(),
+            ))])
+        .expect("inventory");
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                query: Some("needle".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        assert!(ranked.response.results.is_empty());
+        assert_eq!(ranked.match_summary.total_matches, 0);
+        assert!(ranked.match_summary.truncated);
+        assert!(ranked
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+    }
+
+    #[test]
+    fn ranked_search_bounds_an_overlong_group_and_fails_closed() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("inventory.read")
+            .with_group("inventory")
+            .with_read_only(true)])
+        .expect("inventory");
+        let ranked = inventory.search_ranked(
+            &ToolSearchFilter {
+                group: Some("g".repeat(RANKED_SEARCH_COMPACT_MAX_BYTES * 2)),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+
+        assert!(ranked.response.results.is_empty());
+        assert_eq!(
+            ranked.response.group.as_deref().map(str::len),
+            Some(RANKED_SEARCH_MAX_GROUP_CHARS)
+        );
+        assert!(ranked
+            .match_summary
+            .truncation_reasons
+            .contains(&"group_input".to_string()));
+        assert!(
+            serde_json::to_vec(&ranked.to_compact_value())
+                .expect("compact response serializes")
+                .len()
+                <= RANKED_SEARCH_COMPACT_MAX_BYTES
+        );
+    }
+
+    #[test]
     fn ranked_compact_serialization_enforces_its_byte_budget() {
         let keywords = (0..RANKED_SEARCH_MAX_KEYWORDS)
             .map(|index| format!("{index:03}-{}", "k".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS)))
@@ -2966,6 +3061,39 @@ mod tests {
         assert!(compact["match_summary"]["truncation_reasons"]
             .as_array()
             .is_some_and(|reasons| reasons.contains(&json!("compact_response_bytes"))));
+    }
+
+    #[test]
+    fn ranked_compact_serialization_bounds_caller_constructed_metadata() {
+        let oversized = "x".repeat(RANKED_SEARCH_COMPACT_MAX_BYTES * 2);
+        let ranked = RankedToolSearchResponse {
+            response: ToolSearchResponse::find_tools(
+                Some(oversized.clone()),
+                Some(oversized.clone()),
+                Some(true),
+                Vec::new(),
+            ),
+            match_summary: ToolSearchMatchSummary {
+                total_matches: 0,
+                returned_count: 0,
+                result_limit: 20,
+                truncated: true,
+                truncation_reasons: vec![oversized.clone()],
+                normalized_query_terms: vec![oversized.clone()],
+                ignored_query_terms: vec![oversized],
+            },
+        };
+
+        let compact = ranked.to_compact_value();
+        let bytes = serde_json::to_vec(&compact).expect("compact response serializes");
+        assert!(bytes.len() <= RANKED_SEARCH_COMPACT_MAX_BYTES);
+        assert_eq!(compact["query"], serde_json::Value::Null);
+        assert_eq!(compact["group"], serde_json::Value::Null);
+        assert_eq!(compact["match_summary"]["returned_count"], 0);
+        assert_eq!(
+            compact["match_summary"]["truncation_reasons"],
+            json!(["compact_response_bytes"])
+        );
     }
 
     #[test]

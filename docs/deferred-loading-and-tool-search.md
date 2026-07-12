@@ -115,16 +115,22 @@ rather than unsafe substrings, and uses guarded-action posture as a deterministi
 tie-break. A genuine browse request is safety-ordered; a supplied query that has
 no searchable terms returns no matches instead of widening to the whole catalog.
 Ranked search defaults to 20 results, hard-caps requested limits at 100, and
-bounds query and result metadata. Its `match_summary` reports normalized and
-ignored terms, total matches, returned count, the effective result limit, and
-stable reasons for every applied truncation.
+bounds query, group-filter, and result metadata. An overlong group filter fails
+closed instead of matching a truncated prefix. Its `match_summary` reports
+normalized and ignored terms, total matches, returned count, the effective
+result limit, and stable reasons for every applied truncation. Metadata bounds
+across the visible search corpus are reported even when the bounded-away text
+would otherwise hide a match.
 
 Both standard and ranked response types provide `to_compact_value()` for the
 selection step. The compact shape retains result metadata and
 `openai_allowed_tools`, but deliberately omits schemas and hosted-client metadata.
 Ranked compact serialization additionally enforces a 32 KiB byte budget by
 dropping lowest-ranked results and recording `compact_response_bytes` in the
-truncation reasons. Call `to_value()` when the same response must also carry
+truncation reasons. If caller-constructed selection metadata alone exceeds the
+budget after all results are removed, the compact fallback omits echoed query,
+group, and term lists while retaining counts and the byte-budget reason. Call
+`to_value()` when the same response must also carry
 schemas and deferred-load configuration; the full shape is intentionally not
 subject to the compact byte budget. Use the ranked response's
 `into_openai_response()` builder when adding companion allowed tools, extra
