@@ -2934,11 +2934,16 @@ fn add_negative_action_variants(source: &str, variants: &mut Vec<String>) {
     let mut candidates = Vec::new();
     if let Some(base) = source.strip_suffix("ies").filter(|base| base.len() >= 2) {
         candidates.push(format!("{base}y"));
-    } else if let Some(base) = source
-        .strip_suffix('s')
-        .filter(|base| base.len() >= 3 && !base.ends_with('s'))
-    {
-        candidates.push(base.to_string());
+    } else {
+        if let Some(base) = source
+            .strip_suffix('s')
+            .filter(|base| base.len() >= 3 && !base.ends_with('s'))
+        {
+            candidates.push(base.to_string());
+        }
+        if let Some(base) = source.strip_suffix("es").filter(|base| base.len() >= 3) {
+            candidates.push(base.to_string());
+        }
     }
     if let Some(base) = source.strip_suffix("ing").filter(|base| base.len() >= 3) {
         candidates.push(base.to_string());
@@ -3695,6 +3700,44 @@ mod tests {
         assert_eq!(
             plural_actions.match_summary.excluded_query_terms,
             vec!["deletes", "applies", "writes"]
+        );
+
+        let es_actions = ToolInventory::from_capabilities([
+            ToolCapability::new("campaign.publish")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("campaign.push")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("campaign.dispatch")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("campaign.refresh")
+                .with_risk_posture(GuardedActionPosture::guarded_apply()),
+            ToolCapability::new("campaign.preview")
+                .with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("es-action inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some(
+                    "preview campaign without publishes, pushes, dispatches, or refreshes"
+                        .to_string(),
+                ),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            es_actions
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["campaign.preview"]
+        );
+        assert_eq!(
+            es_actions.match_summary.excluded_query_terms,
+            vec!["publishes", "pushes", "dispatches", "refreshes"]
         );
     }
 
@@ -4773,8 +4816,17 @@ mod tests {
                     && reasons.contains(&json!("compact_response_bytes"))
             }));
 
-        let unicode_term = "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS);
-        let unicode_summary = RankedToolSearchResponse {
+        let unicode_terms = |count: usize| {
+            (0..count)
+                .map(|index| {
+                    format!(
+                        "{index:03}{}",
+                        "😀".repeat(RANKED_SEARCH_MAX_KEYWORD_CHARS - 3)
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let unicode_ranked = RankedToolSearchResponse {
             response: ToolSearchResponse::find_tools(None, None, Some(true), Vec::new()),
             match_summary: ToolSearchMatchSummary {
                 total_matches: 0,
@@ -4782,13 +4834,25 @@ mod tests {
                 result_limit: 20,
                 truncated: false,
                 truncation_reasons: Vec::new(),
-                normalized_query_terms: vec![unicode_term.clone(); RANKED_SEARCH_MAX_QUERY_TERMS],
-                excluded_query_terms: vec![unicode_term.clone(); RANKED_SEARCH_MAX_EXCLUDED_TERMS],
-                ignored_query_terms: vec![unicode_term; RANKED_SEARCH_MAX_IGNORED_TERMS],
+                normalized_query_terms: unicode_terms(RANKED_SEARCH_MAX_QUERY_TERMS),
+                excluded_query_terms: unicode_terms(RANKED_SEARCH_MAX_EXCLUDED_TERMS),
+                ignored_query_terms: unicode_terms(RANKED_SEARCH_MAX_IGNORED_TERMS),
             },
-        }
-        .into_openai_response()
-        .to_compact_value();
+        };
+        let (bounded_unicode_summary, _) =
+            super::compact_match_summary(&unicode_ranked.match_summary);
+        let unicode_openai = unicode_ranked.into_openai_response();
+        let pre_fallback = super::with_match_summary(
+            unicode_openai.response.compact_projection().to_value(),
+            &bounded_unicode_summary,
+        );
+        assert!(
+            serde_json::to_vec(&pre_fallback)
+                .expect("pre-fallback Unicode response serializes")
+                .len()
+                > RANKED_SEARCH_COMPACT_MAX_BYTES
+        );
+        let unicode_summary = unicode_openai.to_compact_value();
         assert!(
             serde_json::to_vec(&unicode_summary)
                 .expect("Unicode compact response serializes")
