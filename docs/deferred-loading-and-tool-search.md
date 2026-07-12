@@ -129,7 +129,9 @@ closed instead of matching a truncated prefix. Its `match_summary` reports
 normalized, excluded, and ignored terms, total matches, returned count, the effective
 result limit, and stable reasons for every applied truncation. Metadata bounds
 across the visible search corpus are reported even when the bounded-away text
-would otherwise hide a match.
+would otherwise hide a match. Ranked matching tokenizes a bounded document once
+per visible capability, so caller-supplied names, groups, descriptions, or
+keywords cannot multiply unbounded work across every query variant.
 
 Both standard and ranked response types provide `to_compact_value()` for the
 selection step. The compact shape retains result metadata and
