@@ -112,12 +112,17 @@ matching. Use the additive `ToolInventory::search_ranked` or
 Ranked search ignores common conversational stop words, down-weights query terms
 that appear across most visible tools, matches conservative canonical tokens
 rather than unsafe substrings, and uses guarded-action posture as a deterministic
-tie-break. A genuine browse request is safety-ordered; a supplied query that has
-no searchable terms returns no matches instead of widening to the whole catalog.
+tie-break. It preserves original terms while adding conservative singular
+variants, and excludes tools matching explicitly negated terms such as `not
+apply` or `without delete`; negated terms are reported separately in
+`excluded_query_terms`. A truncated query, dangling negation, or truncated
+negative-term list fails closed. A genuine
+browse request is safety-ordered; a supplied query that has no searchable terms
+returns no matches instead of widening to the whole catalog.
 Ranked search defaults to 20 results, hard-caps requested limits at 100, and
 bounds query, group-filter, and result metadata. An overlong group filter fails
 closed instead of matching a truncated prefix. Its `match_summary` reports
-normalized and ignored terms, total matches, returned count, the effective
+normalized, excluded, and ignored terms, total matches, returned count, the effective
 result limit, and stable reasons for every applied truncation. Metadata bounds
 across the visible search corpus are reported even when the bounded-away text
 would otherwise hide a match.
