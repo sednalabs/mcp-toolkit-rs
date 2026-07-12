@@ -55,6 +55,11 @@ const RANKED_SEARCH_MAX_DESCRIPTION_CHARS: usize = 512;
 const RANKED_SEARCH_MAX_KEYWORDS: usize = 32;
 const RANKED_SEARCH_MAX_KEYWORD_CHARS: usize = 128;
 const RANKED_SEARCH_COMPACT_MAX_BYTES: usize = 32 * 1_024;
+const COMPACT_SEARCH_MAX_RESULTS: usize = 100;
+const COMPACT_SEARCH_MAX_OPERATION_CHARS: usize = 64;
+const COMPACT_SEARCH_MAX_TOOL_NAME_CHARS: usize = 256;
+const COMPACT_SEARCH_MAX_SUMMARY_REASONS: usize = 16;
+const COMPACT_SEARCH_MAX_SUMMARY_REASON_CHARS: usize = 64;
 
 /// MCP tool operation used for method-aware exposure checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -359,8 +364,89 @@ impl ToolSearchResponse {
         })
     }
 
-    /// Serialize the search result without schemas or hosted-client metadata.
+    /// Serialize a bounded selection response without schemas or hosted-client metadata.
+    ///
+    /// The response stays within 32 KiB and includes `compact_summary` when
+    /// source fields or results must be reduced.
     pub fn to_compact_value(&self) -> Value {
+        let mut projection = self.compact_projection();
+        loop {
+            let value = with_compact_summary(
+                projection.response.compact_value_from_bounded_fields(),
+                &projection,
+            );
+            if serde_json::to_vec(&value)
+                .is_ok_and(|bytes| bytes.len() <= RANKED_SEARCH_COMPACT_MAX_BYTES)
+            {
+                return value;
+            }
+            projection.truncated = true;
+            push_unique_reason(&mut projection.truncation_reasons, "compact_response_bytes");
+            if projection.response.results.pop().is_none() {
+                projection.response.query = None;
+                projection.response.group = None;
+                return with_compact_summary(
+                    projection.response.compact_value_from_bounded_fields(),
+                    &projection,
+                );
+            }
+        }
+    }
+
+    fn compact_projection(&self) -> CompactToolSearchProjection {
+        let mut truncated = false;
+        let (operation, operation_truncated) =
+            truncate_search_text(&self.operation, COMPACT_SEARCH_MAX_OPERATION_CHARS);
+        truncated |= operation_truncated;
+        let query = bounded_optional_search_text(
+            self.query.as_deref(),
+            RANKED_SEARCH_MAX_QUERY_CHARS,
+            &mut truncated,
+        );
+        let group = bounded_optional_search_text(
+            self.group.as_deref(),
+            RANKED_SEARCH_MAX_GROUP_CHARS,
+            &mut truncated,
+        );
+        let mut result_metadata_truncated = false;
+        let mut results = Vec::new();
+        for result in self.results.iter().take(COMPACT_SEARCH_MAX_RESULTS) {
+            match compact_search_result(result) {
+                Some((result, result_truncated)) => {
+                    result_metadata_truncated |= result_truncated;
+                    results.push(result);
+                }
+                None => result_metadata_truncated = true,
+            }
+        }
+        let result_limit_truncated = self.results.len() > COMPACT_SEARCH_MAX_RESULTS;
+        let mut truncation_reasons = Vec::new();
+        if truncated {
+            push_unique_reason(&mut truncation_reasons, "input_metadata");
+        }
+        if result_metadata_truncated {
+            push_unique_reason(&mut truncation_reasons, "result_metadata");
+        }
+        if result_limit_truncated {
+            push_unique_reason(&mut truncation_reasons, "result_limit");
+        }
+        CompactToolSearchProjection {
+            response: ToolSearchResponse {
+                operation,
+                query,
+                group,
+                read_only: self.read_only,
+                results,
+                schemas: None,
+                metadata_label: None,
+            },
+            source_count: self.results.len(),
+            truncated: truncated || result_metadata_truncated || result_limit_truncated,
+            truncation_reasons,
+        }
+    }
+
+    fn compact_value_from_bounded_fields(&self) -> Value {
         let result_values = self
             .results
             .iter()
@@ -407,20 +493,18 @@ impl RankedToolSearchResponse {
         with_match_summary(self.response.to_value(), &self.match_summary)
     }
 
-    /// Serialize the ranked response without schemas or hosted-client metadata.
+    /// Serialize the ranked response within 32 KiB without schemas or hosted-client metadata.
     pub fn to_compact_value(&self) -> Value {
-        let mut response = ToolSearchResponse {
-            operation: self.response.operation.clone(),
-            query: self.response.query.clone(),
-            group: self.response.group.clone(),
-            read_only: self.response.read_only,
-            results: self.response.results.clone(),
-            schemas: None,
-            metadata_label: None,
-        };
-        let mut summary = self.match_summary.clone();
+        let projection = self.response.compact_projection();
+        let mut response = projection.response;
+        let (mut summary, summary_truncated) = compact_match_summary(&self.match_summary);
+        if projection.truncated || summary_truncated {
+            summary.truncated = true;
+            push_unique_reason(&mut summary.truncation_reasons, "compact_response_bytes");
+        }
+        summary.returned_count = response.results.len();
         loop {
-            let value = with_match_summary(response.to_compact_value(), &summary);
+            let value = with_match_summary(response.compact_value_from_bounded_fields(), &summary);
             if serde_json::to_vec(&value)
                 .is_ok_and(|bytes| bytes.len() <= RANKED_SEARCH_COMPACT_MAX_BYTES)
             {
@@ -436,7 +520,7 @@ impl RankedToolSearchResponse {
                 summary.ignored_query_terms.clear();
                 return with_match_summary(
                     ToolSearchResponse::find_tools(None, None, response.read_only, Vec::new())
-                        .to_compact_value(),
+                        .compact_value_from_bounded_fields(),
                     &summary,
                 );
             }
@@ -458,6 +542,138 @@ fn with_match_summary(mut value: Value, summary: &ToolSearchMatchSummary) -> Val
         object.insert("match_summary".to_string(), summary.to_value());
     }
     value
+}
+
+struct CompactToolSearchProjection {
+    response: ToolSearchResponse,
+    source_count: usize,
+    truncated: bool,
+    truncation_reasons: Vec<String>,
+}
+
+fn with_compact_summary(mut value: Value, projection: &CompactToolSearchProjection) -> Value {
+    if let Value::Object(object) = &mut value {
+        object.insert(
+            "compact_summary".to_string(),
+            json!({
+                "source_count": projection.source_count,
+                "returned_count": projection.response.results.len(),
+                "truncated": projection.truncated,
+                "truncation_reasons": projection.truncation_reasons,
+            }),
+        );
+    }
+    value
+}
+
+fn compact_search_result(result: &ToolSearchResult) -> Option<(ToolSearchResult, bool)> {
+    let (name, name_truncated) =
+        truncate_search_text(&result.name, COMPACT_SEARCH_MAX_TOOL_NAME_CHARS);
+    if name.is_empty() || name_truncated {
+        return None;
+    }
+    let mut truncated = false;
+    let group = bounded_optional_search_text(
+        result.group.as_deref(),
+        RANKED_SEARCH_MAX_GROUP_CHARS,
+        &mut truncated,
+    );
+    let description = bounded_optional_search_text(
+        result.description.as_deref(),
+        RANKED_SEARCH_MAX_DESCRIPTION_CHARS,
+        &mut truncated,
+    );
+    truncated |= result.keywords.len() > RANKED_SEARCH_MAX_KEYWORDS;
+    let mut keywords = Vec::new();
+    for keyword in result.keywords.iter().take(RANKED_SEARCH_MAX_KEYWORDS) {
+        let (keyword, keyword_truncated) =
+            truncate_search_text(keyword, RANKED_SEARCH_MAX_KEYWORD_CHARS);
+        truncated |= keyword_truncated;
+        if !keywords.contains(&keyword) {
+            keywords.push(keyword);
+        }
+    }
+    Some((
+        ToolSearchResult {
+            name,
+            group,
+            read_only: result.read_only,
+            description,
+            keywords,
+            risk_posture: result.risk_posture,
+        },
+        truncated,
+    ))
+}
+
+fn bounded_optional_search_text(
+    value: Option<&str>,
+    max_chars: usize,
+    truncated: &mut bool,
+) -> Option<String> {
+    value.map(|value| {
+        let (bounded, value_truncated) = truncate_search_text(value, max_chars);
+        *truncated |= value_truncated;
+        bounded
+    })
+}
+
+fn compact_match_summary(summary: &ToolSearchMatchSummary) -> (ToolSearchMatchSummary, bool) {
+    let (mut truncation_reasons, reasons_truncated) = bounded_search_string_list(
+        &summary.truncation_reasons,
+        COMPACT_SEARCH_MAX_SUMMARY_REASONS,
+        COMPACT_SEARCH_MAX_SUMMARY_REASON_CHARS,
+    );
+    let (normalized_query_terms, normalized_truncated) = bounded_search_string_list(
+        &summary.normalized_query_terms,
+        RANKED_SEARCH_MAX_QUERY_TERMS,
+        RANKED_SEARCH_MAX_KEYWORD_CHARS,
+    );
+    let (excluded_query_terms, excluded_truncated) = bounded_search_string_list(
+        &summary.excluded_query_terms,
+        RANKED_SEARCH_MAX_EXCLUDED_TERMS,
+        RANKED_SEARCH_MAX_KEYWORD_CHARS,
+    );
+    let (ignored_query_terms, ignored_truncated) = bounded_search_string_list(
+        &summary.ignored_query_terms,
+        RANKED_SEARCH_MAX_IGNORED_TERMS,
+        RANKED_SEARCH_MAX_KEYWORD_CHARS,
+    );
+    let compacted =
+        reasons_truncated || normalized_truncated || excluded_truncated || ignored_truncated;
+    if compacted {
+        push_unique_reason(&mut truncation_reasons, "compact_response_bytes");
+    }
+    (
+        ToolSearchMatchSummary {
+            total_matches: summary.total_matches,
+            returned_count: summary.returned_count,
+            result_limit: summary.result_limit,
+            truncated: summary.truncated || compacted,
+            truncation_reasons,
+            normalized_query_terms,
+            excluded_query_terms,
+            ignored_query_terms,
+        },
+        compacted,
+    )
+}
+
+fn bounded_search_string_list(
+    values: &[String],
+    max_items: usize,
+    max_chars: usize,
+) -> (Vec<String>, bool) {
+    let mut truncated = values.len() > max_items;
+    let mut bounded = Vec::new();
+    for value in values.iter().take(max_items) {
+        let (value, value_truncated) = truncate_search_text(value, max_chars);
+        truncated |= value_truncated;
+        if !bounded.contains(&value) {
+            bounded.push(value);
+        }
+    }
+    (bounded, truncated)
 }
 
 /// Additive OpenAI response builder for local tool-search helpers.
@@ -1964,8 +2180,8 @@ impl ToolInventory {
             .map(|query| truncate_search_text(query, RANKED_SEARCH_MAX_QUERY_CHARS))
             .map_or((None, false), |(query, truncated)| (Some(query), truncated));
         let normalized_query = normalize_ranked_query(bounded_query.as_deref().unwrap_or_default());
-        let query_terms = &normalized_query.positive_terms;
-        let excluded_query_terms = &normalized_query.excluded_terms;
+        let query_concepts = &normalized_query.positive_concepts;
+        let excluded_query_concepts = &normalized_query.excluded_concepts;
         let requested_limit = filter.limit.unwrap_or(RANKED_SEARCH_DEFAULT_LIMIT);
         let result_limit = requested_limit.min(RANKED_SEARCH_MAX_LIMIT);
         let mut truncation_reasons = Vec::new();
@@ -2013,26 +2229,27 @@ impl ToolInventory {
                     .is_none_or(|read_only| capability.read_only == read_only)
             })
             .collect::<Vec<_>>();
-        if visible
+        let visible_metadata_truncated = visible
             .iter()
-            .any(|capability| capability.ranked_search_metadata_truncated())
-        {
+            .any(|capability| capability.ranked_search_metadata_truncated());
+        if visible_metadata_truncated {
             push_unique_reason(&mut truncation_reasons, "result_metadata");
         }
 
-        let document_frequencies = query_terms
+        let document_frequencies = query_concepts
             .iter()
-            .map(|term| {
+            .map(|concept| {
                 visible
                     .iter()
-                    .filter(|capability| capability.query_term_score(term) > 0)
+                    .filter(|capability| capability.query_concept_score(concept) > 0)
                     .count()
             })
             .collect::<Vec<_>>();
         let document_count = visible.len();
         let fail_closed_query = query_input_truncated
             || normalized_query.excluded_terms_truncated
-            || normalized_query.dangling_negation;
+            || normalized_query.dangling_negation
+            || (visible_metadata_truncated && !excluded_query_concepts.is_empty());
 
         let mut ranked = visible
             .into_iter()
@@ -2046,20 +2263,20 @@ impl ToolInventory {
                     ));
                 }
                 if fail_closed_query
-                    || query_terms.is_empty()
-                    || excluded_query_terms
+                    || query_concepts.is_empty()
+                    || excluded_query_concepts
                         .iter()
-                        .any(|term| capability.query_term_score(term) > 0)
+                        .any(|concept| capability.query_concept_score(concept) > 0)
                 {
                     return None;
                 }
 
                 let mut score = 0_u64;
                 let mut matched_terms = 0_usize;
-                for (term, document_frequency) in
-                    query_terms.iter().zip(document_frequencies.iter())
+                for (concept, document_frequency) in
+                    query_concepts.iter().zip(document_frequencies.iter())
                 {
-                    let field_score = capability.query_term_score(term);
+                    let field_score = capability.query_concept_score(concept);
                     if field_score == 0 {
                         continue;
                     }
@@ -2126,8 +2343,16 @@ impl ToolInventory {
                 result_limit,
                 truncated: !truncation_reasons.is_empty(),
                 truncation_reasons,
-                normalized_query_terms: normalized_query.positive_terms,
-                excluded_query_terms: normalized_query.excluded_terms,
+                normalized_query_terms: normalized_query
+                    .positive_concepts
+                    .into_iter()
+                    .map(|concept| concept.source)
+                    .collect(),
+                excluded_query_terms: normalized_query
+                    .excluded_concepts
+                    .into_iter()
+                    .map(|concept| concept.source)
+                    .collect(),
                 ignored_query_terms: normalized_query.ignored_terms,
             },
         }
@@ -2228,6 +2453,15 @@ impl ToolCapability {
         }
         score
     }
+
+    fn query_concept_score(&self, concept: &RankedQueryConcept) -> usize {
+        concept
+            .variants
+            .iter()
+            .map(|variant| self.query_term_score(variant))
+            .max()
+            .unwrap_or(0)
+    }
 }
 
 fn capability_safety_rank(capability: &ToolCapability) -> usize {
@@ -2247,8 +2481,8 @@ fn capability_safety_rank(capability: &ToolCapability) -> usize {
 }
 
 struct NormalizedRankedQuery {
-    positive_terms: Vec<String>,
-    excluded_terms: Vec<String>,
+    positive_concepts: Vec<RankedQueryConcept>,
+    excluded_concepts: Vec<RankedQueryConcept>,
     ignored_terms: Vec<String>,
     positive_terms_truncated: bool,
     excluded_terms_truncated: bool,
@@ -2256,17 +2490,34 @@ struct NormalizedRankedQuery {
     dangling_negation: bool,
 }
 
+struct RankedQueryConcept {
+    source: String,
+    variants: Vec<String>,
+}
+
 fn normalize_ranked_query(query: &str) -> NormalizedRankedQuery {
-    let mut positive_terms = Vec::new();
-    let mut excluded_terms = Vec::new();
+    let mut positive_concepts = Vec::new();
+    let mut excluded_concepts = Vec::new();
     let mut ignored_terms = Vec::new();
     let mut positive_terms_truncated = false;
     let mut excluded_terms_truncated = false;
     let mut ignored_terms_truncated = false;
     let mut negate_next = false;
     let mut last_term_was_excluded = false;
-    for raw in query.split(|character: char| !character.is_ascii_alphanumeric()) {
-        let raw = raw.trim().to_ascii_lowercase();
+    let mut words = query
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .peekable();
+    while let Some(mut raw) = words.next() {
+        if is_search_negation_contraction_stem(&raw) && words.peek().is_some_and(|word| word == "t")
+        {
+            let _ = words.next();
+            raw = "not".to_string();
+        } else if is_search_negation_contraction(&raw) {
+            raw = "not".to_string();
+        }
         if raw.is_empty() {
             continue;
         }
@@ -2294,37 +2545,65 @@ fn normalize_ranked_query(query: &str) -> NormalizedRankedQuery {
                 push_bounded_unique(&mut ignored_terms, raw, RANKED_SEARCH_MAX_IGNORED_TERMS);
             continue;
         }
-        let variants = search_token_variants(&raw);
+        let mut variants = search_token_variants(&raw);
         if variants.is_empty() {
             continue;
         }
         if negate_next {
-            for token in variants {
-                excluded_terms_truncated |= push_bounded_unique(
-                    &mut excluded_terms,
-                    token,
-                    RANKED_SEARCH_MAX_EXCLUDED_TERMS,
-                );
-            }
+            add_negative_action_variants(&raw, &mut variants);
+            excluded_terms_truncated |= push_query_concept(
+                &mut excluded_concepts,
+                raw,
+                variants,
+                RANKED_SEARCH_MAX_EXCLUDED_TERMS,
+            );
             negate_next = false;
             last_term_was_excluded = true;
         } else {
-            for token in variants {
-                positive_terms_truncated |=
-                    push_bounded_unique(&mut positive_terms, token, RANKED_SEARCH_MAX_QUERY_TERMS);
-            }
+            positive_terms_truncated |= push_query_concept(
+                &mut positive_concepts,
+                raw,
+                variants,
+                RANKED_SEARCH_MAX_QUERY_TERMS,
+            );
             last_term_was_excluded = false;
         }
     }
     NormalizedRankedQuery {
-        positive_terms,
-        excluded_terms,
+        positive_concepts,
+        excluded_concepts,
         ignored_terms,
         positive_terms_truncated,
         excluded_terms_truncated,
         ignored_terms_truncated,
         dangling_negation: negate_next,
     }
+}
+
+fn push_query_concept(
+    concepts: &mut Vec<RankedQueryConcept>,
+    source: String,
+    variants: Vec<String>,
+    max_concepts: usize,
+) -> bool {
+    if let Some(existing) = concepts.iter_mut().find(|existing| {
+        existing
+            .variants
+            .iter()
+            .any(|variant| variants.contains(variant))
+    }) {
+        for variant in variants {
+            if !existing.variants.contains(&variant) {
+                existing.variants.push(variant);
+            }
+        }
+        return false;
+    }
+    if concepts.len() >= max_concepts {
+        return true;
+    }
+    concepts.push(RankedQueryConcept { source, variants });
+    false
 }
 
 fn tokenize_search_text(value: &str) -> Vec<String> {
@@ -2339,20 +2618,21 @@ fn search_token_variants(raw: &str) -> Vec<String> {
     if token.is_empty() {
         return Vec::new();
     }
-    let singular = singular_search_token(&token);
     let mut variants = vec![token.clone()];
-    if let Some(singular) = singular {
-        if singular != token {
+    for singular in singular_search_tokens(&token) {
+        if singular != token && !variants.contains(&singular) {
             variants.push(singular);
         }
     }
     variants
 }
 
-fn singular_search_token(token: &str) -> Option<String> {
+fn singular_search_tokens(token: &str) -> Vec<String> {
     let explicit = match token {
         "ads" => Some("ad"),
+        "aliases" => Some("alias"),
         "apis" => Some("api"),
+        "cookies" => Some("cookie"),
         "ids" => Some("id"),
         "urls" => Some("url"),
         "uis" => Some("ui"),
@@ -2371,28 +2651,66 @@ fn singular_search_token(token: &str) -> Option<String> {
         _ => None,
     };
     if let Some(explicit) = explicit {
-        return Some(explicit.to_string());
+        return vec![explicit.to_string()];
     }
     if token.len() <= 3
         || token.ends_with("ss")
         || token.ends_with("us")
         || token.ends_with("is")
+        || token.ends_with("as")
         || matches!(token, "news" | "series" | "species")
     {
-        return None;
+        return Vec::new();
     }
     if token.len() > 4 && token.ends_with("ies") {
-        return Some(format!("{}y", &token[..token.len() - 3]));
+        return vec![format!("{}y", &token[..token.len() - 3])];
     }
     for suffix in ["sses", "shes", "ches", "xes", "zes"] {
         if token.ends_with(suffix) {
-            return Some(token[..token.len() - 2].to_string());
+            return vec![token[..token.len() - 2].to_string()];
         }
     }
     token
         .strip_suffix('s')
         .filter(|singular| !singular.is_empty())
         .map(str::to_string)
+        .into_iter()
+        .collect()
+}
+
+fn add_negative_action_variants(source: &str, variants: &mut Vec<String>) {
+    let mut candidates = Vec::new();
+    if let Some(base) = source.strip_suffix("ing").filter(|base| base.len() >= 3) {
+        candidates.push(base.to_string());
+        candidates.push(format!("{base}e"));
+        if let Some(shortened) = strip_doubled_final_character(base) {
+            candidates.push(shortened);
+        }
+    }
+    if let Some(base) = source.strip_suffix("ied").filter(|base| base.len() >= 2) {
+        candidates.push(format!("{base}y"));
+    } else if let Some(base) = source.strip_suffix("ed").filter(|base| base.len() >= 3) {
+        candidates.push(base.to_string());
+        candidates.push(format!("{base}e"));
+        if let Some(shortened) = strip_doubled_final_character(base) {
+            candidates.push(shortened);
+        }
+    }
+    for candidate in candidates {
+        if !variants.contains(&candidate) {
+            variants.push(candidate);
+        }
+    }
+}
+
+fn strip_doubled_final_character(value: &str) -> Option<String> {
+    let mut characters = value.chars().rev();
+    let last = characters.next()?;
+    (characters.next() == Some(last)).then(|| {
+        let mut shortened = value.to_string();
+        shortened.pop();
+        shortened
+    })
 }
 
 fn push_bounded_unique(terms: &mut Vec<String>, term: String, max_terms: usize) -> bool {
@@ -2414,7 +2732,54 @@ fn is_search_negation_marker(term: &str) -> bool {
 }
 
 fn is_search_negation_continuation(term: &str) -> bool {
-    matches!(term, "nor" | "or")
+    matches!(term, "and" | "nor" | "or")
+}
+
+fn is_search_negation_contraction(term: &str) -> bool {
+    matches!(
+        term,
+        "arent"
+            | "cannot"
+            | "cant"
+            | "couldnt"
+            | "didnt"
+            | "doesnt"
+            | "dont"
+            | "hadnt"
+            | "hasnt"
+            | "havent"
+            | "isnt"
+            | "mustnt"
+            | "neednt"
+            | "shouldnt"
+            | "wasnt"
+            | "werent"
+            | "wont"
+            | "wouldnt"
+    )
+}
+
+fn is_search_negation_contraction_stem(term: &str) -> bool {
+    matches!(
+        term,
+        "aren"
+            | "can"
+            | "couldn"
+            | "didn"
+            | "doesn"
+            | "don"
+            | "hadn"
+            | "hasn"
+            | "haven"
+            | "isn"
+            | "mustn"
+            | "needn"
+            | "shouldn"
+            | "wasn"
+            | "weren"
+            | "won"
+            | "wouldn"
+    )
 }
 
 fn is_search_negation_filler(term: &str) -> bool {
@@ -2773,7 +3138,7 @@ mod tests {
         assert!(ranked
             .match_summary
             .normalized_query_terms
-            .contains(&"creative".to_string()));
+            .contains(&"creatives".to_string()));
         assert!(ranked
             .match_summary
             .ignored_query_terms
@@ -2869,6 +3234,23 @@ mod tests {
 
         assert_eq!(ranked.response.results[0].name, "campaign.preview");
         assert_eq!(ranked.response.results[1].name, "campaign.apply");
+
+        let plural = ToolInventory::from_capabilities([
+            ToolCapability::new("ads.delete")
+                .with_risk_posture(GuardedActionPosture::destructive()),
+            ToolCapability::new("ad.preview").with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("plural inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("ads".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(plural.response.results[0].name, "ad.preview");
+        assert_eq!(plural.response.results[1].name, "ads.delete");
     }
 
     #[test]
@@ -2897,7 +3279,7 @@ mod tests {
 
         let ranked = inventory.search_ranked(
             &ToolSearchFilter {
-                query: Some("preview campaign without using apply or delete".to_string()),
+                query: Some("preview campaign without using apply and delete".to_string()),
                 ..ToolSearchFilter::default()
             },
             ToolOperation::List,
@@ -2953,6 +3335,31 @@ mod tests {
             .match_summary
             .truncation_reasons
             .contains(&"excluded_query_terms".to_string()));
+
+        for query in [
+            "don't delete campaign",
+            "dont delete campaign",
+            "can't delete campaign",
+            "cannot delete campaign",
+            "campaign without deleting",
+        ] {
+            let contracted = inventory.search_ranked(
+                &ToolSearchFilter {
+                    query: Some(query.to_string()),
+                    ..ToolSearchFilter::default()
+                },
+                ToolOperation::List,
+                &ToolInventoryPolicy::strict(),
+            );
+            assert!(
+                contracted
+                    .response
+                    .results
+                    .iter()
+                    .all(|result| result.name != "campaign.delete"),
+                "query: {query}"
+            );
+        }
     }
 
     #[test]
@@ -3077,6 +3484,8 @@ mod tests {
             ("queries", "query"),
             ("policies", "policy"),
             ("movies", "movie"),
+            ("cookies", "cookie"),
+            ("aliases", "alias"),
             ("repositories", "repository"),
             ("processes", "process"),
             ("searches", "search"),
@@ -3089,7 +3498,7 @@ mod tests {
             assert!(variants.contains(&singular.to_string()), "plural: {plural}");
         }
         for protected in [
-            "status", "analysis", "news", "series", "access", "dns", "tls", "ops", "sms",
+            "status", "analysis", "news", "series", "access", "canvas", "dns", "tls", "ops", "sms",
         ] {
             assert_eq!(
                 super::search_token_variants(protected),
@@ -3105,6 +3514,10 @@ mod tests {
             ToolCapability::new("repository.read").with_read_only(true),
             ToolCapability::new("process.inspect").with_read_only(true),
             ToolCapability::new("search.run").with_read_only(true),
+            ToolCapability::new("cookie.read").with_read_only(true),
+            ToolCapability::new("alias.read").with_read_only(true),
+            ToolCapability::new("canva.read").with_read_only(true),
+            ToolCapability::new("canvas.read").with_read_only(true),
             ToolCapability::new("op.read").with_read_only(true),
             ToolCapability::new("ops.read").with_read_only(true),
         ])
@@ -3114,6 +3527,9 @@ mod tests {
             ("repositories", "repository.read"),
             ("processes", "process.inspect"),
             ("searches", "search.run"),
+            ("cookies", "cookie.read"),
+            ("aliases", "alias.read"),
+            ("canvas", "canvas.read"),
             ("ops", "ops.read"),
         ] {
             let ranked = inventory.search_ranked(
@@ -3127,6 +3543,39 @@ mod tests {
             assert_eq!(ranked.match_summary.total_matches, 1, "query: {query}");
             assert_eq!(ranked.response.results[0].name, expected, "query: {query}");
         }
+
+        let exclusion = ToolInventory::from_capabilities([
+            ToolCapability::new("session.cookie")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Read a session cookie.",
+                    ["cookie", "session"],
+                )),
+            ToolCapability::new("session.preview")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    "Preview a session.",
+                    ["preview", "session"],
+                )),
+        ])
+        .expect("exclusion inventory")
+        .search_ranked(
+            &ToolSearchFilter {
+                query: Some("session without cookies".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            exclusion
+                .response
+                .results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session.preview"]
+        );
     }
 
     #[test]
@@ -3275,6 +3724,31 @@ mod tests {
             .truncation_reasons
             .contains(&"result_metadata".to_string()));
 
+        let hidden_exclusion =
+            ToolInventory::from_capabilities([ToolCapability::new("campaign.hidden")
+                .with_read_only(true)
+                .with_discovery(ToolDiscoveryMetadata::new(
+                    format!(
+                        "campaign {} delete",
+                        "d".repeat(RANKED_SEARCH_MAX_DESCRIPTION_CHARS)
+                    ),
+                    ["campaign"],
+                ))])
+            .expect("hidden-exclusion inventory")
+            .search_ranked(
+                &ToolSearchFilter {
+                    query: Some("campaign without delete".to_string()),
+                    ..ToolSearchFilter::default()
+                },
+                ToolOperation::List,
+                &ToolInventoryPolicy::strict(),
+            );
+        assert!(hidden_exclusion.response.results.is_empty());
+        assert!(hidden_exclusion
+            .match_summary
+            .truncation_reasons
+            .contains(&"result_metadata".to_string()));
+
         let keyword_count =
             ToolInventory::from_capabilities([ToolCapability::new("bounded.keyword.count")
                 .with_read_only(true)
@@ -3415,14 +3889,25 @@ mod tests {
         let compact = ranked.to_compact_value();
         let bytes = serde_json::to_vec(&compact).expect("compact response serializes");
         assert!(bytes.len() <= RANKED_SEARCH_COMPACT_MAX_BYTES);
-        assert_eq!(compact["query"], serde_json::Value::Null);
-        assert_eq!(compact["group"], serde_json::Value::Null);
+        assert_eq!(
+            compact["query"].as_str().map(str::len),
+            Some(RANKED_SEARCH_MAX_QUERY_CHARS)
+        );
+        assert_eq!(
+            compact["group"].as_str().map(str::len),
+            Some(RANKED_SEARCH_MAX_GROUP_CHARS)
+        );
         assert_eq!(compact["match_summary"]["total_matches"], 42);
         assert_eq!(compact["match_summary"]["returned_count"], 0);
         assert_eq!(compact["match_summary"]["result_limit"], 17);
+        assert!(compact["match_summary"]["truncation_reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.contains(&json!("compact_response_bytes"))));
         assert_eq!(
-            compact["match_summary"]["truncation_reasons"],
-            json!(["compact_response_bytes"])
+            compact["match_summary"]["normalized_query_terms"][0]
+                .as_str()
+                .map(str::len),
+            Some(RANKED_SEARCH_MAX_KEYWORD_CHARS)
         );
     }
 
@@ -3455,7 +3940,7 @@ mod tests {
         assert_eq!(full["match_summary"]["truncation_reasons"], json!([]));
         assert_eq!(
             full["match_summary"]["normalized_query_terms"],
-            json!(["ads", "ad"])
+            json!(["ads"])
         );
         assert_eq!(full["match_summary"]["excluded_query_terms"], json!([]));
         assert_eq!(
@@ -3489,7 +3974,7 @@ mod tests {
                     "result_limit":20,
                     "truncated":false,
                     "truncation_reasons":[],
-                    "normalized_query_terms":["ads", "ad"],
+                    "normalized_query_terms":["ads"],
                     "excluded_query_terms":[],
                     "ignored_query_terms":["show", "me"]
                 }
@@ -3613,6 +4098,54 @@ mod tests {
         assert!(compact.get("schemas").is_none());
         assert!(compact.get("openai_deferred_loading").is_none());
         assert_eq!(compact["openai_allowed_tools"], json!(["cache.list"]));
+    }
+
+    #[test]
+    fn compact_search_response_bounds_inputs_before_selection_serialization() {
+        let oversized = "x".repeat(RANKED_SEARCH_COMPACT_MAX_BYTES * 2);
+        let response = ToolSearchResponse::find_tools(
+            Some(oversized.clone()),
+            Some(oversized.clone()),
+            Some(true),
+            vec![
+                super::ToolSearchResult {
+                    name: "cache.list".to_string(),
+                    group: Some("cache".to_string()),
+                    read_only: true,
+                    description: Some("List cache settings".to_string()),
+                    keywords: vec!["cache".to_string()],
+                    risk_posture: None,
+                },
+                super::ToolSearchResult {
+                    name: oversized.clone(),
+                    group: Some(oversized.clone()),
+                    read_only: false,
+                    description: Some(oversized.clone()),
+                    keywords: vec![oversized.clone(); RANKED_SEARCH_MAX_KEYWORDS + 1],
+                    risk_posture: Some(GuardedActionPosture::destructive()),
+                },
+            ],
+        )
+        .with_schemas(Some(json!({"oversized": oversized})));
+
+        let compact = response.to_compact_value();
+        assert!(
+            serde_json::to_vec(&compact)
+                .expect("compact response serializes")
+                .len()
+                <= RANKED_SEARCH_COMPACT_MAX_BYTES
+        );
+        assert!(compact.get("schemas").is_none());
+        assert_eq!(compact["openai_allowed_tools"], json!(["cache.list"]));
+        assert_eq!(compact["compact_summary"]["source_count"], 2);
+        assert_eq!(compact["compact_summary"]["returned_count"], 1);
+        assert_eq!(compact["compact_summary"]["truncated"], true);
+        assert!(compact["compact_summary"]["truncation_reasons"]
+            .as_array()
+            .is_some_and(|reasons| {
+                reasons.contains(&json!("input_metadata"))
+                    && reasons.contains(&json!("result_metadata"))
+            }));
     }
 
     #[test]

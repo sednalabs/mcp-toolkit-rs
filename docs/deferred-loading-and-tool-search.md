@@ -113,8 +113,9 @@ Ranked search ignores common conversational stop words, down-weights query terms
 that appear across most visible tools, matches conservative canonical tokens
 rather than unsafe substrings, and uses guarded-action posture as a deterministic
 tie-break. It preserves original terms while adding conservative singular
-variants, and excludes tools matching explicitly negated terms such as `not
-apply` or `without delete`; negated terms are reported separately in
+variants as one scoring concept, and excludes tools matching explicitly negated
+terms such as `not apply`, `don't delete`, or `without deleting`; coordinated
+`and`/`or` negative lists remain excluded. Negated terms are reported separately in
 `excluded_query_terms`. A truncated query, dangling negation, or truncated
 negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
@@ -130,11 +131,13 @@ would otherwise hide a match.
 Both standard and ranked response types provide `to_compact_value()` for the
 selection step. The compact shape retains result metadata and
 `openai_allowed_tools`, but deliberately omits schemas and hosted-client metadata.
-Ranked compact serialization additionally enforces a 32 KiB byte budget by
-dropping lowest-ranked results and recording `compact_response_bytes` in the
-truncation reasons. If caller-constructed selection metadata alone exceeds the
-budget after all results are removed, the compact fallback omits echoed query,
-group, and term lists while retaining counts and the byte-budget reason. Call
+Both compact serializers bound input and result fields before materializing JSON
+and enforce a 32 KiB byte budget. The standard response adds `compact_summary`
+with source/returned counts and truncation reasons. The ranked response preserves
+its match counts and records `compact_response_bytes` when selection metadata or
+results must be reduced. If bounded selection metadata alone exceeds the budget
+after all results are removed, the compact fallback omits echoed query, group,
+and term lists while retaining counts and the byte-budget reason. Call
 `to_value()` when the same response must also carry
 schemas and deferred-load configuration; the full shape is intentionally not
 subject to the compact byte budget. Use the ranked response's
