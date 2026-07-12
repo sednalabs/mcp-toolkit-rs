@@ -1683,6 +1683,17 @@ impl ToolCatalogEntry {
         self
     }
 
+    /// Add provider-specific canonical action roots used for negative-intent matching.
+    #[must_use]
+    pub fn with_action_lexemes<I, S>(mut self, lexemes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.capability = self.capability.with_action_lexemes(lexemes);
+        self
+    }
+
     /// Attach the JSON input schema emitted for this tool.
     #[must_use]
     pub fn with_input_schema(mut self, schema: Value) -> Self {
@@ -1832,6 +1843,7 @@ impl ToolCatalog {
                 exposure: capability.exposure,
                 discovery: capability.discovery,
                 risk_posture: capability.risk_posture,
+                action_lexemes: capability.action_lexemes,
             },
             input_schema,
             output_schema,
@@ -2152,6 +2164,7 @@ impl ToolInventory {
                 exposure: capability.exposure,
                 discovery: capability.discovery,
                 risk_posture: capability.risk_posture,
+                action_lexemes: capability.action_lexemes,
             },
         );
         Ok(())
@@ -4074,6 +4087,27 @@ mod tests {
         );
         assert_eq!(
             extended_actions.to_compact_value()["openai_allowed_tools"],
+            json!(["cache.preview"])
+        );
+
+        let catalog_actions = ToolCatalog::from_entries([
+            ToolCatalogEntry::new("cache.evict")
+                .with_action_lexemes(["evict"])
+                .with_risk_posture(GuardedActionPosture::destructive()),
+            ToolCatalogEntry::new("cache.preview")
+                .with_risk_posture(GuardedActionPosture::preview()),
+        ])
+        .expect("catalog action inventory")
+        .ranked_search_response(
+            &ToolSearchFilter {
+                query: Some("preview cache without evicting".to_string()),
+                ..ToolSearchFilter::default()
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert_eq!(
+            catalog_actions.to_compact_value()["openai_allowed_tools"],
             json!(["cache.preview"])
         );
     }

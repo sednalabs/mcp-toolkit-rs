@@ -125,8 +125,9 @@ so `without traffic` also excludes metadata that says `trafficking` or
 verbs, avoiding collisions such as `canvas`/`canva` or `adding`/`ad`. The
 toolkit carries a conservative built-in action vocabulary; providers with
 additional action roots register them explicitly with
-`ToolCapability::with_action_lexemes` so their own inflected exclusions remain
-fail-closed without widening the global matcher. Negated
+`ToolCapability::with_action_lexemes` or the matching
+`ToolCatalogEntry::with_action_lexemes` builder so their own inflected exclusions
+remain fail-closed without widening the global matcher. Negated
 terms are reported separately in `excluded_query_terms`. A truncated query,
 dangling negation, or truncated negative-term list fails closed. A genuine
 browse request is safety-ordered; a supplied query that has no searchable terms
