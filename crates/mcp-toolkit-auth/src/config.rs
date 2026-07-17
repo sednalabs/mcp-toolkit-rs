@@ -589,7 +589,7 @@ mod profile_tests {
     async fn explicit_discovery_url_rejects_cleartext_remote_transport() {
         let err = discover_oidc_metadata_from_url(
             "https://issuer.example/tenant",
-            "http://metadata.example/openid-configuration",
+            "http://metadata.example/openid-configuration", // DevSkim: ignore DS137138 denial-path fixture
             None,
         )
         .await
