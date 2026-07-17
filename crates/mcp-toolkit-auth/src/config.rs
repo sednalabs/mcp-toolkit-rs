@@ -578,7 +578,10 @@ mod profile_tests {
                 .await
                 .expect_err("private transport must not redefine issuer identity");
 
-        assert_eq!(err.to_string(), "Discovery issuer mismatch");
+        assert_eq!(
+            err.to_string(),
+            "Authentication failed: Discovery issuer mismatch"
+        );
         fixture.shutdown();
     }
 
@@ -594,7 +597,7 @@ mod profile_tests {
 
         assert_eq!(
             err.to_string(),
-            "Discovery metadata has unsupported discovery_url scheme"
+            "Authentication failed: Discovery metadata has unsupported discovery_url scheme"
         );
     }
 
