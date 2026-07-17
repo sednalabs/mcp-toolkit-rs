@@ -250,7 +250,8 @@ pub async fn discover_oidc_metadata_from_url(
     validate_metadata_url("discovery_url", discovery_url)?;
 
     let http = client.cloned().unwrap_or_else(Client::new);
-    fetch_oidc_metadata(&http, issuer, discovery_url).await
+    let metadata = fetch_oidc_metadata(&http, issuer, discovery_url).await;
+    metadata
 }
 
 async fn fetch_oidc_metadata(
