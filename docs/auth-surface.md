@@ -90,6 +90,15 @@ Servers can configure each issuer entry from either:
 This keeps inline metadata publication generic across public MCP servers while avoiding
 provider-specific assumptions in consumer services.
 
+OIDC issuer identity and metadata transport are separate concerns. The normal
+`discover_oidc_metadata` helper derives metadata URLs from the canonical issuer.
+Deployments that must avoid a public ingress dependency during startup can use
+`discover_oidc_metadata_from_url` with a private HTTPS or loopback HTTP metadata URL.
+The private URL is fetch-only: the returned document must still name the canonical
+issuer, and published authorization endpoints remain the public values from that
+validated document. Do not publish the private transport URL in PRM or authorization-
+server metadata.
+
 ### PRM Endpoints
 PRM metadata is served per RFC 9728 using a canonical resource URL plus `authorization_servers`.
 Root aliases are only served if there is a single resource entry (or the resource itself is `/`).
