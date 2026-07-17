@@ -44,8 +44,8 @@ mod util;
 pub use authenticator::Authenticator;
 pub use bearer::{parse_strict_bearer_authorization, BearerParseError, BearerToken};
 pub use config::{
-    discover_oidc_metadata, AuthConfig, AuthMode, AuthRequestContext, AuthSecurityProfile,
-    ClientAuthMethod, OidcDiscovery,
+    discover_oidc_metadata, discover_oidc_metadata_from_url, AuthConfig, AuthMode,
+    AuthRequestContext, AuthSecurityProfile, ClientAuthMethod, OidcDiscovery,
 };
 pub use context::{auth_context_from_parts, auth_context_ref_from_parts, AuthContext};
 pub use error::{AuthError, AuthErrorContract};
