@@ -16,8 +16,10 @@ all-features = true
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1.91"
 axum = "0.8.8"
 base64 = "0.22.1"
+dpop-verifier = "4.4.0"
 http = "1.3.1"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http" }
@@ -38,6 +40,7 @@ tower = "0.5.2"
 
 [dev-dependencies]
 mcp-toolkit-testing = { version = "0.1.0", path = "../mcp-toolkit-testing" }
+p256 = { version = "0.13.2", features = ["ecdsa"] }
 tokio = { version = "1.49.0", features = ["macros", "rt"] }
 
 [target.'cfg(unix)'.dependencies]

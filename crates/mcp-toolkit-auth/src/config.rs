@@ -53,22 +53,6 @@ pub enum ClientAuthMethod {
     ClientSecretPost,
 }
 
-/// Context for an authentication request.
-#[derive(Debug, Clone, Copy)]
-pub struct AuthRequestContext {
-    pub bearer_only: bool,
-}
-
-impl AuthRequestContext {
-    pub fn bearer_only() -> Self {
-        Self { bearer_only: true }
-    }
-
-    pub fn token_bound() -> Self {
-        Self { bearer_only: false }
-    }
-}
-
 /// Configuration structure for authentication policies.
 #[derive(Debug, Clone)]
 pub struct AuthConfig {
