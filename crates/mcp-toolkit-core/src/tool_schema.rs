@@ -1199,13 +1199,13 @@ mod tests {
         assert_eq!(
             validate_schema_dialect(&properties_cycle, &SchemaDialectPolicy::new()),
             Err(SchemaDialectError::RecursiveReference {
-                reference: "#/$defs/first".to_string(),
+                reference: "#/$defs/second".to_string(),
             })
         );
         assert_eq!(
             validate_schema_dialect(&items_and_composition_cycle, &SchemaDialectPolicy::new()),
             Err(SchemaDialectError::RecursiveReference {
-                reference: "#/$defs/first".to_string(),
+                reference: "#/$defs/second".to_string(),
             })
         );
         assert_eq!(
