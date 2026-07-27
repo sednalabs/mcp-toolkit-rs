@@ -1289,10 +1289,16 @@ fn error_body(err: &AuthError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-    use http::{Request, Response, StatusCode};
+    use axum::body::{to_bytes, Body};
+    use http::{
+        header::{AUTHORIZATION, WWW_AUTHENTICATE},
+        Request, Response, StatusCode,
+    };
+    use jsonwebtoken::{encode, EncodingKey, Header as JwtHeader};
+    use serde_json::json;
     use std::convert::Infallible;
     use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tower::{service_fn, Service};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1356,6 +1362,26 @@ mod tests {
             authenticator: test_authenticator(),
             resource_url_override: resource_url_override.map(str::to_string),
         }
+    }
+
+    fn confirmation_claim_token(cnf: serde_json::Value) -> String {
+        let expiration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        encode(
+            &JwtHeader::default(),
+            &json!({
+                "exp": expiration,
+                "sub": "test-subject",
+                "aud": "mcp-toolkit",
+                "iss": "mcp-toolkit",
+                "cnf": cnf,
+            }),
+            &EncodingKey::from_secret(b"secret"),
+        )
+        .expect("test token")
     }
 
     #[test]
@@ -2032,6 +2058,49 @@ mod tests {
                 has_authorization: false,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn auth_surface_sanitizes_confirmation_claim_bearer_failure() {
+        let registry = IssuerRegistry::new(AuthSurfaceConfig {
+            public_base_url: "https://example.com".to_string(),
+            entries: vec![test_entry("/mcp", Some("https://example.com/mcp"))],
+            root_alias_policy: RootAliasPolicy::Disabled,
+            public_paths: HashSet::new(),
+            public_prefixes: Vec::new(),
+            allow_insecure_http: false,
+        })
+        .expect("registry");
+        let mut service =
+            AuthSurfaceLayer::new(registry).layer(service_fn(|_request: Request<Body>| async {
+                Ok::<_, Infallible>(Response::new(Body::from("unexpected success")))
+            }));
+        let token = confirmation_claim_token(json!({"jkt": "test-thumbprint"}));
+
+        let response = service
+            .call(
+                Request::builder()
+                    .uri("/mcp")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let challenge = response
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .expect("WWW-Authenticate header");
+        assert!(challenge.contains("error=\"invalid_token\""));
+        assert!(!challenge.contains("sender-constrained"));
+
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("response body");
+        assert_eq!(body.as_ref(), b"Invalid bearer token.");
     }
 
     #[tokio::test]

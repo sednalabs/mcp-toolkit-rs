@@ -36,6 +36,7 @@ mod authenticator;
 mod claims;
 mod config;
 mod context;
+mod dpop;
 mod error;
 mod providers;
 mod replay;
@@ -45,9 +46,13 @@ pub use authenticator::Authenticator;
 pub use bearer::{parse_strict_bearer_authorization, BearerParseError, BearerToken};
 pub use config::{
     discover_oidc_metadata, discover_oidc_metadata_from_url, AuthConfig, AuthMode,
-    AuthRequestContext, AuthSecurityProfile, ClientAuthMethod, OidcDiscovery,
+    AuthSecurityProfile, ClientAuthMethod, OidcDiscovery,
 };
 pub use context::{auth_context_from_parts, auth_context_ref_from_parts, AuthContext};
+pub use dpop::{
+    parse_strict_dpop_authorization, parse_strict_dpop_proof, DpopParseError, DpopProof,
+    DpopProofParseError, DpopToken, SenderConstrainedAuthError,
+};
 pub use error::{AuthError, AuthErrorContract};
 pub use mcp_toolkit_http::oauth::AuthorizationServerMetadata;
 pub use replay::{

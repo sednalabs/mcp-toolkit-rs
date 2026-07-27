@@ -33,6 +33,12 @@ LOW_LEVEL_AUTH_CRATES = {
     "biscuit",
 }
 
+# These crates may appear only in dev-dependencies for real signed-proof
+# fixtures. Production auth code must continue to use the approved verifier.
+APPROVED_TEST_ONLY_LOW_LEVEL_AUTH_CRATES = {
+    "p256": "Test-only P-256 proof fixtures",
+}
+
 APPROVED_TOKEN_VALIDATION_SYMBOLS = {
     "decode_header(": {
         Path("crates/mcp-toolkit-auth/src/providers/jwks.rs"),
@@ -69,9 +75,9 @@ def load_manifest(path: Path) -> dict[str, Any]:
         return tomllib.load(handle)
 
 
-def dependency_names(manifest: dict[str, Any]) -> set[str]:
+def dependency_names(manifest: dict[str, Any], section_names: tuple[str, ...]) -> set[str]:
     names: set[str] = set()
-    for section_name in ("dependencies", "dev-dependencies", "build-dependencies"):
+    for section_name in section_names:
         section = manifest.get(section_name, {})
         if isinstance(section, dict):
             names.update(section)
@@ -96,13 +102,26 @@ def check_policy_doc() -> list[str]:
 
 def check_low_level_auth_crates() -> list[str]:
     manifest = load_manifest(AUTH_MANIFEST)
-    direct = dependency_names(manifest)
-    violations = sorted(direct & LOW_LEVEL_AUTH_CRATES)
+    production_direct = dependency_names(manifest, ("dependencies", "build-dependencies"))
+    production_violations = sorted(production_direct & LOW_LEVEL_AUTH_CRATES)
+    dev_direct = dependency_names(manifest, ("dev-dependencies",))
+    dev_violations = sorted(
+        (dev_direct & LOW_LEVEL_AUTH_CRATES)
+        - APPROVED_TEST_ONLY_LOW_LEVEL_AUTH_CRATES.keys()
+    )
     rel = AUTH_MANIFEST.relative_to(ROOT)
-    return [
+    errors = [
         f"{rel}: direct low-level auth/crypto crate '{name}' requires posture review"
-        for name in violations
+        for name in production_violations + dev_violations
     ]
+    policy_text = POLICY_DOC.read_text(encoding="utf-8")
+    for crate_name, marker in APPROVED_TEST_ONLY_LOW_LEVEL_AUTH_CRATES.items():
+        if crate_name in dev_direct and marker not in policy_text:
+            errors.append(
+                f"{rel}: test-only low-level auth/crypto crate '{crate_name}' "
+                f"requires policy marker '{marker}'"
+            )
+    return errors
 
 
 def check_validation_symbol_boundaries() -> list[str]:
