@@ -1939,6 +1939,10 @@ fn duckdb_arrow_type_to_logical_type(data_type: &DuckDataType) -> &'static str {
 }
 
 fn duck_value_to_json(value: DuckValue) -> Value {
+    // DuckDB made `Value` non-exhaustive in a semver-compatible release. Keep
+    // the wildcard for forward compatibility while permitting the declared
+    // minimum version, where the enum was still exhaustive.
+    #[allow(unreachable_patterns)]
     match value {
         DuckValue::Null => Value::Null,
         DuckValue::Boolean(raw) => Value::Bool(raw),
@@ -1992,6 +1996,7 @@ fn duck_value_to_json(value: DuckValue) -> Value {
         ),
         DuckValue::Union(raw) => duck_value_to_json(*raw),
         DuckValue::Enum(raw) => Value::String(raw),
+        other => Value::String(format!("{other:?}")),
     }
 }
 
