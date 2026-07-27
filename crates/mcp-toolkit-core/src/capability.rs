@@ -869,8 +869,7 @@ mod tests {
         .expect("valid capability")
         .with_output_schema(output_schema.clone())
         .expect("valid output schema");
-        let native =
-            serde_json::to_value(capability.to_mcp_tool()).expect("native descriptor");
+        let native = serde_json::to_value(capability.to_mcp_tool()).expect("native descriptor");
         let apps = capability
             .to_mcp_apps_tool_descriptor()
             .expect("apps descriptor");

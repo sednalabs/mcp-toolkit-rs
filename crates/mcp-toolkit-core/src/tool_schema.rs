@@ -134,11 +134,13 @@ pub enum SchemaDialectError {
 impl Display for SchemaDialectError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RootMustBeObject => formatter.write_str(
-                "schema dialect requires a resolved root with `type: \"object\"`",
-            ),
+            Self::RootMustBeObject => formatter
+                .write_str("schema dialect requires a resolved root with `type: \"object\"`"),
             Self::ForbiddenRootKeyword { keyword } => {
-                write!(formatter, "schema root contains forbidden keyword `{keyword}`")
+                write!(
+                    formatter,
+                    "schema root contains forbidden keyword `{keyword}`"
+                )
             }
             Self::UnsupportedReference { reference } => write!(
                 formatter,
@@ -157,7 +159,10 @@ impl Display for SchemaDialectError {
                 "schema reference depth exceeds configured maximum of {max_reference_depth}"
             ),
             Self::NodeBudgetExceeded { max_nodes } => {
-                write!(formatter, "schema exceeds configured node budget of {max_nodes}")
+                write!(
+                    formatter,
+                    "schema exceeds configured node budget of {max_nodes}"
+                )
             }
         }
     }
@@ -167,11 +172,13 @@ impl std::error::Error for SchemaDialectError {}
 
 /// Validates a JSON Schema against a bounded, caller-selected dialect.
 ///
-/// Only local references rooted at `#/$defs/` are accepted. Resolution never
+/// Only local references rooted at `#/$defs/` are accepted. Their URI-fragment
+/// suffix is percent-decoded before JSON Pointer resolution. Resolution never
 /// performs I/O, and unresolved or recursive references fail closed. The
 /// validator checks configured forbidden keys on both the submitted root and
-/// its resolved root, then traverses the complete schema within the supplied
-/// node and reference-depth budgets.
+/// its resolved root, then counts and validates every raw document node once
+/// within the supplied node budget. Reference-chain validation is separate, so
+/// following a `$ref` cannot inflate whole-document accounting.
 ///
 /// # Errors
 /// Returns an error if the root violates the policy, a reference is not a
@@ -200,7 +207,7 @@ pub fn validate_schema_dialect(
         return Err(SchemaDialectError::RootMustBeObject);
     }
 
-    traverse_schema(schema, schema, policy, &mut state, 0)
+    traverse_schema(schema, schema, policy, &mut state)
 }
 
 #[derive(Default)]
@@ -253,41 +260,45 @@ fn traverse_schema(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
-    reference_depth: usize,
 ) -> Result<(), SchemaDialectError> {
     count_node(policy, state)?;
     match schema {
         Value::Object(object) => {
             if let Some(reference) = object.get("$ref") {
-                let reference = reference.as_str().ok_or_else(|| {
-                    SchemaDialectError::UnsupportedReference {
-                        reference: reference.to_string(),
-                    }
-                })?;
-                resolve_reference(reference, document, policy, state, |resolved, state| {
-                    traverse_schema(
-                        resolved,
-                        document,
-                        policy,
-                        state,
-                        reference_depth.saturating_add(1),
-                    )
-                })?;
+                validate_reference_chain(reference, document, policy, state)?;
             }
-            for (keyword, value) in object {
-                if keyword != "$ref" {
-                    traverse_schema(value, document, policy, state, reference_depth)?;
-                }
+            for value in object.values() {
+                traverse_schema(value, document, policy, state)?;
             }
         }
         Value::Array(values) => {
             for value in values {
-                traverse_schema(value, document, policy, state, reference_depth)?;
+                traverse_schema(value, document, policy, state)?;
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
     Ok(())
+}
+
+fn validate_reference_chain(
+    reference: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    let reference = reference.as_str().ok_or_else(|| {
+        SchemaDialectError::UnsupportedReference {
+            reference: reference.to_string(),
+        }
+    })?;
+    resolve_reference(reference, document, policy, state, |resolved, state| {
+        let Some(next_reference) = resolved.as_object().and_then(|object| object.get("$ref"))
+        else {
+            return Ok(());
+        };
+        validate_reference_chain(next_reference, document, policy, state)
+    })
 }
 
 fn count_node(
@@ -313,11 +324,7 @@ fn resolve_reference<'a, T, F>(
 where
     F: FnOnce(&'a Value, &mut SchemaTraversalState) -> Result<T, SchemaDialectError>,
 {
-    if !reference.starts_with("#/$defs/") {
-        return Err(SchemaDialectError::UnsupportedReference {
-            reference: reference.to_string(),
-        });
-    }
+    let pointer = local_reference_pointer(reference)?;
     if state.active_references.len() >= policy.max_reference_depth {
         return Err(SchemaDialectError::ReferenceDepthExceeded {
             max_reference_depth: policy.max_reference_depth,
@@ -326,22 +333,63 @@ where
     if state
         .active_references
         .iter()
-        .any(|active_reference| active_reference == reference)
+        .any(|active_reference| active_reference == &pointer)
     {
         return Err(SchemaDialectError::RecursiveReference {
             reference: reference.to_string(),
         });
     }
-    let pointer = format!("/$defs/{}", &reference["#/$defs/".len()..]);
-    let resolved = document
-        .pointer(&pointer)
-        .ok_or_else(|| SchemaDialectError::UnresolvedReference {
-            reference: reference.to_string(),
-        })?;
-    state.active_references.push(reference.to_string());
+    let resolved =
+        document
+            .pointer(&pointer)
+            .ok_or_else(|| SchemaDialectError::UnresolvedReference {
+                reference: reference.to_string(),
+            })?;
+    state.active_references.push(pointer);
     let result = visit(resolved, state);
     state.active_references.pop();
     result
+}
+
+fn local_reference_pointer(reference: &str) -> Result<String, SchemaDialectError> {
+    let encoded_path = reference.strip_prefix("#/$defs/").ok_or_else(|| {
+        SchemaDialectError::UnsupportedReference {
+            reference: reference.to_string(),
+        }
+    })?;
+    let decoded_path = decode_uri_fragment(encoded_path).ok_or_else(|| {
+        SchemaDialectError::UnsupportedReference {
+            reference: reference.to_string(),
+        }
+    })?;
+    Ok(format!("/$defs/{decoded_path}"))
+}
+
+fn decode_uri_fragment(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let high = *bytes.get(index + 1)?;
+        let low = *bytes.get(index + 2)?;
+        decoded.push((hex_value(high)? << 4) | hex_value(low)?);
+        index += 3;
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Extracts deterministic tool names from a list of serialized tool definitions.
@@ -445,9 +493,8 @@ mod tests {
                 }
             }
         });
-        let policy = SchemaDialectPolicy::new().with_forbidden_root_keywords([
-            "oneOf", "anyOf", "allOf", "enum", "const", "not",
-        ]);
+        let policy = SchemaDialectPolicy::new()
+            .with_forbidden_root_keywords(["oneOf", "anyOf", "allOf", "enum", "const", "not"]);
 
         assert_eq!(validate_schema_dialect(&schema, &policy), Ok(()));
     }
@@ -505,6 +552,82 @@ mod tests {
             validate_schema_dialect(&missing, &policy),
             Err(SchemaDialectError::UnresolvedReference {
                 reference: "#/$defs/missing".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_decodes_uri_fragments_before_json_pointer_resolution() {
+        let encoded_space = json!({
+            "$ref": "#/$defs/with%20space",
+            "$defs": {"with space": {"type": "object"}}
+        });
+        let encoded_utf8 = json!({
+            "type": "object",
+            "properties": {"mark": {"$ref": "#/$defs/%E2%9C%93"}},
+            "$defs": {"✓": {"type": "object"}}
+        });
+        let json_pointer_escaped_name = json!({
+            "$ref": "#/$defs/a~1b~0c",
+            "$defs": {"a/b~c": {"type": "object"}}
+        });
+        let malformed_escape = json!({"$ref": "#/$defs/bad%2"});
+
+        assert_eq!(
+            validate_schema_dialect(&encoded_space, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&encoded_utf8, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&json_pointer_escaped_name, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&malformed_escape, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::UnsupportedReference {
+                reference: "#/$defs/bad%2".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_validates_unreferenced_definitions_and_counts_raw_nodes_once() {
+        let referenced_definition = json!({
+            "type": "object",
+            "properties": {"request": {"$ref": "#/$defs/request"}},
+            "$defs": {"request": {"type": "object"}}
+        });
+        let unreferenced_remote_reference = json!({
+            "type": "object",
+            "$defs": {
+                "unused": {"$ref": "https://example.invalid/schema.json"}
+            }
+        });
+
+        assert_eq!(
+            validate_schema_dialect(
+                &referenced_definition,
+                &SchemaDialectPolicy::new().with_max_nodes(8),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &referenced_definition,
+                &SchemaDialectPolicy::new().with_max_nodes(7),
+            ),
+            Err(SchemaDialectError::NodeBudgetExceeded { max_nodes: 7 })
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &unreferenced_remote_reference,
+                &SchemaDialectPolicy::new(),
+            ),
+            Err(SchemaDialectError::UnsupportedReference {
+                reference: "https://example.invalid/schema.json".to_string(),
             })
         );
     }
