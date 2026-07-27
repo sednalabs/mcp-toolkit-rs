@@ -20,6 +20,8 @@
 //! * Supplying the exact tool set they intend to expose.
 //! * Writing or comparing the rendered JSON when persistence is needed.
 
+use std::fmt::{Display, Formatter};
+
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -27,6 +29,320 @@ use serde_json::{Map, Value};
 pub const TOOL_SCHEMA_SNAPSHOT_SCHEMA: &str = "mcp_tool_schema_snapshot";
 /// Current schema version for deterministic MCP tool schema snapshots.
 pub const TOOL_SCHEMA_SNAPSHOT_VERSION: u64 = 1;
+
+/// Default maximum number of JSON values inspected while validating one schema.
+pub const DEFAULT_SCHEMA_DIALECT_MAX_NODES: usize = 1_024;
+/// Default maximum active local-reference depth while validating one schema.
+pub const DEFAULT_SCHEMA_DIALECT_MAX_REFERENCE_DEPTH: usize = 32;
+
+/// Validation policy for a consumer-specific JSON Schema dialect.
+///
+/// The validator is deliberately opt-in: it does not change the toolkit's
+/// capability constructors or the JSON Schema vocabulary accepted by other
+/// consumers. A caller selects the root-level constraints its target accepts
+/// and validates a schema immediately before registration or projection.
+///
+/// ```
+/// use mcp_toolkit_core::tool_schema::{
+///     validate_schema_dialect, SchemaDialectPolicy,
+/// };
+/// use serde_json::json;
+///
+/// let policy = SchemaDialectPolicy::new()
+///     .with_forbidden_root_keywords(["oneOf", "enum"]);
+///
+/// validate_schema_dialect(&json!({"type": "object"}), &policy)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaDialectPolicy {
+    require_object_root: bool,
+    forbidden_root_keywords: Vec<String>,
+    max_reference_depth: usize,
+    max_nodes: usize,
+}
+
+impl SchemaDialectPolicy {
+    /// Creates a policy that requires an object root and uses bounded traversal.
+    pub fn new() -> Self {
+        Self {
+            require_object_root: true,
+            forbidden_root_keywords: Vec::new(),
+            max_reference_depth: DEFAULT_SCHEMA_DIALECT_MAX_REFERENCE_DEPTH,
+            max_nodes: DEFAULT_SCHEMA_DIALECT_MAX_NODES,
+        }
+    }
+
+    /// Replaces the keywords prohibited at the schema root.
+    pub fn with_forbidden_root_keywords<I, S>(mut self, keywords: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.forbidden_root_keywords = keywords
+            .into_iter()
+            .map(|keyword| keyword.as_ref().trim().to_string())
+            .filter(|keyword| !keyword.is_empty())
+            .collect();
+        self
+    }
+
+    /// Sets whether the resolved schema root must declare `type: "object"`.
+    pub fn with_object_root_requirement(mut self, require_object_root: bool) -> Self {
+        self.require_object_root = require_object_root;
+        self
+    }
+
+    /// Sets the maximum active `#/$defs` reference depth.
+    pub fn with_max_reference_depth(mut self, max_reference_depth: usize) -> Self {
+        self.max_reference_depth = max_reference_depth;
+        self
+    }
+
+    /// Sets the maximum number of JSON values examined during validation.
+    pub fn with_max_nodes(mut self, max_nodes: usize) -> Self {
+        self.max_nodes = max_nodes;
+        self
+    }
+}
+
+impl Default for SchemaDialectPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Errors returned by [`validate_schema_dialect`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaDialectError {
+    /// The top-level schema was not a JSON object.
+    RootMustBeObject,
+    /// A configured root keyword was present.
+    ForbiddenRootKeyword { keyword: String },
+    /// A `$ref` was missing, malformed, or outside the permitted local `$defs` tree.
+    UnsupportedReference { reference: String },
+    /// A local `$defs` reference did not resolve in the submitted schema.
+    UnresolvedReference { reference: String },
+    /// A local `$defs` reference would revisit an active reference chain.
+    RecursiveReference { reference: String },
+    /// Local-reference resolution exceeded the configured active-depth budget.
+    ReferenceDepthExceeded { max_reference_depth: usize },
+    /// Traversal exceeded the configured JSON-value budget.
+    NodeBudgetExceeded { max_nodes: usize },
+}
+
+impl Display for SchemaDialectError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RootMustBeObject => formatter.write_str(
+                "schema dialect requires a resolved root with `type: \"object\"`",
+            ),
+            Self::ForbiddenRootKeyword { keyword } => {
+                write!(formatter, "schema root contains forbidden keyword `{keyword}`")
+            }
+            Self::UnsupportedReference { reference } => write!(
+                formatter,
+                "schema reference `{reference}` is not a supported local `#/$defs` reference"
+            ),
+            Self::UnresolvedReference { reference } => {
+                write!(formatter, "schema reference `{reference}` does not resolve")
+            }
+            Self::RecursiveReference { reference } => {
+                write!(formatter, "schema reference `{reference}` is recursive")
+            }
+            Self::ReferenceDepthExceeded {
+                max_reference_depth,
+            } => write!(
+                formatter,
+                "schema reference depth exceeds configured maximum of {max_reference_depth}"
+            ),
+            Self::NodeBudgetExceeded { max_nodes } => {
+                write!(formatter, "schema exceeds configured node budget of {max_nodes}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SchemaDialectError {}
+
+/// Validates a JSON Schema against a bounded, caller-selected dialect.
+///
+/// Only local references rooted at `#/$defs/` are accepted. Resolution never
+/// performs I/O, and unresolved or recursive references fail closed. The
+/// validator checks configured forbidden keys on both the submitted root and
+/// its resolved root, then traverses the complete schema within the supplied
+/// node and reference-depth budgets.
+///
+/// # Errors
+/// Returns an error if the root violates the policy, a reference is not a
+/// bounded local `$defs` reference, a local reference cannot be resolved, a
+/// reference cycle is found, or either traversal budget is exceeded.
+///
+/// # Security
+/// The function never follows remote references and bounds work performed on
+/// caller-controlled schema data.
+pub fn validate_schema_dialect(
+    schema: &Value,
+    policy: &SchemaDialectPolicy,
+) -> Result<(), SchemaDialectError> {
+    let mut state = SchemaTraversalState::default();
+    let resolved_root = resolve_root(schema, schema, policy, &mut state)?;
+
+    check_root_keywords(schema, policy)?;
+    check_root_keywords(resolved_root, policy)?;
+    if policy.require_object_root
+        && resolved_root
+            .as_object()
+            .and_then(|object| object.get("type"))
+            .and_then(Value::as_str)
+            != Some("object")
+    {
+        return Err(SchemaDialectError::RootMustBeObject);
+    }
+
+    traverse_schema(schema, schema, policy, &mut state, 0)
+}
+
+#[derive(Default)]
+struct SchemaTraversalState {
+    nodes: usize,
+    active_references: Vec<String>,
+}
+
+fn check_root_keywords(
+    schema: &Value,
+    policy: &SchemaDialectPolicy,
+) -> Result<(), SchemaDialectError> {
+    let object = schema
+        .as_object()
+        .ok_or(SchemaDialectError::RootMustBeObject)?;
+    for keyword in &policy.forbidden_root_keywords {
+        if object.contains_key(keyword) {
+            return Err(SchemaDialectError::ForbiddenRootKeyword {
+                keyword: keyword.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn resolve_root<'a>(
+    schema: &'a Value,
+    document: &'a Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<&'a Value, SchemaDialectError> {
+    let object = schema
+        .as_object()
+        .ok_or(SchemaDialectError::RootMustBeObject)?;
+    let Some(reference) = object.get("$ref") else {
+        return Ok(schema);
+    };
+    let reference = reference
+        .as_str()
+        .ok_or_else(|| SchemaDialectError::UnsupportedReference {
+            reference: reference.to_string(),
+        })?;
+    resolve_reference(reference, document, policy, state, |resolved, state| {
+        resolve_root(resolved, document, policy, state)
+    })
+}
+
+fn traverse_schema(
+    schema: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+    reference_depth: usize,
+) -> Result<(), SchemaDialectError> {
+    count_node(policy, state)?;
+    match schema {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref") {
+                let reference = reference.as_str().ok_or_else(|| {
+                    SchemaDialectError::UnsupportedReference {
+                        reference: reference.to_string(),
+                    }
+                })?;
+                resolve_reference(reference, document, policy, state, |resolved, state| {
+                    traverse_schema(
+                        resolved,
+                        document,
+                        policy,
+                        state,
+                        reference_depth.saturating_add(1),
+                    )
+                })?;
+            }
+            for (keyword, value) in object {
+                if keyword != "$ref" {
+                    traverse_schema(value, document, policy, state, reference_depth)?;
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                traverse_schema(value, document, policy, state, reference_depth)?;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+    Ok(())
+}
+
+fn count_node(
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    state.nodes = state.nodes.saturating_add(1);
+    if state.nodes > policy.max_nodes {
+        return Err(SchemaDialectError::NodeBudgetExceeded {
+            max_nodes: policy.max_nodes,
+        });
+    }
+    Ok(())
+}
+
+fn resolve_reference<'a, T, F>(
+    reference: &str,
+    document: &'a Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+    visit: F,
+) -> Result<T, SchemaDialectError>
+where
+    F: FnOnce(&'a Value, &mut SchemaTraversalState) -> Result<T, SchemaDialectError>,
+{
+    if !reference.starts_with("#/$defs/") {
+        return Err(SchemaDialectError::UnsupportedReference {
+            reference: reference.to_string(),
+        });
+    }
+    if state.active_references.len() >= policy.max_reference_depth {
+        return Err(SchemaDialectError::ReferenceDepthExceeded {
+            max_reference_depth: policy.max_reference_depth,
+        });
+    }
+    if state
+        .active_references
+        .iter()
+        .any(|active_reference| active_reference == reference)
+    {
+        return Err(SchemaDialectError::RecursiveReference {
+            reference: reference.to_string(),
+        });
+    }
+    let pointer = format!("/$defs/{}", &reference["#/$defs/".len()..]);
+    let resolved = document
+        .pointer(&pointer)
+        .ok_or_else(|| SchemaDialectError::UnresolvedReference {
+            reference: reference.to_string(),
+        })?;
+    state.active_references.push(reference.to_string());
+    let result = visit(resolved, state);
+    state.active_references.pop();
+    result
+}
 
 /// Extracts deterministic tool names from a list of serialized tool definitions.
 ///
@@ -106,8 +422,128 @@ fn canonicalize_json(value: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_names, tool_schema_snapshot_value};
+    use super::{
+        tool_names, tool_schema_snapshot_value, validate_schema_dialect, SchemaDialectError,
+        SchemaDialectPolicy,
+    };
     use serde_json::json;
+
+    #[test]
+    fn dialect_validation_accepts_an_object_root_resolved_from_local_defs() {
+        let schema = json!({
+            "$ref": "#/$defs/request",
+            "$defs": {
+                "request": {
+                    "type": "object",
+                    "properties": {
+                        "filter": {"$ref": "#/$defs/filter"}
+                    }
+                },
+                "filter": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}}
+                }
+            }
+        });
+        let policy = SchemaDialectPolicy::new().with_forbidden_root_keywords([
+            "oneOf", "anyOf", "allOf", "enum", "const", "not",
+        ]);
+
+        assert_eq!(validate_schema_dialect(&schema, &policy), Ok(()));
+    }
+
+    #[test]
+    fn dialect_validation_checks_configured_keywords_before_and_after_root_resolution() {
+        let policy = SchemaDialectPolicy::new().with_forbidden_root_keywords(["enum"]);
+        let direct_schema = json!({"type": "object", "enum": []});
+        let referenced_schema = json!({
+            "$ref": "#/$defs/request",
+            "$defs": {"request": {"type": "object", "enum": []}}
+        });
+
+        assert_eq!(
+            validate_schema_dialect(&direct_schema, &policy),
+            Err(SchemaDialectError::ForbiddenRootKeyword {
+                keyword: "enum".to_string(),
+            })
+        );
+        assert_eq!(
+            validate_schema_dialect(&referenced_schema, &policy),
+            Err(SchemaDialectError::ForbiddenRootKeyword {
+                keyword: "enum".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_non_object_and_unsupported_roots() {
+        let policy = SchemaDialectPolicy::new();
+
+        assert_eq!(
+            validate_schema_dialect(&json!(true), &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(
+            validate_schema_dialect(&json!({"type": "string"}), &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_remote_and_unresolved_references() {
+        let policy = SchemaDialectPolicy::new();
+        let remote = json!({"$ref": "https://example.invalid/schema.json"});
+        let missing = json!({"$ref": "#/$defs/missing"});
+
+        assert_eq!(
+            validate_schema_dialect(&remote, &policy),
+            Err(SchemaDialectError::UnsupportedReference {
+                reference: "https://example.invalid/schema.json".to_string(),
+            })
+        );
+        assert_eq!(
+            validate_schema_dialect(&missing, &policy),
+            Err(SchemaDialectError::UnresolvedReference {
+                reference: "#/$defs/missing".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_recursive_references_and_exhausted_budgets() {
+        let recursive = json!({
+            "$ref": "#/$defs/request",
+            "$defs": {"request": {"$ref": "#/$defs/request"}}
+        });
+        let nested = json!({
+            "$ref": "#/$defs/first",
+            "$defs": {
+                "first": {"$ref": "#/$defs/second"},
+                "second": {"type": "object"}
+            }
+        });
+        let small = json!({"type": "object"});
+
+        assert_eq!(
+            validate_schema_dialect(&recursive, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::RecursiveReference {
+                reference: "#/$defs/request".to_string(),
+            })
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &nested,
+                &SchemaDialectPolicy::new().with_max_reference_depth(1),
+            ),
+            Err(SchemaDialectError::ReferenceDepthExceeded {
+                max_reference_depth: 1,
+            })
+        );
+        assert_eq!(
+            validate_schema_dialect(&small, &SchemaDialectPolicy::new().with_max_nodes(1)),
+            Err(SchemaDialectError::NodeBudgetExceeded { max_nodes: 1 })
+        );
+    }
 
     #[test]
     fn snapshot_value_is_sorted_by_tool_name() {

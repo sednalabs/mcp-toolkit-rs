@@ -825,6 +825,86 @@ mod tests {
     }
 
     #[test]
+    fn canonical_schemas_are_preserved_across_native_apps_and_openapi_projections() {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "request": {"$ref": "#/$defs/request"}
+            },
+            "required": ["request"],
+            "$defs": {
+                "request": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1}
+                    },
+                    "required": ["query"]
+                }
+            }
+        });
+        let output_schema = json!({
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/item"}
+                }
+            },
+            "required": ["items"],
+            "$defs": {
+                "item": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"]
+                }
+            }
+        });
+        let capability = Capability::new(
+            "items.search",
+            "Search items",
+            "Search items visible to the caller.",
+            input_schema.clone(),
+        )
+        .expect("valid capability")
+        .with_output_schema(output_schema.clone())
+        .expect("valid output schema");
+        let native =
+            serde_json::to_value(capability.to_mcp_tool()).expect("native descriptor");
+        let apps = capability
+            .to_mcp_apps_tool_descriptor()
+            .expect("apps descriptor");
+        let openapi = capability
+            .to_openapi_operation("OAuth2")
+            .expect("OpenAPI operation");
+
+        assert_eq!(
+            json!({
+                "native": {
+                    "input": native["inputSchema"].clone(),
+                    "output": native["outputSchema"].clone(),
+                },
+                "apps": {
+                    "input": apps["inputSchema"].clone(),
+                    "output": apps["outputSchema"].clone(),
+                },
+                "openapi": {
+                    "input": openapi["requestBody"]["content"]["application/json"]["schema"]
+                        .clone(),
+                    "output": openapi["responses"]["200"]["content"]["application/json"]
+                        ["schema"]
+                        .clone(),
+                },
+            }),
+            json!({
+                "native": {"input": input_schema, "output": output_schema},
+                "apps": {"input": input_schema, "output": output_schema},
+                "openapi": {"input": input_schema, "output": output_schema},
+            })
+        );
+    }
+
+    #[test]
     fn apps_projection_marks_unscoped_capabilities_noauth() {
         let capability = Capability::new(
             "status.ping",
