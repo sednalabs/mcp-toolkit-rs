@@ -287,11 +287,11 @@ fn validate_reference_chain(
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
 ) -> Result<(), SchemaDialectError> {
-    let reference = reference.as_str().ok_or_else(|| {
-        SchemaDialectError::UnsupportedReference {
+    let reference = reference
+        .as_str()
+        .ok_or_else(|| SchemaDialectError::UnsupportedReference {
             reference: reference.to_string(),
-        }
-    })?;
+        })?;
     resolve_reference(reference, document, policy, state, |resolved, state| {
         let Some(next_reference) = resolved.as_object().and_then(|object| object.get("$ref"))
         else {
@@ -622,10 +622,7 @@ mod tests {
             Err(SchemaDialectError::NodeBudgetExceeded { max_nodes: 7 })
         );
         assert_eq!(
-            validate_schema_dialect(
-                &unreferenced_remote_reference,
-                &SchemaDialectPolicy::new(),
-            ),
+            validate_schema_dialect(&unreferenced_remote_reference, &SchemaDialectPolicy::new(),),
             Err(SchemaDialectError::UnsupportedReference {
                 reference: "https://example.invalid/schema.json".to_string(),
             })
