@@ -1992,6 +1992,10 @@ fn duck_value_to_json(value: DuckValue) -> Value {
         ),
         DuckValue::Union(raw) => duck_value_to_json(*raw),
         DuckValue::Enum(raw) => Value::String(raw),
+        // DuckDB made `Value` non-exhaustive in a semver-compatible release.
+        // Permit the declared minimum version, where this arm is unreachable.
+        #[allow(unreachable_patterns)]
+        other => Value::String(format!("{other:?}")),
     }
 }
 
