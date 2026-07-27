@@ -91,7 +91,8 @@ impl SchemaDialectPolicy {
     ///
     /// Disabling this semantic requirement still requires the submitted schema
     /// document itself to be a JSON object. Scalar JSON values are never schema
-    /// documents accepted by this validator.
+    /// documents accepted by this validator. A root `$ref` may resolve to a
+    /// boolean schema only when this requirement is disabled.
     pub fn with_object_root_requirement(mut self, require_object_root: bool) -> Self {
         self.require_object_root = require_object_root;
         self
@@ -103,7 +104,7 @@ impl SchemaDialectPolicy {
         self
     }
 
-    /// Sets the maximum number of JSON values examined during validation.
+    /// Sets the maximum raw-document and reference-graph node budget.
     pub fn with_max_nodes(mut self, max_nodes: usize) -> Self {
         self.max_nodes = max_nodes;
         self
@@ -191,8 +192,8 @@ impl std::error::Error for SchemaDialectError {}
 /// Only local references rooted at `#/$defs/` are accepted. Their URI-fragment
 /// suffix is percent-decoded before JSON Pointer resolution. Resolution never
 /// performs I/O, and unresolved or recursive references fail closed. The
-/// validator checks configured forbidden keys on both the submitted root and
-/// its resolved root, then counts and validates every raw document node once
+/// validator checks configured forbidden keys on every submitted or referenced
+/// root-chain schema, then counts and validates every raw document node once
 /// within the supplied node budget. Reference-chain validation is separate, so
 /// following a `$ref` cannot inflate whole-document accounting. `$dynamicRef`
 /// and `$recursiveRef` are not supported and are rejected in schema positions.
@@ -215,38 +216,19 @@ pub fn validate_schema_dialect(
     schema: &Value,
     policy: &SchemaDialectPolicy,
 ) -> Result<(), SchemaDialectError> {
-    let mut state = SchemaTraversalState::default();
-    let resolved_root = resolve_root(schema, schema, policy, &mut state)?;
-
-    check_root_keywords(schema, policy)?;
-    check_root_keywords(resolved_root, policy)?;
-    let root = schema
-        .as_object()
-        .ok_or(SchemaDialectError::RootMustBeObject)?;
-    let root_has_reference = root.contains_key("$ref");
-    let root_type = root.get("type").and_then(Value::as_str);
-    if policy.require_object_root
-        && ((!root_has_reference && root_type != Some("object"))
-            || (root_has_reference && root_type.is_some() && root_type != Some("object"))
-            || !declares_object_type(resolved_root))
-    {
+    if !schema.is_object() {
         return Err(SchemaDialectError::RootMustBeObject);
     }
+    let mut state = SchemaTraversalState::default();
+    resolve_root(schema, schema, policy, &mut state)?;
 
     traverse_schema(schema, schema, policy, &mut state)
-}
-
-fn declares_object_type(schema: &Value) -> bool {
-    schema
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-        == Some("object")
 }
 
 #[derive(Default)]
 struct SchemaTraversalState {
     nodes: usize,
+    reference_graph_nodes: usize,
     active_references: Vec<String>,
 }
 
@@ -273,9 +255,10 @@ fn resolve_root<'a>(
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
 ) -> Result<&'a Value, SchemaDialectError> {
-    let object = schema
-        .as_object()
-        .ok_or(SchemaDialectError::RootMustBeObject)?;
+    validate_root_chain_schema(schema, policy)?;
+    let Some(object) = schema.as_object() else {
+        return Ok(schema);
+    };
     let Some(reference) = object.get("$ref") else {
         return Ok(schema);
     };
@@ -289,6 +272,34 @@ fn resolve_root<'a>(
     })
 }
 
+fn validate_root_chain_schema(
+    schema: &Value,
+    policy: &SchemaDialectPolicy,
+) -> Result<(), SchemaDialectError> {
+    let Some(object) = schema.as_object() else {
+        return if schema.is_boolean() && !policy.require_object_root {
+            Ok(())
+        } else {
+            Err(SchemaDialectError::RootMustBeObject)
+        };
+    };
+    check_root_keywords(schema, policy)?;
+    reject_unsupported_reference_keywords(object)?;
+    let root_type = match object.get("type") {
+        Some(Value::String(root_type)) => Some(root_type.as_str()),
+        Some(_) => return Err(SchemaDialectError::RootMustBeObject),
+        None => None,
+    };
+    let has_reference = object.contains_key("$ref");
+    if policy.require_object_root
+        && ((!has_reference && root_type != Some("object"))
+            || (has_reference && root_type.is_some() && root_type != Some("object")))
+    {
+        return Err(SchemaDialectError::RootMustBeObject);
+    }
+    Ok(())
+}
+
 fn traverse_schema(
     schema: &Value,
     document: &Value,
@@ -300,7 +311,7 @@ fn traverse_schema(
         Value::Object(object) => {
             reject_unsupported_reference_keywords(object)?;
             if let Some(reference) = object.get("$ref") {
-                validate_reference_chain(reference, document, policy, state)?;
+                validate_reference_graph(reference, document, policy, state)?;
             }
             for (keyword, value) in object {
                 match keyword.as_str() {
@@ -434,7 +445,7 @@ fn traverse_data(
     Ok(())
 }
 
-fn validate_reference_chain(
+fn validate_reference_graph(
     reference: &Value,
     document: &Value,
     policy: &SchemaDialectPolicy,
@@ -446,12 +457,106 @@ fn validate_reference_chain(
             reference: reference.to_string(),
         })?;
     resolve_reference(reference, document, policy, state, |resolved, state| {
-        let Some(next_reference) = resolved.as_object().and_then(|object| object.get("$ref"))
-        else {
-            return Ok(());
-        };
-        validate_reference_chain(next_reference, document, policy, state)
+        traverse_reference_graph_schema(resolved, document, policy, state)
     })
+}
+
+fn traverse_reference_graph_schema(
+    schema: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    count_reference_graph_node(policy, state)?;
+    let Some(object) = schema.as_object() else {
+        return Ok(());
+    };
+    reject_unsupported_reference_keywords(object)?;
+    if let Some(reference) = object.get("$ref") {
+        validate_reference_graph(reference, document, policy, state)?;
+    }
+    for (keyword, value) in object {
+        match keyword.as_str() {
+            "$defs" | "definitions" | "properties" | "patternProperties" | "dependentSchemas" => {
+                traverse_reference_graph_map(value, document, policy, state)?;
+            }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                traverse_reference_graph_array(value, document, policy, state)?;
+            }
+            "items" | "additionalItems" => {
+                traverse_reference_graph_schema_or_array(value, document, policy, state)?;
+            }
+            "additionalProperties" | "contains" | "propertyNames" | "not" | "if" | "then"
+            | "else" | "unevaluatedProperties" | "unevaluatedItems" | "contentSchema" => {
+                traverse_reference_graph_schema(value, document, policy, state)?;
+            }
+            "dependencies" => {
+                traverse_reference_graph_dependencies(value, document, policy, state)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn traverse_reference_graph_map(
+    schemas: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    let Some(schemas) = schemas.as_object() else {
+        return Ok(());
+    };
+    for schema in schemas.values() {
+        traverse_reference_graph_schema(schema, document, policy, state)?;
+    }
+    Ok(())
+}
+
+fn traverse_reference_graph_array(
+    schemas: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    let Some(schemas) = schemas.as_array() else {
+        return Ok(());
+    };
+    for schema in schemas {
+        traverse_reference_graph_schema(schema, document, policy, state)?;
+    }
+    Ok(())
+}
+
+fn traverse_reference_graph_schema_or_array(
+    schema: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    if schema.is_array() {
+        traverse_reference_graph_array(schema, document, policy, state)
+    } else {
+        traverse_reference_graph_schema(schema, document, policy, state)
+    }
+}
+
+fn traverse_reference_graph_dependencies(
+    dependencies: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    let Some(dependencies) = dependencies.as_object() else {
+        return Ok(());
+    };
+    for dependency in dependencies.values() {
+        if dependency.is_object() || dependency.is_boolean() {
+            traverse_reference_graph_schema(dependency, document, policy, state)?;
+        }
+    }
+    Ok(())
 }
 
 fn count_node(
@@ -460,6 +565,19 @@ fn count_node(
 ) -> Result<(), SchemaDialectError> {
     state.nodes = state.nodes.saturating_add(1);
     if state.nodes > policy.max_nodes {
+        return Err(SchemaDialectError::NodeBudgetExceeded {
+            max_nodes: policy.max_nodes,
+        });
+    }
+    Ok(())
+}
+
+fn count_reference_graph_node(
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+) -> Result<(), SchemaDialectError> {
+    state.reference_graph_nodes = state.reference_graph_nodes.saturating_add(1);
+    if state.reference_graph_nodes > policy.max_nodes {
         return Err(SchemaDialectError::NodeBudgetExceeded {
             max_nodes: policy.max_nodes,
         });
@@ -854,6 +972,10 @@ mod tests {
             "$ref": "#/$defs/string",
             "$defs": {"string": {"type": "string"}}
         });
+        let referenced_boolean = json!({
+            "$ref": "#/$defs/accept",
+            "$defs": {"accept": true}
+        });
         let contradictory_root_sibling = json!({
             "$ref": "#/$defs/object",
             "type": "string",
@@ -870,6 +992,7 @@ mod tests {
             Ok(())
         );
         assert_eq!(validate_schema_dialect(&referenced_string, &relaxed), Ok(()));
+        assert_eq!(validate_schema_dialect(&referenced_boolean, &relaxed), Ok(()));
         assert_eq!(
             validate_schema_dialect(&json!(true), &relaxed),
             Err(SchemaDialectError::RootMustBeObject)
@@ -884,6 +1007,66 @@ mod tests {
         assert_eq!(
             validate_schema_dialect(&compatible_root_sibling, &SchemaDialectPolicy::new()),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn dialect_validation_checks_every_root_reference_chain_schema() {
+        let policy = SchemaDialectPolicy::new().with_forbidden_root_keywords(["not"]);
+        let valid_chain = json!({
+            "$ref": "#/$defs/first",
+            "$defs": {
+                "first": {"$ref": "#/$defs/second"},
+                "second": {"type": "object"}
+            }
+        });
+        let malformed_intermediate_type = json!({
+            "$ref": "#/$defs/first",
+            "$defs": {
+                "first": {"$ref": "#/$defs/second", "type": ["object"]},
+                "second": {"type": "object"}
+            }
+        });
+        let contradictory_intermediate_type = json!({
+            "$ref": "#/$defs/first",
+            "$defs": {
+                "first": {"$ref": "#/$defs/second", "type": "string"},
+                "second": {"type": "object"}
+            }
+        });
+        let malformed_terminal_type = json!({
+            "$ref": "#/$defs/first",
+            "$defs": {
+                "first": {"$ref": "#/$defs/second"},
+                "second": {"type": true}
+            }
+        });
+        let forbidden_intermediate_keyword = json!({
+            "$ref": "#/$defs/first",
+            "$defs": {
+                "first": {"$ref": "#/$defs/second", "not": {"type": "string"}},
+                "second": {"type": "object"}
+            }
+        });
+
+        assert_eq!(validate_schema_dialect(&valid_chain, &policy), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&malformed_intermediate_type, &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(
+            validate_schema_dialect(&contradictory_intermediate_type, &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(
+            validate_schema_dialect(&malformed_terminal_type, &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(
+            validate_schema_dialect(&forbidden_intermediate_keyword, &policy),
+            Err(SchemaDialectError::ForbiddenRootKeyword {
+                keyword: "not".to_string(),
+            })
         );
     }
 
@@ -956,6 +1139,57 @@ mod tests {
         assert_eq!(
             validate_schema_dialect(&small, &SchemaDialectPolicy::new().with_max_nodes(1)),
             Err(SchemaDialectError::NodeBudgetExceeded { max_nodes: 1 })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_cycles_through_nested_schema_positions() {
+        let properties_cycle = json!({
+            "type": "object",
+            "properties": {"entry": {"$ref": "#/$defs/first"}},
+            "$defs": {
+                "first": {
+                    "type": "object",
+                    "properties": {"next": {"$ref": "#/$defs/second"}}
+                },
+                "second": {
+                    "type": "object",
+                    "properties": {"next": {"$ref": "#/$defs/first"}}
+                }
+            }
+        });
+        let items_and_composition_cycle = json!({
+            "type": "object",
+            "properties": {"entry": {"$ref": "#/$defs/first"}},
+            "$defs": {
+                "first": {"items": {"$ref": "#/$defs/second"}},
+                "second": {"allOf": [{"$ref": "#/$defs/first"}]}
+            }
+        });
+        let acyclic_nested_reference = json!({
+            "type": "object",
+            "properties": {"entry": {"$ref": "#/$defs/first"}},
+            "$defs": {
+                "first": {"items": {"$ref": "#/$defs/second"}},
+                "second": {"type": "object"}
+            }
+        });
+
+        assert_eq!(
+            validate_schema_dialect(&properties_cycle, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::RecursiveReference {
+                reference: "#/$defs/first".to_string(),
+            })
+        );
+        assert_eq!(
+            validate_schema_dialect(&items_and_composition_cycle, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::RecursiveReference {
+                reference: "#/$defs/first".to_string(),
+            })
+        );
+        assert_eq!(
+            validate_schema_dialect(&acyclic_nested_reference, &SchemaDialectPolicy::new()),
+            Ok(())
         );
     }
 
