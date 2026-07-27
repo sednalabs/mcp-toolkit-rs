@@ -325,8 +325,15 @@ fn traverse_schema(
                     "items" | "additionalItems" => {
                         traverse_schema_or_array(value, document, policy, state)?;
                     }
-                    "additionalProperties" | "contains" | "propertyNames" | "not" | "if"
-                    | "then" | "else" | "unevaluatedProperties" | "unevaluatedItems"
+                    "additionalProperties"
+                    | "contains"
+                    | "propertyNames"
+                    | "not"
+                    | "if"
+                    | "then"
+                    | "else"
+                    | "unevaluatedProperties"
+                    | "unevaluatedItems"
                     | "contentSchema" => {
                         traverse_schema(value, document, policy, state)?;
                     }
@@ -486,8 +493,16 @@ fn traverse_reference_graph_schema(
             "items" | "additionalItems" => {
                 traverse_reference_graph_schema_or_array(value, document, policy, state)?;
             }
-            "additionalProperties" | "contains" | "propertyNames" | "not" | "if" | "then"
-            | "else" | "unevaluatedProperties" | "unevaluatedItems" | "contentSchema" => {
+            "additionalProperties"
+            | "contains"
+            | "propertyNames"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "unevaluatedProperties"
+            | "unevaluatedItems"
+            | "contentSchema" => {
                 traverse_reference_graph_schema(value, document, policy, state)?;
             }
             "dependencies" => {
@@ -962,7 +977,10 @@ mod tests {
             "enum": [{"$ref": "https://example.invalid/enum"}]
         });
 
-        assert_eq!(validate_schema_dialect(&schema, &SchemaDialectPolicy::new()), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&schema, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
     }
 
     #[test]
@@ -991,17 +1009,20 @@ mod tests {
             validate_schema_dialect(&json!({"type": "string"}), &relaxed),
             Ok(())
         );
-        assert_eq!(validate_schema_dialect(&referenced_string, &relaxed), Ok(()));
-        assert_eq!(validate_schema_dialect(&referenced_boolean, &relaxed), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&referenced_string, &relaxed),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&referenced_boolean, &relaxed),
+            Ok(())
+        );
         assert_eq!(
             validate_schema_dialect(&json!(true), &relaxed),
             Err(SchemaDialectError::RootMustBeObject)
         );
         assert_eq!(
-            validate_schema_dialect(
-                &contradictory_root_sibling,
-                &SchemaDialectPolicy::new(),
-            ),
+            validate_schema_dialect(&contradictory_root_sibling, &SchemaDialectPolicy::new(),),
             Err(SchemaDialectError::RootMustBeObject)
         );
         assert_eq!(
