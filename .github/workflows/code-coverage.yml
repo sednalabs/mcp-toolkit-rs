@@ -94,14 +94,6 @@ jobs:
           mkdir -p coverage
           ${{ matrix.target.coverage_cmd }}
 
-      - name: Upload coverage to GitHub Code Quality
-        # actions/upload-code-coverage v1
-        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
-        with:
-          file: ${{ matrix.target.coverage_file }}
-          language: Rust
-          label: ${{ matrix.target.coverage_label }}
-
       - name: Upload Cobertura report
         # actions/upload-artifact v7
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -128,12 +120,47 @@ jobs:
           print(f"- Line coverage: {line_rate * 100:.2f}%")
           PY
 
+      - name: Upload coverage to GitHub Code Quality
+        # actions/upload-code-coverage v1
+        # Code Quality is an optional, billable repository capability. Keep
+        # coverage generation, artifacts, and the aggregate gate independent
+        # from its availability; when explicitly enabled, upload failures
+        # remain fatal to this lane.
+        if: ${{ vars.CODE_QUALITY_UPLOAD_ENABLED == 'true' }}
+        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        with:
+          file: ${{ matrix.target.coverage_file }}
+          language: Rust
+          label: ${{ matrix.target.coverage_label }}
+
+      - name: Record Code Quality upload status
+        if: ${{ vars.CODE_QUALITY_UPLOAD_ENABLED != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GitHub Code Quality upload skipped: CODE_QUALITY_UPLOAD_ENABLED is not exactly 'true'."
+          {
+            echo "### GitHub Code Quality"
+            echo
+            echo "Upload skipped because repository variable CODE_QUALITY_UPLOAD_ENABLED is not exactly true."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   rust-coverage:
     name: Rust Cobertura coverage
     runs-on: ubuntu-24.04
     needs: [rust-coverage-lane]
     if: ${{ always() }}
     steps:
+      - name: Checkout repository
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate coverage workflow contract
+        run: python3 scripts/check_code_coverage_workflow.py
+
       - name: Require every coverage lane to pass
         shell: bash
         run: |
