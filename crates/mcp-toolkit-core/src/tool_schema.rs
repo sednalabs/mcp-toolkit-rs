@@ -1417,7 +1417,7 @@ mod tests {
         let malformed_intermediate_type = json!({
             "$ref": "#/$defs/first",
             "$defs": {
-                "first": {"$ref": "#/$defs/second", "type": ["object"]},
+                "first": {"$ref": "#/$defs/second", "type": ["object", true]},
                 "second": {"type": "object"}
             }
         });
