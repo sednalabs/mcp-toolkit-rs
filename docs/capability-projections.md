@@ -132,8 +132,13 @@ only local references rooted at `#/$defs/` and resolves them against the
 submitted root document without I/O. `$id` is rejected in schema positions:
 the bounded resolver does not model embedded schema resources, so accepting it
 could make a nested local reference resolve against the wrong document or hide
-a cycle. Legacy tuple arrays remain supported for `items`; `additionalItems`
-must instead be one schema object or boolean schema.
+a cycle. The root `type` keyword accepts one valid JSON Schema type name or a
+non-empty array of unique valid type names; object-root enforcement accepts an
+array when it includes `object`. The legacy `definitions` keyword is not a
+schema container in this dialect: its contents are treated as ordinary data,
+not resolved as references; use `$defs` for local definitions. Legacy tuple
+arrays remain supported for `items`; `additionalItems` must instead be one
+schema object or boolean schema.
 
 ## References
 

@@ -87,12 +87,15 @@ impl SchemaDialectPolicy {
         self
     }
 
-    /// Sets whether the resolved schema root must declare `type: "object"`.
+    /// Sets whether the resolved schema root must include `object` in its
+    /// `type` declaration.
     ///
     /// Disabling this semantic requirement still requires the submitted schema
     /// document itself to be a JSON object. Scalar JSON values are never schema
     /// documents accepted by this validator. A root `$ref` may resolve to a
-    /// boolean schema only when this requirement is disabled.
+    /// boolean schema only when this requirement is disabled. A JSON Schema
+    /// `type` declaration may be either one valid type name or a non-empty array
+    /// of unique valid type names.
     pub fn with_object_root_requirement(mut self, require_object_root: bool) -> Self {
         self.require_object_root = require_object_root;
         self
@@ -316,19 +319,45 @@ fn validate_root_chain_schema(
     };
     check_root_keywords(schema, policy)?;
     reject_unsupported_schema_keywords(object)?;
-    let root_type = match object.get("type") {
-        Some(Value::String(root_type)) => Some(root_type.as_str()),
-        Some(_) => return Err(SchemaDialectError::RootMustBeObject),
-        None => None,
-    };
+    let has_object_type = root_type_includes_object(object.get("type"))?;
+    let type_present = object.contains_key("type");
     let has_reference = object.contains_key("$ref");
     if policy.require_object_root
-        && ((!has_reference && root_type != Some("object"))
-            || (has_reference && root_type.is_some() && root_type != Some("object")))
+        && ((!has_reference && !has_object_type)
+            || (has_reference && type_present && !has_object_type))
     {
         return Err(SchemaDialectError::RootMustBeObject);
     }
     Ok(())
+}
+
+fn root_type_includes_object(type_value: Option<&Value>) -> Result<bool, SchemaDialectError> {
+    const VALID_TYPES: [&str; 7] = [
+        "null", "boolean", "object", "array", "number", "integer", "string",
+    ];
+
+    match type_value {
+        None => Ok(false),
+        Some(Value::String(type_name)) => Ok(type_name == "object"),
+        Some(Value::Array(type_names)) => {
+            if type_names.is_empty() {
+                return Err(SchemaDialectError::RootMustBeObject);
+            }
+            let mut seen = std::collections::HashSet::with_capacity(type_names.len());
+            let mut includes_object = false;
+            for type_name in type_names {
+                let Some(type_name) = type_name.as_str() else {
+                    return Err(SchemaDialectError::RootMustBeObject);
+                };
+                if !VALID_TYPES.contains(&type_name) || !seen.insert(type_name) {
+                    return Err(SchemaDialectError::RootMustBeObject);
+                }
+                includes_object |= type_name == "object";
+            }
+            Ok(includes_object)
+        }
+        Some(_) => Err(SchemaDialectError::RootMustBeObject),
+    }
 }
 
 fn traverse_schema(
@@ -356,7 +385,7 @@ fn traverse_schema_at(
             }
             for (schema_keyword, value) in object {
                 match schema_keyword.as_str() {
-                    "$defs" | "definitions" | "properties" | "patternProperties"
+                    "$defs" | "properties" | "patternProperties"
                     | "dependentSchemas" => {
                         traverse_schema_map(value, document, policy, state, schema_keyword)?;
                     }
@@ -599,7 +628,7 @@ fn traverse_reference_graph_schema_at(
     }
     for (schema_keyword, value) in object {
         match schema_keyword.as_str() {
-            "$defs" | "definitions" | "properties" | "patternProperties" | "dependentSchemas" => {
+            "$defs" | "properties" | "patternProperties" | "dependentSchemas" => {
                 traverse_reference_graph_map(value, document, policy, state, schema_keyword)?;
             }
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
@@ -987,6 +1016,80 @@ mod tests {
             validate_schema_dialect(&json!({"type": "string"}), &policy),
             Err(SchemaDialectError::RootMustBeObject)
         );
+    }
+
+    #[test]
+    fn dialect_validation_handles_type_arrays_for_direct_and_referenced_roots() {
+        let policy = SchemaDialectPolicy::new();
+        let relaxed = policy.clone().with_object_root_requirement(false);
+        let direct_object_union = json!({"type": ["object", "null"]});
+        let referenced_object_union = json!({
+            "$ref": "#/$defs/root",
+            "$defs": {"root": {"type": ["object", "null"]}}
+        });
+        let direct_string_union = json!({"type": ["string", "null"]});
+        let referenced_string_union = json!({
+            "$ref": "#/$defs/root",
+            "$defs": {"root": {"type": ["string", "null"]}}
+        });
+        let malformed_direct = [
+            json!({"type": []}),
+            json!({"type": ["object", 1]}),
+            json!({"type": ["object", "object"]}),
+        ];
+        let malformed_referenced = json!({
+            "$ref": "#/$defs/root",
+            "$defs": {"root": {"type": ["object", null]}}
+        });
+
+        assert_eq!(validate_schema_dialect(&direct_object_union, &policy), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&referenced_object_union, &policy),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&direct_string_union, &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(
+            validate_schema_dialect(&referenced_string_union, &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(validate_schema_dialect(&direct_string_union, &relaxed), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&referenced_string_union, &relaxed),
+            Ok(())
+        );
+        for malformed in malformed_direct {
+            assert_eq!(
+                validate_schema_dialect(&malformed, &policy),
+                Err(SchemaDialectError::RootMustBeObject)
+            );
+            assert_eq!(
+                validate_schema_dialect(&malformed, &relaxed),
+                Err(SchemaDialectError::RootMustBeObject)
+            );
+        }
+        assert_eq!(
+            validate_schema_dialect(&malformed_referenced, &policy),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+        assert_eq!(
+            validate_schema_dialect(&malformed_referenced, &relaxed),
+            Err(SchemaDialectError::RootMustBeObject)
+        );
+    }
+
+    #[test]
+    fn dialect_validation_does_not_treat_legacy_definitions_as_schema_containers() {
+        let schema = json!({
+            "type": "object",
+            "definitions": {
+                "legacy": {"$ref": "https://example.invalid/remote"}
+            }
+        });
+
+        assert_eq!(validate_schema_dialect(&schema, &SchemaDialectPolicy::new()), Ok(()));
     }
 
     #[test]
