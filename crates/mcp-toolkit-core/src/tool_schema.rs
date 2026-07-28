@@ -615,13 +615,7 @@ fn traverse_reference_graph_schema_at(
                 )?;
             }
             "additionalItems" => {
-                traverse_reference_graph_schema_at(
-                    value,
-                    document,
-                    policy,
-                    state,
-                    schema_keyword,
-                )?;
+                traverse_reference_graph_schema_at(value, document, policy, state, schema_keyword)?;
             }
             "additionalProperties"
             | "contains"
