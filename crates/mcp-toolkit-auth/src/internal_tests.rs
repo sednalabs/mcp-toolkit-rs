@@ -6,7 +6,7 @@ pub(crate) use crate::verified_auth_context_ref_from_parts;
 pub(crate) use crate::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, AuthConfig, AuthContext, AuthError,
     AuthMode, AuthSecurityProfile, Authenticator, ClientAuthMethod, DpopParseError,
-    InMemoryJtiReplayStore, SenderConstrainedAuthError,
+    InMemoryJtiReplayStore, SenderConstrainedAuthError, VerifiedAuthContext,
 };
 
 mod tests {
@@ -15,7 +15,7 @@ mod tests {
         parse_strict_dpop_authorization, parse_strict_dpop_proof, verified_auth_context_from_parts,
         verified_auth_context_ref_from_parts, AuthConfig, AuthContext, AuthError, AuthMode,
         AuthSecurityProfile, Authenticator, ClientAuthMethod, DpopParseError,
-        InMemoryJtiReplayStore, SenderConstrainedAuthError,
+        InMemoryJtiReplayStore, SenderConstrainedAuthError, VerifiedAuthContext,
     };
     use axum::extract::State;
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode};
@@ -393,7 +393,7 @@ mod tests {
         expected_htm: &str,
         verifier: &DpopVerifier,
         replay_store: &mut S,
-    ) -> Result<AuthContext, SenderConstrainedAuthError> {
+    ) -> Result<VerifiedAuthContext, SenderConstrainedAuthError> {
         let headers = dpop_headers("DPoP", access_token, proof);
         let access_token =
             parse_strict_dpop_authorization(&headers).expect("strict DPoP authorization");
@@ -667,7 +667,7 @@ mod tests {
             "ordinary Bearer ingress cannot construct a DpopToken"
         );
 
-        authenticate_sender_constrained(
+        let context = authenticate_sender_constrained(
             &auth,
             &token,
             &proof.compact_jws,
@@ -678,6 +678,10 @@ mod tests {
         )
         .await
         .expect("real verified DPoP proof should admit a matching sender-constrained token");
+
+        assert_eq!(context.context().subject.as_deref(), Some("user-123"));
+        assert!(context.is_issued_by(&auth));
+        assert!(!format!("{context:?}").contains(&token));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -706,46 +710,89 @@ mod tests {
             .await
             .expect("ordinary bearer JWT should be accepted");
 
-        assert_eq!(context.subject.as_deref(), Some("user-123"));
+        assert_eq!(context.context().subject.as_deref(), Some("user-123"));
+        assert!(context.is_issued_by(&auth));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn verified_context_is_issued_only_after_bearer_authentication() {
+    async fn every_bearer_ingress_issues_an_authenticator_bound_context() {
         let auth = Authenticator::new(delegation_config()).expect("auth");
-        let token = token_with_jti("verified-context-witness");
+        let header_token = token_with_jti("verified-header-context");
+        let direct_token = token_with_jti("verified-direct-context");
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}")).expect("header"),
+            HeaderValue::from_str(&format!("Bearer {header_token}")).expect("header"),
         );
 
-        let context = auth
-            .authenticate_verified_headers(&headers)
+        let header_context = auth
+            .authenticate_headers(&headers)
             .await
             .expect("ordinary bearer JWT should yield an authenticator-issued context");
+        let direct_context = auth
+            .authenticate_token(&HeaderMap::new(), &direct_token)
+            .await
+            .expect("direct bearer JWT should yield an authenticator-issued context");
 
-        assert_eq!(context.context().subject.as_deref(), Some("user-123"));
-        assert!(!format!("{context:?}").contains(&token));
-        assert!(context.is_issued_by(&auth));
-        assert!(
-            !context.is_issued_by(
-                &Authenticator::new(delegation_config()).expect("independent authenticator")
-            ),
-            "a context issued by another authenticator must not share this provenance"
+        assert_eq!(
+            header_context.context().subject.as_deref(),
+            Some("user-123")
         );
+        assert_eq!(
+            direct_context.context().subject.as_deref(),
+            Some("user-123")
+        );
+        assert!(!format!("{header_context:?}").contains(&header_token));
+        assert!(!format!("{direct_context:?}").contains(&direct_token));
+        assert!(header_context.is_issued_by(&auth));
+        assert!(direct_context.is_issued_by(&auth));
 
         let (mut parts, _) = axum::http::Request::new(()).into_parts();
-        parts.extensions.insert(context.clone());
+        parts.extensions.insert(header_context.clone());
         assert_eq!(
-            verified_auth_context_from_parts(&parts)
+            verified_auth_context_from_parts(&parts, &auth)
                 .as_ref()
                 .and_then(|value| value.context().subject.as_deref()),
             Some("user-123")
         );
         assert_eq!(
-            verified_auth_context_ref_from_parts(&parts)
+            verified_auth_context_ref_from_parts(&parts, &auth)
                 .and_then(|value| value.context().subject.as_deref()),
             Some("user-123")
+        );
+
+        let auth_clone = auth.clone();
+        assert!(
+            verified_auth_context_ref_from_parts(&parts, &auth_clone).is_some(),
+            "a clone of the issuing authenticator must retain its provenance identity"
+        );
+
+        let independent_auth =
+            Authenticator::new(delegation_config()).expect("independent authenticator");
+        assert!(
+            verified_auth_context_ref_from_parts(&parts, &independent_auth).is_none(),
+            "a witness from another authenticator must be rejected"
+        );
+
+        let (mut bare_parts, _) = axum::http::Request::new(()).into_parts();
+        bare_parts
+            .extensions
+            .insert(header_context.context().clone());
+        assert!(
+            verified_auth_context_from_parts(&bare_parts, &auth).is_none(),
+            "a bare context must not satisfy verified request retrieval"
+        );
+
+        let independent_token = token_with_jti("independent-context");
+        let independent_context = independent_auth
+            .authenticate_token(&HeaderMap::new(), &independent_token)
+            .await
+            .expect("independent authenticator should issue its own witness");
+        let (mut wrong_witness_parts, _) = axum::http::Request::new(()).into_parts();
+        wrong_witness_parts.extensions.insert(independent_context);
+        assert!(
+            verified_auth_context_from_parts(&wrong_witness_parts, &auth).is_none(),
+            "a valid witness from an independent authenticator must not cross the boundary"
         );
     }
 
@@ -767,6 +814,7 @@ mod tests {
             .await
             .expect_err("sender-constrained token must not enter a bearer-only context");
 
+        assert!(!format!("{error:?}").contains(&token));
         assert_eq!(error.decision_code(), "SENDER_CONSTRAINED_BEARER_TOKEN");
         assert_eq!(error.bearer_error(), Some("invalid_token"));
         assert_eq!(error.public_message(), "Invalid bearer token.");
@@ -786,6 +834,10 @@ mod tests {
                 .authenticate_token(&HeaderMap::new(), &token)
                 .await
                 .expect_err("present cnf must not enter a bearer-only context");
+            assert!(
+                !format!("{error:?}").contains(&token),
+                "{label} error debug output must not expose the token"
+            );
             assert_eq!(
                 error.decision_code(),
                 "SENDER_CONSTRAINED_BEARER_TOKEN",
@@ -797,6 +849,7 @@ mod tests {
             .authenticate_token(&HeaderMap::new(), &malformed_cnf)
             .await
             .expect_err("malformed cnf must not enter a bearer-only context");
+        assert!(!format!("{error:?}").contains(&malformed_cnf));
         assert_eq!(error.decision_code(), "SENDER_CONSTRAINED_BEARER_TOKEN");
     }
 
@@ -886,6 +939,9 @@ mod tests {
         )
         .await
         .expect_err("proof must be bound to the exact access token");
+        let error_debug = format!("{error:?}");
+        assert!(!error_debug.contains(&wrong_token));
+        assert!(!error_debug.contains(&proof.compact_jws));
         assert!(matches!(
             error,
             SenderConstrainedAuthError::Dpop(DpopError::AthMismatch)
@@ -1536,11 +1592,11 @@ mod tests {
         let _ = shutdown_tx.send(());
 
         let context = result.expect("expected introspection to succeed");
-        assert_eq!(context.scopes, vec!["read"]);
-        assert_eq!(context.roles, Vec::<String>::new());
-        assert_eq!(context.claims.get("active"), Some(&json!(true)));
-        assert_eq!(context.claims.get("realm_access"), None);
-        assert_eq!(context.claims.get("resource_access"), None);
+        assert_eq!(context.context().scopes, vec!["read"]);
+        assert_eq!(context.context().roles, Vec::<String>::new());
+        assert_eq!(context.context().claims.get("active"), Some(&json!(true)));
+        assert_eq!(context.context().claims.get("realm_access"), None);
+        assert_eq!(context.context().claims.get("resource_access"), None);
     }
 
     /// Executes introspection_rejects_mismatched_issuer.

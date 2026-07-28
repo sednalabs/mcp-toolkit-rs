@@ -124,16 +124,29 @@ pub fn auth_context_ref_from_parts(parts: &http::request::Parts) -> Option<&Auth
     parts.extensions.get::<AuthContext>()
 }
 
-/// Retrieves an authenticator-issued context from HTTP request parts.
+/// Retrieves a context issued by the expected authenticator.
+///
+/// # Security
+/// Returns `None` for a bare [`AuthContext`] or for a witness issued by an
+/// independent authenticator.
 pub fn verified_auth_context_from_parts(
     parts: &http::request::Parts,
+    authenticator: &crate::Authenticator,
 ) -> Option<VerifiedAuthContext> {
-    parts.extensions.get::<VerifiedAuthContext>().cloned()
+    verified_auth_context_ref_from_parts(parts, authenticator).cloned()
 }
 
-/// Borrows an authenticator-issued context from HTTP request parts.
-pub fn verified_auth_context_ref_from_parts(
-    parts: &http::request::Parts,
-) -> Option<&VerifiedAuthContext> {
-    parts.extensions.get::<VerifiedAuthContext>()
+/// Borrows a context issued by the expected authenticator.
+///
+/// # Security
+/// Returns `None` for a bare [`AuthContext`] or for a witness issued by an
+/// independent authenticator.
+pub fn verified_auth_context_ref_from_parts<'a>(
+    parts: &'a http::request::Parts,
+    authenticator: &crate::Authenticator,
+) -> Option<&'a VerifiedAuthContext> {
+    parts
+        .extensions
+        .get::<VerifiedAuthContext>()
+        .filter(|context| context.is_issued_by(authenticator))
 }

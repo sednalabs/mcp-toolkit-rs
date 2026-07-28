@@ -1111,7 +1111,7 @@ where
             let mut inner = self.inner.clone();
 
             return Box::pin(async move {
-                match authenticator.authenticate_verified_headers(&headers).await {
+                match authenticator.authenticate_headers(&headers).await {
                     Ok(context) => {
                         if !allowed_client_ids.is_empty() {
                             let azp = context.context().azp.as_deref().unwrap_or_default();
