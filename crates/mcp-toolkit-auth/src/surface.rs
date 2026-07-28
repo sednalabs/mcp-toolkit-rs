@@ -916,8 +916,8 @@ impl AuthSurfaceRequestBinding {
     }
 
     fn matches(&self, method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
-        &self.method == method
-            && &self.uri == uri
+        self.method == *method
+            && self.uri == *uri
             && self.authorization_digest == authorization_digest(headers)
     }
 
