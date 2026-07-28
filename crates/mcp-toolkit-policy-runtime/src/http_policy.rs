@@ -490,13 +490,8 @@ mod tests {
 
         let response = service
             .oneshot(
-                request_with_verified_auth(
-                    "/blocked",
-                    "alice",
-                    "deny-decision",
-                    &authenticator,
-                )
-                .await,
+                request_with_verified_auth("/blocked", "alice", "deny-decision", &authenticator)
+                    .await,
             )
             .await
             .expect("policy deny should produce response");
@@ -539,10 +534,8 @@ mod tests {
                 .extensions()
                 .get::<crate::PolicyAuthorityDecision>()
                 .is_some();
-            saw_expected_witness_for_service.store(
-                expected_witness && has_policy_decision,
-                Ordering::SeqCst,
-            );
+            saw_expected_witness_for_service
+                .store(expected_witness && has_policy_decision, Ordering::SeqCst);
             async move { Ok::<_, Infallible>(Response::new(Body::from("ok"))) }
         });
         let policy =
@@ -752,9 +745,7 @@ mod tests {
             .await
             .expect("test token should authenticate");
         let mut request = protected_request(path);
-        request
-            .extensions_mut()
-            .insert(context.context().clone());
+        request.extensions_mut().insert(context.context().clone());
         request.extensions_mut().insert(context);
         insert_surface_context(&mut request);
         request
