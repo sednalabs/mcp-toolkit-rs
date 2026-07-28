@@ -237,8 +237,9 @@ The contract test is required for every new HTTP MCP server.
 2. Create one `IssuerEntry` per protected resource path (single issuer by default),
    preferably via the generic authorization-server metadata source model.
 3. Wrap the HTTP service/router with `AuthSurfaceLayer`.
-4. Add `PolicyAuthorityLayer` with `AuthControlPlaneHttpMapper` for reusable
-   post-auth route, tool, resource, session, project, and scope decisions.
+4. Add `PolicyAuthorityLayer` with `AuthControlPlaneHttpMapper` and the same
+   shared `Authenticator` used by `IssuerEntry` for reusable post-auth route,
+   tool, resource, session, project, and scope decisions.
 5. Configure any `public_paths` or `public_prefixes` for unauthenticated endpoints.
 6. Keep the default unmatched-route behavior unless unrelated routes should
    intentionally pass through the auth surface.
