@@ -1350,8 +1350,9 @@ where
             let guard = begin_public_request(&mut req);
             let fut = self.inner.call(req);
             return Box::pin(async move {
-                let _guard = guard;
-                fut.await
+                let result = fut.await;
+                drop(guard);
+                result
             });
         }
 
@@ -1418,8 +1419,9 @@ where
                         req.extensions_mut()
                             .insert::<AuthSurfaceContext>(surface_context);
                         req.extensions_mut().insert(binding);
-                        let _guard = guard;
-                        inner.call(req).await
+                        let result = inner.call(req).await;
+                        drop(guard);
+                        result
                     }
                     Err(err) => {
                         observe_auth_failure(
@@ -1453,8 +1455,9 @@ where
         let guard = begin_public_request(&mut req);
         let fut = self.inner.call(req);
         Box::pin(async move {
-            let _guard = guard;
-            fut.await
+            let result = fut.await;
+            drop(guard);
+            result
         })
     }
 }
