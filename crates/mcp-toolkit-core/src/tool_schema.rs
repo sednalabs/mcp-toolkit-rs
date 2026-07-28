@@ -130,6 +130,9 @@ pub enum SchemaDialectError {
     InvalidJsonPointerEscape { reference: String },
     /// A schema-position reference keyword is outside this dialect's supported subset.
     UnsupportedReferenceKeyword { keyword: &'static str },
+    /// A schema-position keyword would establish an embedded resource that this
+    /// bounded root-document resolver cannot represent safely.
+    UnsupportedSchemaKeyword { keyword: &'static str },
     /// A local `$defs` reference did not resolve in the submitted schema.
     UnresolvedReference { reference: String },
     /// A local `$defs` reference would revisit an active reference chain.
@@ -171,6 +174,9 @@ impl Display for SchemaDialectError {
             ),
             Self::UnsupportedReferenceKeyword { keyword } => {
                 write!(formatter, "schema reference keyword `{keyword}` is not supported")
+            }
+            Self::UnsupportedSchemaKeyword { keyword } => {
+                write!(formatter, "schema keyword `{keyword}` is not supported")
             }
             Self::UnresolvedReference { reference } => {
                 write!(formatter, "schema reference `{reference}` does not resolve")
@@ -215,8 +221,12 @@ impl std::error::Error for SchemaDialectError {}
 /// following a `$ref` cannot inflate whole-document accounting. Schema-bearing
 /// map and composition containers must have their required object or array
 /// shape, and each contained schema must be an object or permitted boolean
-/// schema. `$dynamicRef` and `$recursiveRef` are not supported and are rejected
-/// in schema positions.
+/// schema. Legacy tuple arrays are supported for `items`, while
+/// `additionalItems` accepts only one object or boolean schema. `$dynamicRef`,
+/// `$recursiveRef`, and `$id` are not supported in schema positions. In
+/// particular, `$id` is rejected so a nested schema cannot establish an
+/// embedded resource while this validator resolves local references against
+/// the submitted root document.
 ///
 /// A root `$ref` may have sibling keywords under modern JSON Schema semantics.
 /// When object-root enforcement is enabled, both an explicit root `type`
@@ -305,7 +315,7 @@ fn validate_root_chain_schema(
         };
     };
     check_root_keywords(schema, policy)?;
-    reject_unsupported_reference_keywords(object)?;
+    reject_unsupported_schema_keywords(object)?;
     let root_type = match object.get("type") {
         Some(Value::String(root_type)) => Some(root_type.as_str()),
         Some(_) => return Err(SchemaDialectError::RootMustBeObject),
@@ -340,7 +350,7 @@ fn traverse_schema_at(
     count_node(policy, state)?;
     match schema {
         Value::Object(object) => {
-            reject_unsupported_reference_keywords(object)?;
+            reject_unsupported_schema_keywords(object)?;
             if let Some(reference) = object.get("$ref") {
                 validate_reference_graph(reference, document, policy, state)?;
             }
@@ -353,8 +363,11 @@ fn traverse_schema_at(
                     "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
                         traverse_schema_array(value, document, policy, state, schema_keyword)?;
                     }
-                    "items" | "additionalItems" => {
+                    "items" => {
                         traverse_schema_or_array(value, document, policy, state, schema_keyword)?;
+                    }
+                    "additionalItems" => {
+                        traverse_schema_at(value, document, policy, state, schema_keyword)?;
                     }
                     "additionalProperties"
                     | "contains"
@@ -426,6 +439,15 @@ fn reject_unsupported_reference_keywords(
         }
     }
     Ok(())
+}
+
+fn reject_unsupported_schema_keywords(
+    schema: &Map<String, Value>,
+) -> Result<(), SchemaDialectError> {
+    if schema.contains_key("$id") {
+        return Err(SchemaDialectError::UnsupportedSchemaKeyword { keyword: "$id" });
+    }
+    reject_unsupported_reference_keywords(schema)
 }
 
 fn traverse_schema_map(
@@ -571,7 +593,7 @@ fn traverse_reference_graph_schema_at(
             schema,
         ));
     };
-    reject_unsupported_reference_keywords(object)?;
+    reject_unsupported_schema_keywords(object)?;
     if let Some(reference) = object.get("$ref") {
         validate_reference_graph(reference, document, policy, state)?;
     }
@@ -583,8 +605,17 @@ fn traverse_reference_graph_schema_at(
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
                 traverse_reference_graph_array(value, document, policy, state, schema_keyword)?;
             }
-            "items" | "additionalItems" => {
+            "items" => {
                 traverse_reference_graph_schema_or_array(
+                    value,
+                    document,
+                    policy,
+                    state,
+                    schema_keyword,
+                )?;
+            }
+            "additionalItems" => {
+                traverse_reference_graph_schema_at(
                     value,
                     document,
                     policy,
@@ -1456,6 +1487,88 @@ mod tests {
         assert_eq!(
             validate_schema_dialect(&acyclic_nested_reference, &SchemaDialectPolicy::new()),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_embedded_resource_local_unresolved_reference() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"entry": {"$ref": "#/$defs/embedded"}},
+            "$defs": {
+                "embedded": {
+                    "$id": "https://example.invalid/embedded.json",
+                    "$ref": "#/$defs/missing",
+                    "$defs": {"local": {"type": "string"}}
+                },
+                "missing": {"type": "object"}
+            }
+        });
+
+        assert_eq!(
+            validate_schema_dialect(&schema, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::UnsupportedSchemaKeyword { keyword: "$id" })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_embedded_resource_cycle() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"entry": {"$ref": "#/$defs/embedded"}},
+            "$defs": {
+                "embedded": {
+                    "$id": "https://example.invalid/embedded.json",
+                    "$ref": "#/$defs/first",
+                    "$defs": {
+                        "first": {"$ref": "#/$defs/second"},
+                        "second": {"$ref": "#/$defs/first"}
+                    }
+                },
+                "first": {"type": "object"},
+                "second": {"type": "object"}
+            }
+        });
+
+        assert_eq!(
+            validate_schema_dialect(&schema, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::UnsupportedSchemaKeyword { keyword: "$id" })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_limits_additional_items_to_one_schema() {
+        let object_schema = json!({
+            "type": "object",
+            "items": [{"type": "string"}],
+            "additionalItems": {"type": "number"}
+        });
+        let boolean_schema = json!({
+            "type": "object",
+            "items": [{"type": "string"}],
+            "additionalItems": false
+        });
+        let array_schema = json!({
+            "type": "object",
+            "items": [{"type": "string"}],
+            "additionalItems": [{"type": "number"}]
+        });
+
+        assert_eq!(
+            validate_schema_dialect(&object_schema, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&boolean_schema, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&array_schema, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::InvalidSchemaShape {
+                keyword: "additionalItems".to_string(),
+                expected: "an object or boolean",
+                actual: "an array",
+            })
         );
     }
 

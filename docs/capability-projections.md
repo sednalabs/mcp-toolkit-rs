@@ -124,6 +124,17 @@ Every projection helper should have whole-object tests that prove:
 Hosted validation remains the merge gate for public toolkit changes. Local test
 commands are not the shared proof surface for this repository.
 
+### Bounded schema dialect
+
+Consumers that need a narrower JSON Schema contract can opt into
+`mcp_toolkit_core::tool_schema::validate_schema_dialect`. The validator accepts
+only local references rooted at `#/$defs/` and resolves them against the
+submitted root document without I/O. `$id` is rejected in schema positions:
+the bounded resolver does not model embedded schema resources, so accepting it
+could make a nested local reference resolve against the wrong document or hide
+a cycle. Legacy tuple arrays remain supported for `items`; `additionalItems`
+must instead be one schema object or boolean schema.
+
 ## References
 
 - `docs/toolkit-boundary.md`
