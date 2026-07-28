@@ -85,7 +85,12 @@ Capability metadata is canonical, but adapters can differ:
   mirror. This projection is intentionally JSON-shaped because the current
   `rmcp` tool model may not expose every host extension field.
 - OpenAPI projection emits operation metadata, request/response schemas, and
-  security requirements.
+  security requirements. An empty scope policy emits an explicit OpenAPI
+  `security: []` requirement so a document-level security requirement cannot
+  accidentally make a public capability authenticated. When no output schema
+  is supplied, the output remains unspecified: native MCP and Apps omit
+  `outputSchema`, while OpenAPI omits the response media type's `schema` rather
+  than inventing a placeholder object schema.
 - OAuth security scheme projection emits only standard OpenAPI metadata; callers
   still choose real authorization URLs, token URLs, public hosts, client IDs,
   and client secrets.
@@ -109,9 +114,12 @@ Every projection helper should have whole-object tests that prove:
 - duplicate capability identifiers are rejected by registries;
 - OpenAPI security scheme names are required when scoped capabilities are
   projected;
+- unscoped capabilities explicitly override global OpenAPI security with
+  `security: []`;
 - OAuth 2 authorization-code security scheme metadata preserves caller URLs and
   scopes;
-- generated OpenAPI operation identifiers are stable.
+- generated OpenAPI operation identifiers are stable;
+- registry projections preserve deterministic registration order.
 
 Hosted validation remains the merge gate for public toolkit changes. Local test
 commands are not the shared proof surface for this repository.

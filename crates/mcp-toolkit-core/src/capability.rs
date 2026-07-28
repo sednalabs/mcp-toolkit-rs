@@ -523,6 +523,11 @@ impl Capability {
                 field: "openapi.security_scheme_name",
             });
         }
+        let response_content = self
+            .output_schema
+            .as_ref()
+            .map(|schema| json!({"schema": Value::Object(schema.clone())}))
+            .unwrap_or_else(|| json!({}));
         let mut operation = Map::from_iter([
             (
                 "operationId".to_string(),
@@ -550,12 +555,7 @@ impl Capability {
                     "200": {
                         "description": "Capability result",
                         "content": {
-                            "application/json": {
-                                "schema": self.output_schema
-                                    .clone()
-                                    .map(Value::Object)
-                                    .unwrap_or_else(|| json!({"type": "object"})),
-                            },
+                            "application/json": response_content,
                         },
                     },
                 }),
@@ -570,9 +570,14 @@ impl Capability {
             ),
             ("x-capability-safety".to_string(), self.safety.to_value()),
         ]);
-        if !self.scopes.is_empty() {
-            operation.insert(
-                "security".to_string(),
+        operation.insert(
+            "security".to_string(),
+            if self.scopes.is_empty() {
+                // An explicit empty requirement overrides any document-level
+                // security inheritance and keeps this projection aligned with
+                // the Apps `noauth` descriptor.
+                Value::Array(Vec::new())
+            } else {
                 Value::Array(vec![Value::Object(Map::from_iter([(
                     security_scheme_name.to_string(),
                     Value::Array(
@@ -582,9 +587,9 @@ impl Capability {
                             .map(|scope| Value::String(scope.clone()))
                             .collect(),
                     ),
-                )]))]),
-            );
-        }
+                )]))])
+            },
+        );
         Ok(Value::Object(operation))
     }
 }
@@ -758,6 +763,17 @@ mod tests {
         )
     }
 
+    fn public_capability() -> Capability {
+        Capability::new(
+            "status.ping",
+            "Ping status",
+            "Return public service status.",
+            json!({"type": "object"}),
+        )
+        .expect("valid capability")
+        .with_safety(CapabilitySafety::read_only())
+    }
+
     #[test]
     fn scope_policy_preserves_order_and_deduplicates() {
         let policy = ScopePolicy::new(["ops:write", "ops:read", "ops:write", ""]);
@@ -904,15 +920,180 @@ mod tests {
     }
 
     #[test]
+    fn projection_preserves_absent_output_schema_and_explicit_noauth() {
+        let capability = public_capability();
+        let native = serde_json::to_value(capability.to_mcp_tool()).expect("native descriptor");
+        let apps = capability
+            .to_mcp_apps_tool_descriptor()
+            .expect("apps descriptor");
+        let openapi = capability
+            .to_openapi_operation("OAuth2")
+            .expect("OpenAPI operation");
+
+        assert!(native.get("outputSchema").is_none());
+        assert!(apps.get("outputSchema").is_none());
+        assert!(openapi["responses"]["200"]["content"]["application/json"]
+            .get("schema")
+            .is_none());
+        assert_eq!(openapi["security"], json!([]));
+    }
+
+    #[test]
+    fn normalized_projection_equality_covers_all_contract_metadata() {
+        let capability = search_capability();
+        let native = serde_json::to_value(capability.to_mcp_tool()).expect("native descriptor");
+        let apps = capability
+            .to_mcp_apps_tool_descriptor()
+            .expect("apps descriptor");
+        let openapi = capability
+            .to_openapi_operation("OAuth2")
+            .expect("OpenAPI operation");
+
+        let normalized = json!({
+            "native": {
+                "name": native["name"],
+                "title": native["title"],
+                "description": native["description"],
+                "inputSchema": native["inputSchema"],
+                "outputSchema": native["outputSchema"],
+                "annotations": native["annotations"],
+                "_meta": native["_meta"],
+            },
+            "apps": {
+                "name": apps["name"],
+                "title": apps["title"],
+                "description": apps["description"],
+                "inputSchema": apps["inputSchema"],
+                "outputSchema": apps["outputSchema"],
+                "annotations": apps["annotations"],
+                "securitySchemes": apps["securitySchemes"],
+                "_meta": apps["_meta"],
+            },
+            "openapi": {
+                "operationId": openapi["operationId"],
+                "summary": openapi["summary"],
+                "description": openapi["description"],
+                "requestBody": openapi["requestBody"],
+                "responses": openapi["responses"],
+                "security": openapi["security"],
+                "x-mcp-tool-name": openapi["x-mcp-tool-name"],
+                "x-capability-audit-event": openapi["x-capability-audit-event"],
+                "x-capability-safety": openapi["x-capability-safety"],
+            },
+        });
+
+        assert_eq!(
+            normalized,
+            json!({
+                "native": {
+                    "name": "work_items.search",
+                    "title": "Search work items",
+                    "description": "Search work items visible to the caller.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"]
+                    },
+                    "outputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "items": {"type": "array", "items": {"type": "object"}}
+                        }
+                    },
+                    "annotations": {
+                        "title": "Search work items",
+                        "readOnlyHint": true,
+                        "destructiveHint": false,
+                        "idempotentHint": true,
+                        "openWorldHint": false
+                    },
+                    "_meta": {
+                        "capability": {
+                            "id": "work_items.search",
+                            "audit_event": "work_items.search"
+                        },
+                        "securitySchemes": [{"type": "oauth2", "scopes": ["ops:read"]}]
+                    }
+                },
+                "apps": {
+                    "name": "work_items.search",
+                    "title": "Search work items",
+                    "description": "Search work items visible to the caller.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"]
+                    },
+                    "outputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "items": {"type": "array", "items": {"type": "object"}}
+                        }
+                    },
+                    "annotations": {
+                        "title": "Search work items",
+                        "readOnlyHint": true,
+                        "destructiveHint": false,
+                        "idempotentHint": true,
+                        "openWorldHint": false
+                    },
+                    "securitySchemes": [{"type": "oauth2", "scopes": ["ops:read"]}],
+                    "_meta": {
+                        "capability": {
+                            "id": "work_items.search",
+                            "audit_event": "work_items.search"
+                        },
+                        "securitySchemes": [{"type": "oauth2", "scopes": ["ops:read"]}]
+                    }
+                },
+                "openapi": {
+                    "operationId": "workItemsSearch",
+                    "summary": "Search work items",
+                    "description": "Search work items visible to the caller.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"query": {"type": "string"}},
+                                    "required": ["query"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Capability result",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "items": {"type": "array", "items": {"type": "object"}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "security": [{"OAuth2": ["ops:read"]}],
+                    "x-mcp-tool-name": "work_items.search",
+                    "x-capability-audit-event": "work_items.search",
+                    "x-capability-safety": {
+                        "read_only": true,
+                        "destructive": false,
+                        "idempotent": true,
+                        "open_world": false
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
     fn apps_projection_marks_unscoped_capabilities_noauth() {
-        let capability = Capability::new(
-            "status.ping",
-            "Ping status",
-            "Return public service status.",
-            json!({"type": "object"}),
-        )
-        .expect("valid capability")
-        .with_safety(CapabilitySafety::read_only());
+        let capability = public_capability();
 
         let value = capability
             .to_mcp_apps_tool_descriptor()
@@ -920,6 +1101,12 @@ mod tests {
 
         assert_eq!(value["securitySchemes"], json!([{"type": "noauth"}]));
         assert_eq!(value["_meta"]["securitySchemes"], value["securitySchemes"]);
+        assert_eq!(
+            capability
+                .to_openapi_operation("OAuth2")
+                .expect("OpenAPI operation")["security"],
+            json!([])
+        );
     }
 
     #[test]
@@ -992,15 +1179,28 @@ mod tests {
         registry
             .register(search_capability())
             .expect("valid capability");
+        registry
+            .register(public_capability())
+            .expect("valid public capability");
 
         let tools = registry.to_mcp_tools();
         let operations = registry
             .to_openapi_operations("OAuth2")
             .expect("valid OpenAPI operations");
 
-        assert_eq!(tools[0].name, "work_items.search");
-        assert_eq!(operations[0]["operationId"], "workItemsSearch");
+        assert_eq!(
+            tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            vec!["work_items.search", "status.ping"]
+        );
+        assert_eq!(
+            operations
+                .iter()
+                .map(|operation| operation["operationId"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["workItemsSearch", "statusPing"]
+        );
         assert_eq!(operations[0]["security"], json!([{"OAuth2": ["ops:read"]}]));
+        assert_eq!(operations[1]["security"], json!([]));
     }
 
     #[test]
