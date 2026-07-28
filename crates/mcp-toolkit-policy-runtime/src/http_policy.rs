@@ -16,31 +16,38 @@
 //!   inner service is called.
 //! * **Provenance Propagation**: The full `PolicyAuthorityDecision` is attached
 //!   to request extensions on allow and response extensions on deny.
-//! * **Auth Separation**: Reads `AuthContext` and `AuthSurfaceContext` inserted
-//!   by `mcp-toolkit-auth`; it does not validate credentials itself.
+//! * **Request Binding**: Consumes a current, single-use auth-surface witness
+//!   before policy evaluation. Stale, rebound, or incorrectly ordered requests
+//!   fail closed.
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for:
-//! * Installing this layer after `AuthSurfaceLayer` for protected routes.
 //! * Supplying a mapper that preserves each server's route/tool semantics.
 //! * Logging only sanitized decision metadata.
 
 use std::{
     future::Future,
     marker::PhantomData,
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use axum::body::Body;
 use futures_util::future::BoxFuture;
 use http::{header::CONTENT_TYPE, request::Parts, HeaderValue, Request, Response, StatusCode};
-use mcp_toolkit_auth::{surface::AuthSurfaceContext, AuthContext};
+use mcp_toolkit_auth::{
+    consume_verified_auth_surface_request, consume_verified_auth_surface_request_from_request,
+    surface::AuthSurfaceContext, AuthContext, Authenticator, VerifiedAuthSurfaceRequest,
+};
+use mcp_toolkit_policy_core::{Decision, DecisionCode};
 use serde::Serialize;
 use tower::{Layer, Service};
 
-use crate::{PolicyAuthorityDecision, SharedPolicyAuthority};
+use crate::{PolicyAuthorityDecision, PolicyRuntimeMode, SharedPolicyAuthority};
 
 const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json");
+const INVALID_AUTH_SURFACE_REASON: &str = "auth_surface_request_unverified";
+const INVALID_AUTH_SURFACE_DECISION_SOURCE: &str = "http_policy.auth_surface";
 
 /// Sanitized authentication context exposed to policy mappers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,47 +101,69 @@ pub struct PolicyHttpRequestContext {
 }
 
 impl PolicyHttpRequestContext {
-    /// Builds a policy request context from HTTP request parts.
+    /// Consumes a policy request context from HTTP request parts.
     ///
     /// # Errors
-    /// * This function does not return errors directly.
+    /// * Returns `None` when the request did not pass through the auth surface,
+    ///   when its witness no longer matches, or when another policy gate already
+    ///   consumed it.
     ///
     /// # Security
-    /// * Copies sanitized auth metadata and intentionally omits raw bearer
-    ///   tokens from the policy mapping context.
+    /// * Accepts auth metadata only from the current auth-surface lifecycle.
+    ///   Missing, stale, rebound, replayed, or independently issued witnesses
+    ///   fail closed as `None`.
+    /// * Omits raw bearer tokens from the policy context.
     ///
     /// # Panics
     /// * None.
-    pub fn from_parts(parts: &Parts) -> Self {
+    pub fn from_parts(parts: &Parts, authenticator: &Authenticator) -> Option<Self> {
+        let verified = consume_verified_auth_surface_request(parts, authenticator)?;
+        Some(Self::from_verified_request(parts, &verified))
+    }
+
+    fn from_verified_request(parts: &Parts, verified: &VerifiedAuthSurfaceRequest) -> Self {
         Self {
             method: parts.method.as_str().to_string(),
             path: parts.uri.path().to_string(),
-            auth: parts.extensions.get::<AuthContext>().map(Into::into),
-            surface: parts.extensions.get::<AuthSurfaceContext>().map(Into::into),
+            auth: verified.auth().map(Into::into),
+            surface: verified.surface().map(Into::into),
         }
     }
 
-    /// Builds a policy request context from an HTTP request.
+    /// Consumes a policy request context from an HTTP request.
     ///
     /// # Errors
-    /// * This function does not return errors directly.
+    /// * Returns `None` when the request did not pass through the auth surface,
+    ///   when its witness no longer matches, or when another policy gate already
+    ///   consumed it.
     ///
     /// # Security
-    /// * Copies sanitized auth metadata and intentionally omits raw bearer
-    ///   tokens from the policy mapping context.
+    /// * Accepts auth metadata only from the current auth-surface lifecycle.
+    ///   Missing, stale, rebound, replayed, or independently issued witnesses
+    ///   fail closed as `None`.
+    /// * Omits raw bearer tokens from the policy context.
     ///
     /// # Panics
     /// * None.
-    pub fn from_request<B>(request: &Request<B>) -> Self {
-        Self {
-            method: request.method().as_str().to_string(),
-            path: request.uri().path().to_string(),
-            auth: request.extensions().get::<AuthContext>().map(Into::into),
-            surface: request
-                .extensions()
-                .get::<AuthSurfaceContext>()
-                .map(Into::into),
-        }
+    pub fn from_request<B>(request: &Request<B>, authenticator: &Authenticator) -> Option<Self> {
+        Self::consume_from_request(request, authenticator).map(|(context, _)| context)
+    }
+
+    fn consume_from_request<B>(
+        request: &Request<B>,
+        authenticator: &Authenticator,
+    ) -> Option<(Self, Option<AuthContext>)> {
+        let verified = consume_verified_auth_surface_request_from_request(request, authenticator)?;
+        let auth = verified.auth().cloned();
+        Some((
+            Self {
+                method: request.method().as_str().to_string(),
+                path: request.uri().path().to_string(),
+                auth: verified.auth().map(Into::into),
+                surface: verified.surface().map(Into::into),
+            },
+            auth,
+        ))
     }
 }
 
@@ -205,6 +234,7 @@ pub struct PolicyAuthorityLayer<AuthorityRequest, Mapper, DenyHandler = JsonPoli
     authority: SharedPolicyAuthority<AuthorityRequest>,
     mapper: Mapper,
     deny_handler: DenyHandler,
+    authenticator: Arc<Authenticator>,
 }
 
 impl<AuthorityRequest, Mapper>
@@ -216,13 +246,18 @@ impl<AuthorityRequest, Mapper>
     /// * This function does not return errors directly.
     ///
     /// # Security
-    /// * The layer must run after authentication for protected routes so the
-    ///   mapper receives a trusted `AuthContext`.
+    /// * `authenticator` must be the same shared instance configured on the
+    ///   preceding auth surface. Missing or incorrectly bound context reaches
+    ///   the mapper as unauthenticated input.
     ///
     /// # Panics
     /// * None.
-    pub fn new(authority: SharedPolicyAuthority<AuthorityRequest>, mapper: Mapper) -> Self {
-        Self::with_deny_handler(authority, mapper, JsonPolicyDenyHandler)
+    pub fn new(
+        authority: SharedPolicyAuthority<AuthorityRequest>,
+        mapper: Mapper,
+        authenticator: Arc<Authenticator>,
+    ) -> Self {
+        Self::with_deny_handler(authority, mapper, authenticator, JsonPolicyDenyHandler)
     }
 }
 
@@ -235,6 +270,9 @@ impl<AuthorityRequest, Mapper, DenyHandler>
     /// * This function does not return errors directly.
     ///
     /// # Security
+    /// * `authenticator` must be the same shared instance configured on the
+    ///   preceding auth surface. Missing or incorrectly bound context reaches
+    ///   the mapper as unauthenticated input.
     /// * Deny handlers must not expose raw tokens, claims, or server-internal
     ///   route details in public responses.
     ///
@@ -243,12 +281,14 @@ impl<AuthorityRequest, Mapper, DenyHandler>
     pub fn with_deny_handler(
         authority: SharedPolicyAuthority<AuthorityRequest>,
         mapper: Mapper,
+        authenticator: Arc<Authenticator>,
         deny_handler: DenyHandler,
     ) -> Self {
         Self {
             authority,
             mapper,
             deny_handler,
+            authenticator,
         }
     }
 }
@@ -267,6 +307,7 @@ where
             authority: self.authority.clone(),
             mapper: self.mapper.clone(),
             deny_handler: self.deny_handler.clone(),
+            authenticator: self.authenticator.clone(),
             request_type: PhantomData,
         }
     }
@@ -278,6 +319,7 @@ pub struct PolicyAuthorityService<S, AuthorityRequest, Mapper, DenyHandler> {
     authority: SharedPolicyAuthority<AuthorityRequest>,
     mapper: Mapper,
     deny_handler: DenyHandler,
+    authenticator: Arc<Authenticator>,
     request_type: PhantomData<fn(AuthorityRequest)>,
 }
 
@@ -294,6 +336,7 @@ where
             authority: self.authority.clone(),
             mapper: self.mapper.clone(),
             deny_handler: self.deny_handler.clone(),
+            authenticator: self.authenticator.clone(),
             request_type: PhantomData,
         }
     }
@@ -317,11 +360,26 @@ where
     }
 
     fn call(&mut self, mut request: Request<Body>) -> Self::Future {
-        let context = PolicyHttpRequestContext::from_request(&request);
+        let Some((context, current_auth)) =
+            PolicyHttpRequestContext::consume_from_request(&request, &self.authenticator)
+        else {
+            let decision = invalid_auth_surface_decision();
+            let mut response = self.deny_handler.deny_response(&decision);
+            response.extensions_mut().insert(decision);
+            return Box::pin(async move { Ok(response) });
+        };
         let authority_request = self.mapper.map_request(&context);
         let decision = self.authority.evaluate(&authority_request);
 
         if decision.allow {
+            match current_auth {
+                Some(auth) => {
+                    request.extensions_mut().insert(auth);
+                }
+                None => {
+                    let _ = request.extensions_mut().remove::<AuthContext>();
+                }
+            }
             request.extensions_mut().insert(decision);
             let future = self.inner.call(request);
             return boxed(future);
@@ -331,6 +389,18 @@ where
         response.extensions_mut().insert(decision);
         Box::pin(async move { Ok(response) })
     }
+}
+
+fn invalid_auth_surface_decision() -> PolicyAuthorityDecision {
+    PolicyAuthorityDecision::from_policy_decision(
+        Decision::deny(
+            DecisionCode::InvalidInput,
+            Some(INVALID_AUTH_SURFACE_REASON),
+        ),
+        INVALID_AUTH_SURFACE_DECISION_SOURCE,
+        PolicyRuntimeMode::Rust,
+        None,
+    )
 }
 
 fn boxed<F, E>(future: F) -> BoxFuture<'static, Result<Response<Body>, E>>
@@ -348,21 +418,32 @@ pub fn policy_authority_decision_ref_from_parts(parts: &Parts) -> Option<&Policy
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         convert::Infallible,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         },
+        time::{SystemTime, UNIX_EPOCH},
     };
 
     use axum::body::Body;
-    use http::{Request, Response, StatusCode};
-    use mcp_toolkit_auth::{surface::AuthSurfaceContext, AuthContext};
+    use http::{header::AUTHORIZATION, Extensions, HeaderMap, Request, Response, StatusCode};
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use mcp_toolkit_auth::{
+        surface::{
+            AuthSurfaceConfig, AuthSurfaceContext, AuthSurfaceLayer, IssuerEntry, RootAliasPolicy,
+        },
+        AuthConfig, AuthMode, Authenticator, VerifiedAuthContext,
+    };
     use mcp_toolkit_policy_core::{Decision, DecisionCode};
     use tower::{service_fn, Layer, ServiceExt};
 
     use super::{PolicyAuthorityLayer, PolicyHttpRequestContext};
-    use crate::{ClosurePolicyAuthority, PolicyRuntimeMode};
+    use crate::{
+        AuthControlPlaneHealthStatusExposure, AuthControlPlaneHttpMapper,
+        AuthControlPlanePolicyAuthority, ClosurePolicyAuthority, PolicyRuntimeMode,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct MappedRequest {
@@ -374,6 +455,7 @@ mod tests {
 
     #[tokio::test]
     async fn allow_attaches_policy_decision_to_request_before_dispatch() {
+        let authenticator = test_authenticator();
         let authority = Arc::new(ClosurePolicyAuthority::new(
             "unit.policy",
             PolicyRuntimeMode::Rust,
@@ -388,8 +470,7 @@ mod tests {
         ));
         let saw_decision = Arc::new(AtomicBool::new(false));
         let saw_decision_for_service = saw_decision.clone();
-        let layer = PolicyAuthorityLayer::new(authority, mapper);
-        let service = layer.layer(service_fn(move |request: Request<Body>| {
+        let inner = service_fn(move |request: Request<Body>| {
             saw_decision_for_service.store(
                 request
                     .extensions()
@@ -398,10 +479,14 @@ mod tests {
                 Ordering::SeqCst,
             );
             async move { Ok::<_, Infallible>(Response::new(Body::from("ok"))) }
-        }));
+        });
+        let policy =
+            PolicyAuthorityLayer::new(authority, mapper, authenticator.clone()).layer(inner);
+        let service = test_auth_surface(authenticator).layer(policy);
+        let token = delegation_token("alice", "allow-decision");
 
         let response = service
-            .oneshot(request_with_auth("/mcp", "alice"))
+            .oneshot(request_with_bearer("/mcp", &token))
             .await
             .expect("policy allow should dispatch");
 
@@ -411,12 +496,13 @@ mod tests {
 
     #[tokio::test]
     async fn deny_blocks_dispatch_and_attaches_policy_decision_to_response() {
+        let authenticator = test_authenticator();
         let authority = Arc::new(ClosurePolicyAuthority::new(
             "unit.policy",
             PolicyRuntimeMode::Rust,
             Some("unit/v1"),
             |request: &MappedRequest| {
-                if request.path == "/blocked" {
+                if request.path == "/mcp/blocked" {
                     Decision::deny(DecisionCode::MissingScopes, Some("required_scope_missing"))
                 } else {
                     Decision::allow()
@@ -425,14 +511,17 @@ mod tests {
         ));
         let called_inner = Arc::new(AtomicBool::new(false));
         let called_inner_for_service = called_inner.clone();
-        let layer = PolicyAuthorityLayer::new(authority, mapper);
-        let service = layer.layer(service_fn(move |_request: Request<Body>| {
+        let inner = service_fn(move |_request: Request<Body>| {
             called_inner_for_service.store(true, Ordering::SeqCst);
             async move { Ok::<_, Infallible>(Response::new(Body::from("ok"))) }
-        }));
+        });
+        let policy =
+            PolicyAuthorityLayer::new(authority, mapper, authenticator.clone()).layer(inner);
+        let service = test_auth_surface(authenticator).layer(policy);
+        let token = delegation_token("alice", "deny-decision");
 
         let response = service
-            .oneshot(request_with_auth("/blocked", "alice"))
+            .oneshot(request_with_bearer("/mcp/blocked", &token))
             .await
             .expect("policy deny should produce response");
 
@@ -447,6 +536,349 @@ mod tests {
         assert_eq!(decision.decision_source, "unit.policy");
     }
 
+    #[tokio::test]
+    async fn auth_surface_witness_reaches_policy_gated_protected_route() {
+        let authenticator = test_authenticator();
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |request: &MappedRequest| {
+                if request.actor.as_deref() == Some("alice") {
+                    Decision::allow()
+                } else {
+                    Decision::deny(DecisionCode::MissingToken, Some("missing_auth"))
+                }
+            },
+        ));
+        let saw_expected_witness = Arc::new(AtomicBool::new(false));
+        let saw_expected_witness_for_service = saw_expected_witness.clone();
+        let authenticator_for_service = authenticator.clone();
+        let inner = service_fn(move |request: Request<Body>| {
+            let expected_witness = request
+                .extensions()
+                .get::<VerifiedAuthContext>()
+                .is_some_and(|context| context.is_issued_by(&authenticator_for_service));
+            let has_policy_decision = request
+                .extensions()
+                .get::<crate::PolicyAuthorityDecision>()
+                .is_some();
+            saw_expected_witness_for_service
+                .store(expected_witness && has_policy_decision, Ordering::SeqCst);
+            async move { Ok::<_, Infallible>(Response::new(Body::from("ok"))) }
+        });
+        let policy =
+            PolicyAuthorityLayer::new(authority, mapper, authenticator.clone()).layer(inner);
+        let service = test_auth_surface(authenticator).layer(policy);
+        let token = delegation_token("alice", "surface-policy-ingress");
+
+        let response = service
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("protected request should build"),
+            )
+            .await
+            .expect("authenticated policy request should dispatch");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(saw_expected_witness.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn intended_order_replaces_stale_privileged_witness_with_current_identity() {
+        let authenticator = test_authenticator();
+        let stale_extensions = capture_completed_auth_surface_extensions(
+            authenticator.clone(),
+            "/mcp",
+            &delegation_token("alice", "stale-privileged-intended"),
+        )
+        .await;
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |request: &MappedRequest| {
+                if request.actor.as_deref() == Some("alice") {
+                    Decision::allow()
+                } else {
+                    Decision::deny(
+                        DecisionCode::MissingScopes,
+                        Some("current_identity_not_allowed"),
+                    )
+                }
+            },
+        ));
+        let called_inner = Arc::new(AtomicBool::new(false));
+        let called_inner_for_service = called_inner.clone();
+        let inner = service_fn(move |_request: Request<Body>| {
+            called_inner_for_service.store(true, Ordering::SeqCst);
+            async move { Ok::<_, Infallible>(Response::new(Body::from("unexpected"))) }
+        });
+        let policy =
+            PolicyAuthorityLayer::new(authority, mapper, authenticator.clone()).layer(inner);
+        let service = test_auth_surface(authenticator).layer(policy);
+        let lower_token = delegation_token("bob", "current-lower-intended");
+        let mut request = request_with_bearer("/mcp", &lower_token);
+        *request.extensions_mut() = stale_extensions;
+
+        let response = service
+            .oneshot(request)
+            .await
+            .expect("current lower-privilege identity should be evaluated");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let decision = response
+            .extensions()
+            .get::<crate::PolicyAuthorityDecision>()
+            .expect("policy denial should carry provenance");
+        assert_eq!(decision.code.as_deref(), Some("MISSING_SCOPES"));
+        assert_eq!(
+            decision.reason.as_deref(),
+            Some("current_identity_not_allowed")
+        );
+        assert_eq!(decision.decision_source, "unit.policy");
+        assert!(!called_inner.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn policy_gate_rejects_current_request_token_rebinding_after_authentication() {
+        let authenticator = test_authenticator();
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |_request: &MappedRequest| Decision::allow(),
+        ));
+        let called_inner = Arc::new(AtomicBool::new(false));
+        let called_inner_for_service = called_inner.clone();
+        let application = service_fn(move |_request: Request<Body>| {
+            called_inner_for_service.store(true, Ordering::SeqCst);
+            async move { Ok::<_, Infallible>(Response::new(Body::from("unexpected"))) }
+        });
+        let policy =
+            PolicyAuthorityLayer::new(authority, mapper, authenticator.clone()).layer(application);
+        let lower_header: http::HeaderValue = format!(
+            "Bearer {}",
+            delegation_token("bob", "lower-token-after-auth")
+        )
+        .parse()
+        .expect("lower-privilege authorization header should build");
+        let tamper = service_fn(move |mut request: Request<Body>| {
+            request
+                .headers_mut()
+                .insert(AUTHORIZATION, lower_header.clone());
+            let policy = policy.clone();
+            async move { policy.oneshot(request).await }
+        });
+        let service = test_auth_surface(authenticator).layer(tamper);
+        let privileged_token = delegation_token("alice", "privileged-before-token-rebind");
+
+        let response = service
+            .oneshot(request_with_bearer("/mcp", &privileged_token))
+            .await
+            .expect("token-rebound request should return a closed denial");
+
+        assert_invalid_auth_surface_denial(&response);
+        assert!(!called_inner.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn policy_gate_rejects_current_request_route_rebinding_after_authentication() {
+        let authenticator = test_authenticator();
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |_request: &MappedRequest| Decision::allow(),
+        ));
+        let called_inner = Arc::new(AtomicBool::new(false));
+        let called_inner_for_service = called_inner.clone();
+        let application = service_fn(move |_request: Request<Body>| {
+            called_inner_for_service.store(true, Ordering::SeqCst);
+            async move { Ok::<_, Infallible>(Response::new(Body::from("unexpected"))) }
+        });
+        let policy =
+            PolicyAuthorityLayer::new(authority, mapper, authenticator.clone()).layer(application);
+        let tamper = service_fn(move |mut request: Request<Body>| {
+            *request.uri_mut() = "/mcp/admin"
+                .parse()
+                .expect("rebound protected route should parse");
+            let policy = policy.clone();
+            async move { policy.oneshot(request).await }
+        });
+        let service = test_auth_surface(authenticator).layer(tamper);
+        let token = delegation_token("alice", "privileged-before-route-rebind");
+
+        let response = service
+            .oneshot(request_with_bearer("/mcp", &token))
+            .await
+            .expect("route-rebound request should return a closed denial");
+
+        assert_invalid_auth_surface_denial(&response);
+        assert!(!called_inner.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn reversed_order_fails_closed_for_stale_witness_and_current_identity() {
+        let authenticator = test_authenticator();
+        let stale_extensions = capture_completed_auth_surface_extensions(
+            authenticator.clone(),
+            "/mcp",
+            &delegation_token("alice", "stale-privileged-reversed"),
+        )
+        .await;
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |request: &MappedRequest| {
+                if request.actor.as_deref() == Some("alice") {
+                    Decision::allow()
+                } else {
+                    Decision::deny(DecisionCode::MissingToken, Some("missing_auth"))
+                }
+            },
+        ));
+        let called_inner = Arc::new(AtomicBool::new(false));
+        let called_inner_for_service = called_inner.clone();
+        let application = service_fn(move |_request: Request<Body>| {
+            called_inner_for_service.store(true, Ordering::SeqCst);
+            async move { Ok::<_, Infallible>(Response::new(Body::from("unexpected"))) }
+        });
+        let auth_inner = test_auth_surface(authenticator.clone()).layer(application);
+        let service = PolicyAuthorityLayer::new(authority, mapper, authenticator).layer(auth_inner);
+        let lower_token = delegation_token("bob", "current-lower-reversed");
+        let mut request = request_with_bearer("/mcp", &lower_token);
+        *request.extensions_mut() = stale_extensions;
+
+        let response = service
+            .oneshot(request)
+            .await
+            .expect("unsafe layer order should return a closed denial");
+
+        assert_invalid_auth_surface_denial(&response);
+        assert!(!called_inner.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn completed_request_witness_cannot_be_replayed_on_same_route_and_token() {
+        let authenticator = test_authenticator();
+        let token = delegation_token("alice", "completed-request-replay");
+        let stale_extensions =
+            capture_completed_auth_surface_extensions(authenticator.clone(), "/mcp", &token).await;
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |_request: &MappedRequest| Decision::allow(),
+        ));
+        let called_inner = Arc::new(AtomicBool::new(false));
+        let called_inner_for_service = called_inner.clone();
+        let service = PolicyAuthorityLayer::new(authority, mapper, authenticator).layer(
+            service_fn(move |_request: Request<Body>| {
+                called_inner_for_service.store(true, Ordering::SeqCst);
+                async move { Ok::<_, Infallible>(Response::new(Body::from("unexpected"))) }
+            }),
+        );
+        let mut request = request_with_bearer("/mcp", &token);
+        *request.extensions_mut() = stale_extensions;
+
+        let response = service
+            .oneshot(request)
+            .await
+            .expect("completed request witness should be rejected");
+
+        assert_invalid_auth_surface_denial(&response);
+        assert!(!called_inner.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn policy_gate_denies_stripped_and_foreign_authentication_contexts() {
+        let authenticator = test_authenticator();
+        let foreign_authenticator = test_authenticator();
+        let foreign_token = delegation_token("alice", "foreign-context");
+        let foreign_context = foreign_authenticator
+            .authenticate_token(&HeaderMap::new(), &foreign_token)
+            .await
+            .expect("independent authenticator should issue its own witness");
+        let authority = Arc::new(ClosurePolicyAuthority::new(
+            "unit.policy",
+            PolicyRuntimeMode::Rust,
+            None,
+            |_request: &MappedRequest| Decision::allow(),
+        ));
+        let service = PolicyAuthorityLayer::new(authority, mapper, authenticator).layer(
+            service_fn(|_request: Request<Body>| async {
+                Ok::<_, Infallible>(Response::new(Body::from("unexpected")))
+            }),
+        );
+        let mut request = request_with_bearer("/mcp", &foreign_token);
+        request
+            .extensions_mut()
+            .insert(foreign_context.context().clone());
+        request.extensions_mut().insert(foreign_context);
+        insert_surface_context(&mut request);
+
+        let response = service
+            .oneshot(request)
+            .await
+            .expect("unbound foreign witness should produce a denial");
+
+        assert_invalid_auth_surface_denial(&response);
+    }
+
+    #[tokio::test]
+    async fn policy_gate_preserves_explicit_public_read_only_routes_without_authentication() {
+        let authenticator = test_authenticator();
+        let stale_extensions = capture_completed_auth_surface_extensions(
+            authenticator.clone(),
+            "/mcp",
+            &delegation_token("alice", "stale-public-route"),
+        )
+        .await;
+        let authority = AuthControlPlanePolicyAuthority::builder()
+            .health_status_exposure(AuthControlPlaneHealthStatusExposure::PublicReadOnly)
+            .build()
+            .shared();
+        let policy = PolicyAuthorityLayer::new(
+            authority,
+            AuthControlPlaneHttpMapper::default(),
+            authenticator.clone(),
+        )
+        .layer(service_fn(|request: Request<Body>| async move {
+            assert!(
+                request.extensions().get::<VerifiedAuthContext>().is_none(),
+                "public route must not retain an authenticated witness"
+            );
+            assert!(
+                request
+                    .extensions()
+                    .get::<mcp_toolkit_auth::AuthContext>()
+                    .is_none(),
+                "public route must not retain a bare auth context"
+            );
+            Ok::<_, Infallible>(Response::new(Body::from("ok")))
+        }));
+        let service = test_auth_surface_with_public_health(authenticator).layer(policy);
+        let mut request = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .body(Body::empty())
+            .expect("public read-only request should build");
+        *request.extensions_mut() = stale_extensions;
+
+        let response = service
+            .oneshot(request)
+            .await
+            .expect("explicit public read-only policy should dispatch");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
     fn mapper(context: &PolicyHttpRequestContext) -> MappedRequest {
         MappedRequest {
             method: context.method.clone(),
@@ -459,27 +891,141 @@ mod tests {
         }
     }
 
-    fn request_with_auth(path: &str, actor: &str) -> Request<Body> {
-        let mut request = Request::builder()
+    fn test_authenticator() -> Arc<Authenticator> {
+        Arc::new(
+            Authenticator::new(AuthConfig {
+                mode: AuthMode::Delegation,
+                delegation_secret: Some("policy-test-secret".to_string()),
+                delegation_issuer: "https://issuer.example".to_string(),
+                delegation_audience: "mcp://service.example".to_string(),
+                ..AuthConfig::default()
+            })
+            .expect("test authenticator should build"),
+        )
+    }
+
+    fn test_auth_surface(authenticator: Arc<Authenticator>) -> AuthSurfaceLayer {
+        test_auth_surface_with_public_paths(authenticator, HashSet::new())
+    }
+
+    fn test_auth_surface_with_public_health(authenticator: Arc<Authenticator>) -> AuthSurfaceLayer {
+        test_auth_surface_with_public_paths(authenticator, HashSet::from(["/health".to_string()]))
+    }
+
+    fn test_auth_surface_with_public_paths(
+        authenticator: Arc<Authenticator>,
+        public_paths: HashSet<String>,
+    ) -> AuthSurfaceLayer {
+        AuthSurfaceLayer::from_config(AuthSurfaceConfig {
+            public_base_url: "https://service.example".to_string(),
+            entries: vec![IssuerEntry {
+                resource_path: "/mcp".to_string(),
+                issuer: "https://issuer.example".to_string(),
+                authorization_endpoint: "https://issuer.example/authorize".to_string(),
+                token_endpoint: "https://issuer.example/token".to_string(),
+                registration_endpoint: None,
+                jwks_uri: None,
+                introspection_endpoint: None,
+                device_authorization_endpoint: None,
+                grant_types_supported: None,
+                client_id_metadata_document_supported: None,
+                token_endpoint_auth_methods_supported: None,
+                code_challenge_methods_supported: None,
+                realm: "policy-test".to_string(),
+                scopes_supported: vec!["tools:read".to_string()],
+                allowed_client_ids: HashSet::new(),
+                authenticator,
+                resource_url_override: Some("https://service.example/mcp".to_string()),
+            }],
+            root_alias_policy: RootAliasPolicy::Disabled,
+            public_paths,
+            public_prefixes: Vec::new(),
+            allow_insecure_http: false,
+        })
+        .expect("test auth surface should build")
+    }
+
+    fn delegation_token(actor: &str, jti: &str) -> String {
+        let expiration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should follow epoch")
+            .as_secs()
+            + 300;
+        encode(
+            &Header::default(),
+            &serde_json::json!({
+                "exp": expiration,
+                "sub": actor,
+                "aud": "mcp://service.example",
+                "iss": "https://issuer.example",
+                "jti": jti,
+                "scope": "tools:read",
+            }),
+            &EncodingKey::from_secret(b"policy-test-secret"),
+        )
+        .expect("test token should encode")
+    }
+
+    async fn capture_completed_auth_surface_extensions(
+        authenticator: Arc<Authenticator>,
+        path: &str,
+        token: &str,
+    ) -> Extensions {
+        let captured = Arc::new(Mutex::new(None));
+        let captured_for_service = captured.clone();
+        let service =
+            test_auth_surface(authenticator).layer(service_fn(move |request: Request<Body>| {
+                let extensions = request.extensions().clone();
+                let mut slot = captured_for_service
+                    .lock()
+                    .expect("captured request mutex should not be poisoned");
+                *slot = Some(extensions);
+                drop(slot);
+                async move { Ok::<_, Infallible>(Response::new(Body::from("captured"))) }
+            }));
+
+        let response = service
+            .oneshot(request_with_bearer(path, token))
+            .await
+            .expect("auth surface should process capture request");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let extensions = captured
+            .lock()
+            .expect("captured request mutex should not be poisoned")
+            .take()
+            .expect("auth surface should expose request extensions to its inner service");
+        extensions
+    }
+
+    fn request_with_bearer(path: &str, token: &str) -> Request<Body> {
+        Request::builder()
             .method("POST")
             .uri(path)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
             .body(Body::empty())
-            .expect("test request should build");
-        request.extensions_mut().insert(AuthContext {
-            actor: actor.to_string(),
-            scopes: vec!["tools:read".to_string()],
-            roles: Vec::new(),
-            claims: serde_json::json!({"sub": actor}),
-            azp: Some("client-a".to_string()),
-            subject: Some(actor.to_string()),
-            token_ref: "token-ref".to_string(),
-            raw_token: "raw-token".to_string(),
-        });
+            .expect("test request should build")
+    }
+
+    fn insert_surface_context(request: &mut Request<Body>) {
         request.extensions_mut().insert(AuthSurfaceContext {
             resource_path: "/mcp".to_string(),
-            resource_url: "https://example.invalid/mcp".to_string(),
+            resource_url: "https://service.example/mcp".to_string(),
             issuer: "https://issuer.example".to_string(),
         });
-        request
+    }
+
+    fn assert_invalid_auth_surface_denial(response: &Response<Body>) {
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let decision = response
+            .extensions()
+            .get::<crate::PolicyAuthorityDecision>()
+            .expect("denial should carry decision provenance");
+        assert_eq!(decision.code.as_deref(), Some("INVALID_INPUT"));
+        assert_eq!(
+            decision.reason.as_deref(),
+            Some("auth_surface_request_unverified")
+        );
+        assert_eq!(decision.decision_source, "http_policy.auth_surface");
     }
 }
