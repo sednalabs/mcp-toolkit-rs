@@ -385,8 +385,7 @@ fn traverse_schema_at(
             }
             for (schema_keyword, value) in object {
                 match schema_keyword.as_str() {
-                    "$defs" | "properties" | "patternProperties"
-                    | "dependentSchemas" => {
+                    "$defs" | "properties" | "patternProperties" | "dependentSchemas" => {
                         traverse_schema_map(value, document, policy, state, schema_keyword)?;
                     }
                     "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
@@ -1042,7 +1041,10 @@ mod tests {
             "$defs": {"root": {"type": ["object", null]}}
         });
 
-        assert_eq!(validate_schema_dialect(&direct_object_union, &policy), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&direct_object_union, &policy),
+            Ok(())
+        );
         assert_eq!(
             validate_schema_dialect(&referenced_object_union, &policy),
             Ok(())
@@ -1055,7 +1057,10 @@ mod tests {
             validate_schema_dialect(&referenced_string_union, &policy),
             Err(SchemaDialectError::RootMustBeObject)
         );
-        assert_eq!(validate_schema_dialect(&direct_string_union, &relaxed), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&direct_string_union, &relaxed),
+            Ok(())
+        );
         assert_eq!(
             validate_schema_dialect(&referenced_string_union, &relaxed),
             Ok(())
@@ -1089,7 +1094,10 @@ mod tests {
             }
         });
 
-        assert_eq!(validate_schema_dialect(&schema, &SchemaDialectPolicy::new()), Ok(()));
+        assert_eq!(
+            validate_schema_dialect(&schema, &SchemaDialectPolicy::new()),
+            Ok(())
+        );
     }
 
     #[test]
