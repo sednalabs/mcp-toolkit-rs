@@ -1189,7 +1189,10 @@ mod tests {
             .expect("valid OpenAPI operations");
 
         assert_eq!(
-            tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["work_items.search", "status.ping"]
         );
         assert_eq!(

@@ -376,11 +376,19 @@ fn traverse_schema_at(
             }
         }
         Value::Array(_) => {
-            return Err(invalid_schema_shape(context, "an object or boolean", schema));
+            return Err(invalid_schema_shape(
+                context,
+                "an object or boolean",
+                schema,
+            ));
         }
         Value::Bool(_) => {}
         Value::Null | Value::Number(_) | Value::String(_) => {
-            return Err(invalid_schema_shape(context, "an object or boolean", schema));
+            return Err(invalid_schema_shape(
+                context,
+                "an object or boolean",
+                schema,
+            ));
         }
     }
     Ok(())
@@ -576,7 +584,13 @@ fn traverse_reference_graph_schema_at(
                 traverse_reference_graph_array(value, document, policy, state, schema_keyword)?;
             }
             "items" | "additionalItems" => {
-                traverse_reference_graph_schema_or_array(value, document, policy, state, schema_keyword)?;
+                traverse_reference_graph_schema_or_array(
+                    value,
+                    document,
+                    policy,
+                    state,
+                    schema_keyword,
+                )?;
             }
             "additionalProperties"
             | "contains"
