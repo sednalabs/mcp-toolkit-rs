@@ -48,7 +48,10 @@ pub use config::{
     discover_oidc_metadata, discover_oidc_metadata_from_url, AuthConfig, AuthMode,
     AuthSecurityProfile, ClientAuthMethod, OidcDiscovery,
 };
-pub use context::{auth_context_from_parts, auth_context_ref_from_parts, AuthContext};
+pub use context::{
+    auth_context_from_parts, auth_context_ref_from_parts, verified_auth_context_from_parts,
+    verified_auth_context_ref_from_parts, AuthContext, VerifiedAuthContext,
+};
 pub use dpop::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, DpopParseError, DpopProof,
     DpopProofParseError, DpopToken, SenderConstrainedAuthError,

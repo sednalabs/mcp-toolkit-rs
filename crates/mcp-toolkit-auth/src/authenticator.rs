@@ -15,6 +15,7 @@ use crate::replay::{InMemoryJtiReplayStore, SharedJtiReplayStore};
 use crate::util::{auth_debug_event, hash_identifier, token_ref};
 use crate::{
     AuthConfig, AuthContext, AuthError, AuthMode, DpopProof, DpopToken, SenderConstrainedAuthError,
+    VerifiedAuthContext,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -188,6 +189,26 @@ impl Authenticator {
             bearer_token(headers, self.config.strict_oauth).ok_or(AuthError::MissingToken)?;
         self.authenticate_token_with_binding(&token, TokenBinding::BearerOnly)
             .await
+    }
+
+    /// Authenticates request headers and returns an authenticator-issued context.
+    ///
+    /// # Errors
+    /// Returns [`AuthError`] when the bearer credential is missing or fails
+    /// the configured authentication and replay checks.
+    ///
+    /// # Security
+    /// The returned [`VerifiedAuthContext`] has no public constructor and is
+    /// the appropriate input for downstream operations that need proof this
+    /// exact context came from `Authenticator`, rather than merely trusting
+    /// context-shaped data.
+    pub async fn authenticate_verified_headers(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<VerifiedAuthContext, AuthError> {
+        self.authenticate_headers(headers)
+            .await
+            .map(VerifiedAuthContext::from_authenticator)
     }
 
     pub async fn authenticate_token(

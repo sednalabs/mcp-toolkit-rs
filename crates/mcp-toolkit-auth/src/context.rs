@@ -51,6 +51,50 @@ impl std::fmt::Debug for AuthContext {
     }
 }
 
+/// Authentication context issued by [`crate::Authenticator`].
+///
+/// Unlike [`AuthContext`], this wrapper has no public constructor. It is a
+/// provenance witness for callers that must distinguish an authenticator
+/// result from context-shaped data supplied by another component. The wrapped
+/// context remains available for ordinary authorization and routing; callers
+/// must not treat a bare [`AuthContext`] as proof that authentication occurred.
+#[derive(Clone)]
+pub struct VerifiedAuthContext {
+    context: AuthContext,
+}
+
+impl VerifiedAuthContext {
+    pub(crate) fn from_authenticator(context: AuthContext) -> Self {
+        Self { context }
+    }
+
+    /// Borrows the authenticated request data.
+    ///
+    /// # Security
+    /// The returned [`AuthContext`] is useful for authorization and routing,
+    /// but cloning or reconstructing it does not preserve this wrapper's
+    /// authenticator-issued provenance.
+    pub fn context(&self) -> &AuthContext {
+        &self.context
+    }
+
+    /// Returns the authenticated request data while consuming its witness.
+    ///
+    /// # Security
+    /// The returned [`AuthContext`] no longer carries authenticator-issued
+    /// provenance. Retain `Self` when a downstream operation requires that
+    /// provenance.
+    pub fn into_context(self) -> AuthContext {
+        self.context
+    }
+}
+
+impl std::fmt::Debug for VerifiedAuthContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_tuple("VerifiedAuthContext").field(&self.context).finish()
+    }
+}
+
 /// Retrieves a cloned `AuthContext` from request extensions.
 pub fn auth_context_from_parts(parts: &http::request::Parts) -> Option<AuthContext> {
     parts.extensions.get::<AuthContext>().cloned()
@@ -59,4 +103,18 @@ pub fn auth_context_from_parts(parts: &http::request::Parts) -> Option<AuthConte
 /// Retrieves a reference to `AuthContext` from request extensions.
 pub fn auth_context_ref_from_parts(parts: &http::request::Parts) -> Option<&AuthContext> {
     parts.extensions.get::<AuthContext>()
+}
+
+/// Retrieves an authenticator-issued context from HTTP request parts.
+pub fn verified_auth_context_from_parts(
+    parts: &http::request::Parts,
+) -> Option<VerifiedAuthContext> {
+    parts.extensions.get::<VerifiedAuthContext>().cloned()
+}
+
+/// Borrows an authenticator-issued context from HTTP request parts.
+pub fn verified_auth_context_ref_from_parts(
+    parts: &http::request::Parts,
+) -> Option<&VerifiedAuthContext> {
+    parts.extensions.get::<VerifiedAuthContext>()
 }

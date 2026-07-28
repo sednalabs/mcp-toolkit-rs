@@ -1,5 +1,7 @@
 pub(crate) use crate::auth_context_from_parts;
 pub(crate) use crate::auth_context_ref_from_parts;
+pub(crate) use crate::verified_auth_context_from_parts;
+pub(crate) use crate::verified_auth_context_ref_from_parts;
 pub(crate) use crate::claims::{extract_scopes, merge_claims};
 pub(crate) use crate::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, AuthConfig, AuthContext, AuthError,
@@ -12,7 +14,8 @@ mod tests {
         auth_context_from_parts, auth_context_ref_from_parts, merge_claims,
         parse_strict_dpop_authorization, parse_strict_dpop_proof, AuthConfig, AuthContext,
         AuthError, AuthMode, AuthSecurityProfile, Authenticator, ClientAuthMethod, DpopParseError,
-        InMemoryJtiReplayStore, SenderConstrainedAuthError,
+        InMemoryJtiReplayStore, SenderConstrainedAuthError, verified_auth_context_from_parts,
+        verified_auth_context_ref_from_parts,
     };
     use axum::extract::State;
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode};
@@ -704,6 +707,39 @@ mod tests {
             .expect("ordinary bearer JWT should be accepted");
 
         assert_eq!(context.subject.as_deref(), Some("user-123"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verified_context_is_issued_only_after_bearer_authentication() {
+        let auth = Authenticator::new(delegation_config()).expect("auth");
+        let token = token_with_jti("verified-context-witness");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).expect("header"),
+        );
+
+        let context = auth
+            .authenticate_verified_headers(&headers)
+            .await
+            .expect("ordinary bearer JWT should yield an authenticator-issued context");
+
+        assert_eq!(context.context().subject.as_deref(), Some("user-123"));
+        assert!(!format!("{context:?}").contains(&token));
+
+        let (mut parts, _) = axum::http::Request::new(()).into_parts();
+        parts.extensions.insert(context.clone());
+        assert_eq!(
+            verified_auth_context_from_parts(&parts)
+                .as_ref()
+                .and_then(|value| value.context().subject.as_deref()),
+            Some("user-123")
+        );
+        assert_eq!(
+            verified_auth_context_ref_from_parts(&parts)
+                .and_then(|value| value.context().subject.as_deref()),
+            Some("user-123")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

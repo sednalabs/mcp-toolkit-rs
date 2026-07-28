@@ -1111,10 +1111,10 @@ where
             let mut inner = self.inner.clone();
 
             return Box::pin(async move {
-                match authenticator.authenticate_headers(&headers).await {
+                match authenticator.authenticate_verified_headers(&headers).await {
                     Ok(context) => {
                         if !allowed_client_ids.is_empty() {
-                            let azp = context.azp.as_deref().unwrap_or_default();
+                            let azp = context.context().azp.as_deref().unwrap_or_default();
                             if azp.is_empty() || !allowed_client_ids.contains(azp) {
                                 let err =
                                     AuthError::new("client_id is not allowed for this service")
@@ -1142,7 +1142,9 @@ where
                                 ));
                             }
                         }
-                        req.extensions_mut().insert::<AuthContext>(context);
+                        req.extensions_mut()
+                            .insert::<AuthContext>(context.context().clone());
+                        req.extensions_mut().insert(context);
                         req.extensions_mut()
                             .insert::<AuthSurfaceContext>(AuthSurfaceContext {
                                 resource_path,
