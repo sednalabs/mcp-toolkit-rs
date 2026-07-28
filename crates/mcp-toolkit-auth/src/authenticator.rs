@@ -208,11 +208,9 @@ impl Authenticator {
         &self,
         headers: &HeaderMap,
     ) -> Result<VerifiedAuthContext, AuthError> {
-        self.authenticate_headers(headers)
-            .await
-            .map(|context| {
-                VerifiedAuthContext::from_authenticator(context, self.provenance_marker.clone())
-            })
+        self.authenticate_headers(headers).await.map(|context| {
+            VerifiedAuthContext::from_authenticator(context, self.provenance_marker.clone())
+        })
     }
 
     pub async fn authenticate_token(

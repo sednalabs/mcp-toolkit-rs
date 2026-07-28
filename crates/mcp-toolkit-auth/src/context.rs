@@ -107,7 +107,10 @@ impl VerifiedAuthContext {
 
 impl std::fmt::Debug for VerifiedAuthContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_tuple("VerifiedAuthContext").field(&self.context).finish()
+        formatter
+            .debug_tuple("VerifiedAuthContext")
+            .field(&self.context)
+            .finish()
     }
 }
 

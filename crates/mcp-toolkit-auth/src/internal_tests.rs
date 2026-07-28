@@ -1,8 +1,8 @@
 pub(crate) use crate::auth_context_from_parts;
 pub(crate) use crate::auth_context_ref_from_parts;
+pub(crate) use crate::claims::{extract_scopes, merge_claims};
 pub(crate) use crate::verified_auth_context_from_parts;
 pub(crate) use crate::verified_auth_context_ref_from_parts;
-pub(crate) use crate::claims::{extract_scopes, merge_claims};
 pub(crate) use crate::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, AuthConfig, AuthContext, AuthError,
     AuthMode, AuthSecurityProfile, Authenticator, ClientAuthMethod, DpopParseError,
@@ -12,10 +12,10 @@ pub(crate) use crate::{
 mod tests {
     use super::{
         auth_context_from_parts, auth_context_ref_from_parts, merge_claims,
-        parse_strict_dpop_authorization, parse_strict_dpop_proof, AuthConfig, AuthContext,
-        AuthError, AuthMode, AuthSecurityProfile, Authenticator, ClientAuthMethod, DpopParseError,
-        InMemoryJtiReplayStore, SenderConstrainedAuthError, verified_auth_context_from_parts,
-        verified_auth_context_ref_from_parts,
+        parse_strict_dpop_authorization, parse_strict_dpop_proof, verified_auth_context_from_parts,
+        verified_auth_context_ref_from_parts, AuthConfig, AuthContext, AuthError, AuthMode,
+        AuthSecurityProfile, Authenticator, ClientAuthMethod, DpopParseError,
+        InMemoryJtiReplayStore, SenderConstrainedAuthError,
     };
     use axum::extract::State;
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode};
