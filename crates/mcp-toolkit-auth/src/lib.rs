@@ -61,6 +61,10 @@ pub use mcp_toolkit_http::oauth::AuthorizationServerMetadata;
 pub use replay::{
     InMemoryJtiReplayStore, JtiCache, JtiReplayStore, JtiReplayStoreError, SharedJtiReplayStore,
 };
+pub use surface::{
+    consume_verified_auth_surface_request, consume_verified_auth_surface_request_from_request,
+    AuthSurfaceContext, VerifiedAuthSurfaceRequest,
+};
 
 #[cfg(test)]
 mod internal_tests;

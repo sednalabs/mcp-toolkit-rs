@@ -238,9 +238,20 @@ The contract test is required for every new HTTP MCP server.
    preferably via the generic authorization-server metadata source model.
 3. Wrap the HTTP service/router with `AuthSurfaceLayer`.
 4. Add `PolicyAuthorityLayer` with `AuthControlPlaneHttpMapper` and the same
-   shared `Authenticator` used by `IssuerEntry` for reusable post-auth route,
-   tool, resource, session, project, and scope decisions.
+   shared `Authenticator` used by `IssuerEntry` inside the auth surface for
+   reusable post-auth route, tool, resource, session, project, and scope
+   decisions. The policy gate rejects reversed or bypassed layer topology at
+   runtime.
 5. Configure any `public_paths` or `public_prefixes` for unauthenticated endpoints.
 6. Keep the default unmatched-route behavior unless unrelated routes should
    intentionally pass through the auth surface.
 7. Add the shared auth-surface contract test to CI.
+
+For every request passed to an inner service, the auth surface removes
+pre-existing auth extensions and issues a fresh lifecycle witness bound to the
+method, URI, and authorization header. The policy gate consumes that witness
+once. Captured context from an earlier request, context rebound to another
+route or bearer, and policy middleware placed outside the auth surface all fail
+closed. Public and pass-through routes receive the same lifecycle witness
+without an authenticated principal so explicitly public read-only policy can
+still be evaluated safely.

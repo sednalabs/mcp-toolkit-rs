@@ -11,14 +11,14 @@
 //! container for metadata extracted after successful authentication.
 //!
 //! ## Policy & Guarantees
-//! * **Context Binding**: Provides standard accessors for binding auth state
-//!   to HTTP `Extensions` in middleware.
+//! * **Credential Provenance**: Distinguishes authenticator-issued results from
+//!   context-shaped data supplied by another component.
 //! * **Data Sensitivity**: `Debug` implementation avoids logging the `raw_token` field.
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for:
-//! * Injecting the `AuthContext` into HTTP request extensions after validation.
-//! * Ensuring the context is not mutated after binding to the request.
+//! * Treating bare `AuthContext` values as data rather than authentication proof.
+//! * Using the auth surface's current request witness for HTTP policy decisions.
 //!
 //! ## References
 //! * `crate::authenticator::Authenticator`
@@ -60,10 +60,16 @@ impl std::fmt::Debug for AuthContext {
 /// result from context-shaped data supplied by another component. The wrapped
 /// context remains available for ordinary authorization and routing; callers
 /// must not treat a bare [`AuthContext`] as proof that authentication occurred.
+///
+/// # Security
+/// Authenticator provenance is reusable credential-verification state, not
+/// proof that a particular HTTP request passed the auth surface. HTTP policy
+/// enforcement must consume the separate request-bound auth-surface witness.
 #[derive(Clone)]
 pub struct VerifiedAuthContext {
     context: AuthContext,
     authenticator_marker: Arc<u8>,
+    request_marker: Option<Arc<()>>,
 }
 
 impl VerifiedAuthContext {
@@ -71,7 +77,18 @@ impl VerifiedAuthContext {
         Self {
             context,
             authenticator_marker,
+            request_marker: None,
         }
+    }
+
+    pub(crate) fn bind_to_request(&mut self, request_marker: Arc<()>) {
+        self.request_marker = Some(request_marker);
+    }
+
+    pub(crate) fn is_bound_to_request(&self, request_marker: &Arc<()>) -> bool {
+        self.request_marker
+            .as_ref()
+            .is_some_and(|bound_marker| Arc::ptr_eq(bound_marker, request_marker))
     }
 
     /// Borrows the authenticated request data.
@@ -97,9 +114,10 @@ impl VerifiedAuthContext {
     /// Checks whether this context was issued by the supplied authenticator.
     ///
     /// # Security
-    /// Use this before accepting the wrapper as authority for a downstream
-    /// security-sensitive operation. An independently created authenticator
-    /// cannot issue a context accepted by a different configured instance.
+    /// This proves only which authenticator issued the credential result. It
+    /// does not prove that the current request passed through the auth surface.
+    /// Request authorization must additionally consume the auth surface's
+    /// request-bound witness.
     pub fn is_issued_by(&self, authenticator: &crate::Authenticator) -> bool {
         Arc::ptr_eq(&self.authenticator_marker, &authenticator.provenance_marker)
     }
@@ -128,7 +146,9 @@ pub fn auth_context_ref_from_parts(parts: &http::request::Parts) -> Option<&Auth
 ///
 /// # Security
 /// Returns `None` for a bare [`AuthContext`] or for a witness issued by an
-/// independent authenticator.
+/// independent authenticator. Authenticator provenance alone is not a
+/// request-authorization result; HTTP policy gates must additionally consume
+/// the auth surface's request-bound witness.
 pub fn verified_auth_context_from_parts(
     parts: &http::request::Parts,
     authenticator: &crate::Authenticator,
@@ -140,7 +160,9 @@ pub fn verified_auth_context_from_parts(
 ///
 /// # Security
 /// Returns `None` for a bare [`AuthContext`] or for a witness issued by an
-/// independent authenticator.
+/// independent authenticator. Authenticator provenance alone is not a
+/// request-authorization result; HTTP policy gates must additionally consume
+/// the auth surface's request-bound witness.
 pub fn verified_auth_context_ref_from_parts<'a>(
     parts: &'a http::request::Parts,
     authenticator: &crate::Authenticator,

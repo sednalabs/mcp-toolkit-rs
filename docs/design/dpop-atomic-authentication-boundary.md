@@ -57,6 +57,9 @@ not disclose verifier internals.
    client unless the protocol expressly requires a nonce challenge. Retain the
    returned `VerifiedAuthContext` wherever downstream code requires provenance;
    request-extension retrieval must name the expected authenticator.
+   Authenticator provenance is not a reusable HTTP authorization decision:
+   policy middleware must additionally consume a fresh request-bound surface
+   witness.
 
 ## Trust boundary
 

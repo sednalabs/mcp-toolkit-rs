@@ -33,18 +33,22 @@
 //! * [MCP Authorization Specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization.md)
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
 
 use axum::body::Body;
 use futures_util::future::BoxFuture;
 use http::header::{CONTENT_TYPE, LOCATION, WWW_AUTHENTICATE};
-use http::{HeaderMap, Request, Response, StatusCode};
+use http::{request::Parts, Extensions, HeaderMap, Method, Request, Response, StatusCode, Uri};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tower::Layer;
 
 use crate::challenge::{build_bearer_challenge, BearerChallenge};
-use crate::{AuthContext, AuthError, Authenticator};
+use crate::{AuthContext, AuthError, Authenticator, VerifiedAuthContext};
 use mcp_toolkit_http::oauth::{
     authorization_server_well_known_paths, oidc_metadata_url, oidc_well_known_paths,
     protected_resource_well_known_paths, resource_metadata_default, resource_metadata_hint,
@@ -863,11 +867,260 @@ fn insert_well_known_routes(
 ///
 /// # Panics
 /// * None.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSurfaceContext {
     pub resource_path: String,
     pub resource_url: String,
     pub issuer: String,
+}
+
+#[derive(Debug)]
+struct AuthSurfaceRequestLifecycle {
+    state: AtomicU8,
+}
+
+const AUTH_SURFACE_REQUEST_ACTIVE: u8 = 0;
+const AUTH_SURFACE_REQUEST_CONSUMED: u8 = 1;
+const AUTH_SURFACE_REQUEST_CLOSED: u8 = 2;
+
+#[derive(Clone)]
+struct AuthSurfaceRequestBinding {
+    method: Method,
+    uri: Uri,
+    authorization_digest: [u8; 32],
+    request_marker: Arc<()>,
+    lifecycle: Arc<AuthSurfaceRequestLifecycle>,
+    auth_surface_context: Option<AuthSurfaceContext>,
+}
+
+impl AuthSurfaceRequestBinding {
+    fn begin<B>(
+        request: &Request<B>,
+        request_marker: Arc<()>,
+        auth_surface_context: Option<AuthSurfaceContext>,
+    ) -> (Self, AuthSurfaceRequestGuard) {
+        let lifecycle = Arc::new(AuthSurfaceRequestLifecycle {
+            state: AtomicU8::new(AUTH_SURFACE_REQUEST_ACTIVE),
+        });
+        (
+            Self {
+                method: request.method().clone(),
+                uri: request.uri().clone(),
+                authorization_digest: authorization_digest(request.headers()),
+                request_marker,
+                lifecycle: lifecycle.clone(),
+                auth_surface_context,
+            },
+            AuthSurfaceRequestGuard { lifecycle },
+        )
+    }
+
+    fn matches(&self, method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+        &self.method == method
+            && &self.uri == uri
+            && self.authorization_digest == authorization_digest(headers)
+    }
+
+    fn consume(&self) -> bool {
+        self.lifecycle
+            .state
+            .compare_exchange(
+                AUTH_SURFACE_REQUEST_ACTIVE,
+                AUTH_SURFACE_REQUEST_CONSUMED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+struct AuthSurfaceRequestGuard {
+    lifecycle: Arc<AuthSurfaceRequestLifecycle>,
+}
+
+impl Drop for AuthSurfaceRequestGuard {
+    fn drop(&mut self) {
+        self.lifecycle
+            .state
+            .store(AUTH_SURFACE_REQUEST_CLOSED, Ordering::Release);
+    }
+}
+
+/// Auth and route context from the current auth-surface request lifecycle.
+///
+/// A value exists for both authenticated protected requests and explicitly
+/// public or pass-through requests. Protected requests carry authentication and
+/// surface metadata; public requests carry neither.
+///
+/// # Errors
+/// This type does not emit errors directly.
+///
+/// # Security
+/// Instances are issued only by consuming a live, request-bound auth-surface
+/// witness. They must not be cached as authority for another request.
+///
+/// # Panics
+/// None.
+#[derive(Debug, Clone)]
+pub struct VerifiedAuthSurfaceRequest {
+    auth: Option<AuthContext>,
+    surface: Option<AuthSurfaceContext>,
+}
+
+impl VerifiedAuthSurfaceRequest {
+    /// Borrows the current request's authenticated context, when present.
+    ///
+    /// # Security
+    /// `None` is expected for explicitly public and pass-through requests.
+    /// Protected-route authorization must require `Some`.
+    pub fn auth(&self) -> Option<&AuthContext> {
+        self.auth.as_ref()
+    }
+
+    /// Borrows the current request's protected-resource context, when present.
+    ///
+    /// # Security
+    /// The context is copied from the request-bound auth-surface witness rather
+    /// than from independently mutable request extensions.
+    pub fn surface(&self) -> Option<&AuthSurfaceContext> {
+        self.surface.as_ref()
+    }
+}
+
+/// Consumes the auth surface's witness for the current HTTP request.
+///
+/// Returns `Some` exactly once while the request is executing inside
+/// [`AuthSurfaceLayer`]. Protected requests additionally require a
+/// [`VerifiedAuthContext`] issued by `authenticator` and bound to the same
+/// request lifecycle.
+///
+/// # Errors
+/// Returns `None` for an absent, invalid, expired, or already consumed witness.
+///
+/// # Security
+/// The witness is bound to the exact method, URI, and authorization header.
+/// Missing, stale, replayed, rebound, or independently issued state returns
+/// `None`. Call this at the policy-enforcement boundary, not as a general
+/// request-context accessor.
+///
+/// # Panics
+/// None.
+pub fn consume_verified_auth_surface_request(
+    parts: &Parts,
+    authenticator: &Authenticator,
+) -> Option<VerifiedAuthSurfaceRequest> {
+    consume_verified_auth_surface_request_parts(
+        &parts.method,
+        &parts.uri,
+        &parts.headers,
+        &parts.extensions,
+        authenticator,
+    )
+}
+
+/// Consumes the auth surface's witness from the current HTTP request.
+///
+/// This is the request-form equivalent of
+/// [`consume_verified_auth_surface_request`].
+///
+/// # Errors
+/// Returns `None` for an absent, invalid, expired, or already consumed witness.
+///
+/// # Security
+/// Missing, stale, replayed, rebound, or independently issued state returns
+/// `None`.
+///
+/// # Panics
+/// None.
+pub fn consume_verified_auth_surface_request_from_request<B>(
+    request: &Request<B>,
+    authenticator: &Authenticator,
+) -> Option<VerifiedAuthSurfaceRequest> {
+    consume_verified_auth_surface_request_parts(
+        request.method(),
+        request.uri(),
+        request.headers(),
+        request.extensions(),
+        authenticator,
+    )
+}
+
+fn consume_verified_auth_surface_request_parts(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    extensions: &Extensions,
+    authenticator: &Authenticator,
+) -> Option<VerifiedAuthSurfaceRequest> {
+    let binding = extensions.get::<AuthSurfaceRequestBinding>()?;
+    if !binding.matches(method, uri, headers) {
+        return None;
+    }
+
+    match binding.auth_surface_context.as_ref() {
+        Some(surface) => {
+            let context = extensions.get::<VerifiedAuthContext>()?;
+            if !context.is_issued_by(authenticator)
+                || !context.is_bound_to_request(&binding.request_marker)
+            {
+                return None;
+            }
+            let attached_surface = extensions.get::<AuthSurfaceContext>()?;
+            if attached_surface != surface {
+                return None;
+            }
+            if !binding.consume() {
+                return None;
+            }
+            Some(VerifiedAuthSurfaceRequest {
+                auth: Some(context.context().clone()),
+                surface: Some(surface.clone()),
+            })
+        }
+        None => {
+            if extensions.get::<VerifiedAuthContext>().is_some()
+                || extensions.get::<AuthContext>().is_some()
+                || extensions.get::<AuthSurfaceContext>().is_some()
+            {
+                return None;
+            }
+            if !binding.consume() {
+                return None;
+            }
+            Some(VerifiedAuthSurfaceRequest {
+                auth: None,
+                surface: None,
+            })
+        }
+    }
+}
+
+fn authorization_digest(headers: &HeaderMap) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    let values = headers.get_all(http::header::AUTHORIZATION);
+    digest.update((values.iter().count() as u64).to_be_bytes());
+    for value in values.iter() {
+        let bytes = value.as_bytes();
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    digest.finalize().into()
+}
+
+fn clear_auth_surface_request_state<B>(request: &mut Request<B>) {
+    let _ = request.extensions_mut().remove::<AuthContext>();
+    let _ = request.extensions_mut().remove::<VerifiedAuthContext>();
+    let _ = request.extensions_mut().remove::<AuthSurfaceContext>();
+    let _ = request
+        .extensions_mut()
+        .remove::<AuthSurfaceRequestBinding>();
+}
+
+fn begin_public_request<B>(request: &mut Request<B>) -> AuthSurfaceRequestGuard {
+    let request_marker = Arc::new(());
+    let (binding, guard) = AuthSurfaceRequestBinding::begin(request, request_marker, None);
+    request.extensions_mut().insert(binding);
+    guard
 }
 
 /// Sanitized auth failure event emitted by [`AuthSurfaceLayer`].
@@ -1083,6 +1336,7 @@ where
     }
 
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
+        clear_auth_surface_request_state(&mut req);
         let path = normalize_request_path(req.uri().path());
         let registry = self.registry.clone();
         let auth_failure_observer = self.auth_failure_observer.clone();
@@ -1093,8 +1347,12 @@ where
         }
 
         if registry.is_public_path(&path) {
+            let guard = begin_public_request(&mut req);
             let fut = self.inner.call(req);
-            return Box::pin(fut);
+            return Box::pin(async move {
+                let _guard = guard;
+                fut.await
+            });
         }
 
         if let Some(entry) = registry.match_entry(&path) {
@@ -1112,7 +1370,7 @@ where
 
             return Box::pin(async move {
                 match authenticator.authenticate_headers(&headers).await {
-                    Ok(context) => {
+                    Ok(mut context) => {
                         if !allowed_client_ids.is_empty() {
                             let azp = context.context().azp.as_deref().unwrap_or_default();
                             if azp.is_empty() || !allowed_client_ids.contains(azp) {
@@ -1142,15 +1400,25 @@ where
                                 ));
                             }
                         }
+                        let surface_context = AuthSurfaceContext {
+                            resource_path,
+                            resource_url,
+                            issuer,
+                        };
+                        let request_marker = Arc::new(());
+                        context.bind_to_request(request_marker.clone());
+                        let (binding, guard) = AuthSurfaceRequestBinding::begin(
+                            &req,
+                            request_marker,
+                            Some(surface_context.clone()),
+                        );
                         req.extensions_mut()
                             .insert::<AuthContext>(context.context().clone());
                         req.extensions_mut().insert(context);
                         req.extensions_mut()
-                            .insert::<AuthSurfaceContext>(AuthSurfaceContext {
-                                resource_path,
-                                resource_url,
-                                issuer,
-                            });
+                            .insert::<AuthSurfaceContext>(surface_context);
+                        req.extensions_mut().insert(binding);
+                        let _guard = guard;
                         inner.call(req).await
                     }
                     Err(err) => {
@@ -1182,8 +1450,12 @@ where
             return Box::pin(async move { Ok(unmatched_route_response()) });
         }
 
+        let guard = begin_public_request(&mut req);
         let fut = self.inner.call(req);
-        Box::pin(fut)
+        Box::pin(async move {
+            let _guard = guard;
+            fut.await
+        })
     }
 }
 
