@@ -1191,7 +1191,7 @@ mod tests {
         assert_eq!(
             tools
                 .iter()
-                .map(|tool| tool.name.as_str())
+                .map(|tool| tool.name.as_ref())
                 .collect::<Vec<_>>(),
             vec!["work_items.search", "status.ping"]
         );
