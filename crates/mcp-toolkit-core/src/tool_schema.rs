@@ -138,6 +138,15 @@ pub enum SchemaDialectError {
     ReferenceDepthExceeded { max_reference_depth: usize },
     /// Traversal exceeded the configured JSON-value budget.
     NodeBudgetExceeded { max_nodes: usize },
+    /// A schema-bearing keyword contained a value with an invalid JSON shape.
+    InvalidSchemaShape {
+        /// The schema keyword whose value had the invalid shape.
+        keyword: String,
+        /// The JSON shape required at this position.
+        expected: &'static str,
+        /// The JSON shape that was supplied.
+        actual: &'static str,
+    },
 }
 
 impl Display for SchemaDialectError {
@@ -181,6 +190,14 @@ impl Display for SchemaDialectError {
                     "schema exceeds configured node budget of {max_nodes}"
                 )
             }
+            Self::InvalidSchemaShape {
+                keyword,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "schema keyword `{keyword}` requires {expected}, got {actual}"
+            ),
         }
     }
 }
@@ -195,8 +212,11 @@ impl std::error::Error for SchemaDialectError {}
 /// validator checks configured forbidden keys on every submitted or referenced
 /// root-chain schema, then counts and validates every raw document node once
 /// within the supplied node budget. Reference-chain validation is separate, so
-/// following a `$ref` cannot inflate whole-document accounting. `$dynamicRef`
-/// and `$recursiveRef` are not supported and are rejected in schema positions.
+/// following a `$ref` cannot inflate whole-document accounting. Schema-bearing
+/// map and composition containers must have their required object or array
+/// shape, and each contained schema must be an object or permitted boolean
+/// schema. `$dynamicRef` and `$recursiveRef` are not supported and are rejected
+/// in schema positions.
 ///
 /// A root `$ref` may have sibling keywords under modern JSON Schema semantics.
 /// When object-root enforcement is enabled, both an explicit root `type`
@@ -207,7 +227,8 @@ impl std::error::Error for SchemaDialectError {}
 /// Returns an error if the root violates the policy, a reference is not a
 /// bounded local `$defs` reference, a local reference cannot be resolved, a
 /// reference cycle is found, an unsupported reference keyword or JSON Pointer
-/// escape is used, or either traversal budget is exceeded.
+/// escape is used, a schema-bearing value has an invalid shape, or either
+/// traversal budget is exceeded.
 ///
 /// # Security
 /// The function never follows remote references and bounds work performed on
@@ -306,6 +327,16 @@ fn traverse_schema(
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
 ) -> Result<(), SchemaDialectError> {
+    traverse_schema_at(schema, document, policy, state, "<schema>")
+}
+
+fn traverse_schema_at(
+    schema: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+    context: &str,
+) -> Result<(), SchemaDialectError> {
     count_node(policy, state)?;
     match schema {
         Value::Object(object) => {
@@ -313,17 +344,17 @@ fn traverse_schema(
             if let Some(reference) = object.get("$ref") {
                 validate_reference_graph(reference, document, policy, state)?;
             }
-            for (keyword, value) in object {
-                match keyword.as_str() {
+            for (schema_keyword, value) in object {
+                match schema_keyword.as_str() {
                     "$defs" | "definitions" | "properties" | "patternProperties"
                     | "dependentSchemas" => {
-                        traverse_schema_map(value, document, policy, state)?;
+                        traverse_schema_map(value, document, policy, state, schema_keyword)?;
                     }
                     "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
-                        traverse_schema_array(value, document, policy, state)?;
+                        traverse_schema_array(value, document, policy, state, schema_keyword)?;
                     }
                     "items" | "additionalItems" => {
-                        traverse_schema_or_array(value, document, policy, state)?;
+                        traverse_schema_or_array(value, document, policy, state, schema_keyword)?;
                     }
                     "additionalProperties"
                     | "contains"
@@ -335,7 +366,7 @@ fn traverse_schema(
                     | "unevaluatedProperties"
                     | "unevaluatedItems"
                     | "contentSchema" => {
-                        traverse_schema(value, document, policy, state)?;
+                        traverse_schema_at(value, document, policy, state, schema_keyword)?;
                     }
                     "dependencies" => {
                         traverse_dependencies(value, document, policy, state)?;
@@ -344,14 +375,38 @@ fn traverse_schema(
                 }
             }
         }
-        Value::Array(values) => {
-            for value in values {
-                traverse_data(value, policy, state)?;
-            }
+        Value::Array(_) => {
+            return Err(invalid_schema_shape(context, "an object or boolean", schema));
         }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        Value::Bool(_) => {}
+        Value::Null | Value::Number(_) | Value::String(_) => {
+            return Err(invalid_schema_shape(context, "an object or boolean", schema));
+        }
     }
     Ok(())
+}
+
+fn invalid_schema_shape(
+    keyword: &str,
+    expected: &'static str,
+    value: &Value,
+) -> SchemaDialectError {
+    SchemaDialectError::InvalidSchemaShape {
+        keyword: keyword.to_string(),
+        expected,
+        actual: json_shape(value),
+    }
+}
+
+fn json_shape(value: &Value) -> &'static str {
+    match value {
+        Value::Object(_) => "an object",
+        Value::Array(_) => "an array",
+        Value::Bool(_) => "a boolean",
+        Value::Null => "null",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+    }
 }
 
 fn reject_unsupported_reference_keywords(
@@ -370,13 +425,14 @@ fn traverse_schema_map(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
+    keyword: &str,
 ) -> Result<(), SchemaDialectError> {
-    let Some(schemas) = schemas.as_object() else {
-        return traverse_data(schemas, policy, state);
-    };
+    let schemas = schemas
+        .as_object()
+        .ok_or_else(|| invalid_schema_shape(keyword, "an object", schemas))?;
     count_node(policy, state)?;
     for schema in schemas.values() {
-        traverse_schema(schema, document, policy, state)?;
+        traverse_schema_at(schema, document, policy, state, keyword)?;
     }
     Ok(())
 }
@@ -386,13 +442,14 @@ fn traverse_schema_array(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
+    keyword: &str,
 ) -> Result<(), SchemaDialectError> {
-    let Some(schemas) = schemas.as_array() else {
-        return traverse_data(schemas, policy, state);
-    };
+    let schemas = schemas
+        .as_array()
+        .ok_or_else(|| invalid_schema_shape(keyword, "an array", schemas))?;
     count_node(policy, state)?;
     for schema in schemas {
-        traverse_schema(schema, document, policy, state)?;
+        traverse_schema_at(schema, document, policy, state, keyword)?;
     }
     Ok(())
 }
@@ -402,11 +459,12 @@ fn traverse_schema_or_array(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
+    keyword: &str,
 ) -> Result<(), SchemaDialectError> {
     if schema.is_array() {
-        traverse_schema_array(schema, document, policy, state)
+        traverse_schema_array(schema, document, policy, state, keyword)
     } else {
-        traverse_schema(schema, document, policy, state)
+        traverse_schema_at(schema, document, policy, state, keyword)
     }
 }
 
@@ -417,12 +475,22 @@ fn traverse_dependencies(
     state: &mut SchemaTraversalState,
 ) -> Result<(), SchemaDialectError> {
     let Some(dependencies) = dependencies.as_object() else {
-        return traverse_data(dependencies, policy, state);
+        return Err(invalid_schema_shape(
+            "dependencies",
+            "an object",
+            dependencies,
+        ));
     };
     count_node(policy, state)?;
     for dependency in dependencies.values() {
         if dependency.is_object() || dependency.is_boolean() {
-            traverse_schema(dependency, document, policy, state)?;
+            traverse_schema_at(dependency, document, policy, state, "dependencies")?;
+        } else if !dependency.is_array() {
+            return Err(invalid_schema_shape(
+                "dependencies",
+                "a schema object, boolean, or array",
+                dependency,
+            ));
         } else {
             traverse_data(dependency, policy, state)?;
         }
@@ -474,24 +542,41 @@ fn traverse_reference_graph_schema(
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
 ) -> Result<(), SchemaDialectError> {
+    traverse_reference_graph_schema_at(schema, document, policy, state, "<schema>")
+}
+
+fn traverse_reference_graph_schema_at(
+    schema: &Value,
+    document: &Value,
+    policy: &SchemaDialectPolicy,
+    state: &mut SchemaTraversalState,
+    context: &str,
+) -> Result<(), SchemaDialectError> {
     count_reference_graph_node(policy, state)?;
     let Some(object) = schema.as_object() else {
-        return Ok(());
+        if schema.is_boolean() {
+            return Ok(());
+        }
+        return Err(invalid_schema_shape(
+            context,
+            "an object or boolean",
+            schema,
+        ));
     };
     reject_unsupported_reference_keywords(object)?;
     if let Some(reference) = object.get("$ref") {
         validate_reference_graph(reference, document, policy, state)?;
     }
-    for (keyword, value) in object {
-        match keyword.as_str() {
+    for (schema_keyword, value) in object {
+        match schema_keyword.as_str() {
             "$defs" | "definitions" | "properties" | "patternProperties" | "dependentSchemas" => {
-                traverse_reference_graph_map(value, document, policy, state)?;
+                traverse_reference_graph_map(value, document, policy, state, schema_keyword)?;
             }
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
-                traverse_reference_graph_array(value, document, policy, state)?;
+                traverse_reference_graph_array(value, document, policy, state, schema_keyword)?;
             }
             "items" | "additionalItems" => {
-                traverse_reference_graph_schema_or_array(value, document, policy, state)?;
+                traverse_reference_graph_schema_or_array(value, document, policy, state, schema_keyword)?;
             }
             "additionalProperties"
             | "contains"
@@ -503,7 +588,7 @@ fn traverse_reference_graph_schema(
             | "unevaluatedProperties"
             | "unevaluatedItems"
             | "contentSchema" => {
-                traverse_reference_graph_schema(value, document, policy, state)?;
+                traverse_reference_graph_schema_at(value, document, policy, state, schema_keyword)?;
             }
             "dependencies" => {
                 traverse_reference_graph_dependencies(value, document, policy, state)?;
@@ -519,12 +604,13 @@ fn traverse_reference_graph_map(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
+    keyword: &str,
 ) -> Result<(), SchemaDialectError> {
-    let Some(schemas) = schemas.as_object() else {
-        return Ok(());
-    };
+    let schemas = schemas
+        .as_object()
+        .ok_or_else(|| invalid_schema_shape(keyword, "an object", schemas))?;
     for schema in schemas.values() {
-        traverse_reference_graph_schema(schema, document, policy, state)?;
+        traverse_reference_graph_schema_at(schema, document, policy, state, keyword)?;
     }
     Ok(())
 }
@@ -534,12 +620,13 @@ fn traverse_reference_graph_array(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
+    keyword: &str,
 ) -> Result<(), SchemaDialectError> {
-    let Some(schemas) = schemas.as_array() else {
-        return Ok(());
-    };
+    let schemas = schemas
+        .as_array()
+        .ok_or_else(|| invalid_schema_shape(keyword, "an array", schemas))?;
     for schema in schemas {
-        traverse_reference_graph_schema(schema, document, policy, state)?;
+        traverse_reference_graph_schema_at(schema, document, policy, state, keyword)?;
     }
     Ok(())
 }
@@ -549,11 +636,12 @@ fn traverse_reference_graph_schema_or_array(
     document: &Value,
     policy: &SchemaDialectPolicy,
     state: &mut SchemaTraversalState,
+    keyword: &str,
 ) -> Result<(), SchemaDialectError> {
     if schema.is_array() {
-        traverse_reference_graph_array(schema, document, policy, state)
+        traverse_reference_graph_array(schema, document, policy, state, keyword)
     } else {
-        traverse_reference_graph_schema(schema, document, policy, state)
+        traverse_reference_graph_schema_at(schema, document, policy, state, keyword)
     }
 }
 
@@ -564,11 +652,27 @@ fn traverse_reference_graph_dependencies(
     state: &mut SchemaTraversalState,
 ) -> Result<(), SchemaDialectError> {
     let Some(dependencies) = dependencies.as_object() else {
-        return Ok(());
+        return Err(invalid_schema_shape(
+            "dependencies",
+            "an object",
+            dependencies,
+        ));
     };
     for dependency in dependencies.values() {
         if dependency.is_object() || dependency.is_boolean() {
-            traverse_reference_graph_schema(dependency, document, policy, state)?;
+            traverse_reference_graph_schema_at(
+                dependency,
+                document,
+                policy,
+                state,
+                "dependencies",
+            )?;
+        } else if !dependency.is_array() {
+            return Err(invalid_schema_shape(
+                "dependencies",
+                "a schema object, boolean, or array",
+                dependency,
+            ));
         }
     }
     Ok(())
@@ -964,6 +1068,133 @@ mod tests {
             Err(SchemaDialectError::UnsupportedReferenceKeyword {
                 keyword: "$recursiveRef",
             })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_malformed_schema_containers_before_reference_values() {
+        let policy = SchemaDialectPolicy::new();
+        let malformed_containers = [
+            (
+                json!({
+                    "type": "object",
+                    "$defs": [
+                        {"$ref": "https://example.invalid/remote"},
+                        {"$dynamicRef": "#/$defs/dynamic"},
+                        {"$recursiveRef": "#/$defs/recursive"}
+                    ]
+                }),
+                SchemaDialectError::InvalidSchemaShape {
+                    keyword: "$defs".to_string(),
+                    expected: "an object",
+                    actual: "an array",
+                },
+            ),
+            (
+                json!({
+                    "type": "object",
+                    "properties": [
+                        {"$ref": "https://example.invalid/remote"},
+                        {"$dynamicRef": "#/$defs/dynamic"},
+                        {"$recursiveRef": "#/$defs/recursive"}
+                    ]
+                }),
+                SchemaDialectError::InvalidSchemaShape {
+                    keyword: "properties".to_string(),
+                    expected: "an object",
+                    actual: "an array",
+                },
+            ),
+            (
+                json!({
+                    "type": "object",
+                    "allOf": {
+                        "remote": {"$ref": "https://example.invalid/remote"},
+                        "dynamic": {"$dynamicRef": "#/$defs/dynamic"},
+                        "recursive": {"$recursiveRef": "#/$defs/recursive"}
+                    }
+                }),
+                SchemaDialectError::InvalidSchemaShape {
+                    keyword: "allOf".to_string(),
+                    expected: "an array",
+                    actual: "an object",
+                },
+            ),
+        ];
+
+        for (schema, expected) in malformed_containers {
+            assert_eq!(validate_schema_dialect(&schema, &policy), Err(expected));
+        }
+    }
+
+    #[test]
+    fn dialect_validation_rejects_malformed_containers_in_reference_graph() {
+        let schema = json!({
+            "$ref": "#/$defs/root",
+            "$defs": {
+                "root": {
+                    "type": "object",
+                    "properties": [
+                        {"$ref": "https://example.invalid/remote"},
+                        {"$dynamicRef": "#/$defs/dynamic"},
+                        {"$recursiveRef": "#/$defs/recursive"}
+                    ]
+                }
+            }
+        });
+
+        assert_eq!(
+            validate_schema_dialect(&schema, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::InvalidSchemaShape {
+                keyword: "properties".to_string(),
+                expected: "an object",
+                actual: "an array",
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_invalid_scalar_schema_values_but_accepts_booleans() {
+        let malformed = [
+            (
+                json!({
+                    "type": "object",
+                    "properties": {"child": "invalid"}
+                }),
+                SchemaDialectError::InvalidSchemaShape {
+                    keyword: "properties".to_string(),
+                    expected: "an object or boolean",
+                    actual: "a string",
+                },
+            ),
+            (
+                json!({"type": "object", "allOf": [null]}),
+                SchemaDialectError::InvalidSchemaShape {
+                    keyword: "allOf".to_string(),
+                    expected: "an object or boolean",
+                    actual: "null",
+                },
+            ),
+        ];
+
+        for (schema, expected) in malformed {
+            assert_eq!(
+                validate_schema_dialect(&schema, &SchemaDialectPolicy::new()),
+                Err(expected)
+            );
+        }
+
+        let boolean_schemas = json!({
+            "type": "object",
+            "$defs": {"allow": true},
+            "properties": {"allow": false},
+            "allOf": [true],
+            "items": false,
+            "additionalProperties": true
+        });
+        assert_eq!(
+            validate_schema_dialect(&boolean_schemas, &SchemaDialectPolicy::new()),
+            Ok(())
         );
     }
 
