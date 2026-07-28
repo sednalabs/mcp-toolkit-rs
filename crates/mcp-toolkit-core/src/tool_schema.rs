@@ -338,7 +338,12 @@ fn root_type_includes_object(type_value: Option<&Value>) -> Result<bool, SchemaD
 
     match type_value {
         None => Ok(false),
-        Some(Value::String(type_name)) => Ok(type_name == "object"),
+        Some(Value::String(type_name)) => {
+            if !VALID_TYPES.contains(&type_name.as_str()) {
+                return Err(SchemaDialectError::RootMustBeObject);
+            }
+            Ok(type_name == "object")
+        }
         Some(Value::Array(type_names)) => {
             if type_names.is_empty() {
                 return Err(SchemaDialectError::RootMustBeObject);
@@ -1035,6 +1040,7 @@ mod tests {
             json!({"type": []}),
             json!({"type": ["object", 1]}),
             json!({"type": ["object", "object"]}),
+            json!({"type": "unknown"}),
         ];
         let malformed_referenced = json!({
             "$ref": "#/$defs/root",
