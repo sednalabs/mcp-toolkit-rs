@@ -52,6 +52,7 @@ pub struct Authenticator {
     pub(crate) introspection_cache: Option<Arc<RwLock<IntrospectionCache>>>,
     pub(crate) jwks_cache: Option<Arc<JwksCache>>,
     pub(crate) client: Client,
+    pub(crate) provenance_marker: Arc<u8>,
 }
 
 impl Authenticator {
@@ -178,6 +179,7 @@ impl Authenticator {
             introspection_cache,
             jwks_cache,
             client: Client::new(),
+            provenance_marker: Arc::new(0),
         })
     }
 
@@ -208,7 +210,9 @@ impl Authenticator {
     ) -> Result<VerifiedAuthContext, AuthError> {
         self.authenticate_headers(headers)
             .await
-            .map(VerifiedAuthContext::from_authenticator)
+            .map(|context| {
+                VerifiedAuthContext::from_authenticator(context, self.provenance_marker.clone())
+            })
     }
 
     pub async fn authenticate_token(

@@ -23,6 +23,8 @@
 //! ## References
 //! * `crate::authenticator::Authenticator`
 
+use std::sync::Arc;
+
 use serde_json::Value;
 
 /// Authentication and authorization metadata for an MCP request.
@@ -61,11 +63,15 @@ impl std::fmt::Debug for AuthContext {
 #[derive(Clone)]
 pub struct VerifiedAuthContext {
     context: AuthContext,
+    authenticator_marker: Arc<u8>,
 }
 
 impl VerifiedAuthContext {
-    pub(crate) fn from_authenticator(context: AuthContext) -> Self {
-        Self { context }
+    pub(crate) fn from_authenticator(context: AuthContext, authenticator_marker: Arc<u8>) -> Self {
+        Self {
+            context,
+            authenticator_marker,
+        }
     }
 
     /// Borrows the authenticated request data.
@@ -86,6 +92,16 @@ impl VerifiedAuthContext {
     /// provenance.
     pub fn into_context(self) -> AuthContext {
         self.context
+    }
+
+    /// Checks whether this context was issued by the supplied authenticator.
+    ///
+    /// # Security
+    /// Use this before accepting the wrapper as authority for a downstream
+    /// security-sensitive operation. An independently created authenticator
+    /// cannot issue a context accepted by a different configured instance.
+    pub fn is_issued_by(&self, authenticator: &crate::Authenticator) -> bool {
+        Arc::ptr_eq(&self.authenticator_marker, &authenticator.provenance_marker)
     }
 }
 

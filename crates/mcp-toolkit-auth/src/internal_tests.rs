@@ -726,6 +726,13 @@ mod tests {
 
         assert_eq!(context.context().subject.as_deref(), Some("user-123"));
         assert!(!format!("{context:?}").contains(&token));
+        assert!(context.is_issued_by(&auth));
+        assert!(
+            !context.is_issued_by(
+                &Authenticator::new(delegation_config()).expect("independent authenticator")
+            ),
+            "a context issued by another authenticator must not share this provenance"
+        );
 
         let (mut parts, _) = axum::http::Request::new(()).into_parts();
         parts.extensions.insert(context.clone());
