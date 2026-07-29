@@ -48,7 +48,10 @@ pub use config::{
     discover_oidc_metadata, discover_oidc_metadata_from_url, AuthConfig, AuthMode,
     AuthSecurityProfile, ClientAuthMethod, OidcDiscovery,
 };
-pub use context::{auth_context_from_parts, auth_context_ref_from_parts, AuthContext};
+pub use context::{
+    auth_context_from_parts, auth_context_ref_from_parts, verified_auth_context_from_parts,
+    verified_auth_context_ref_from_parts, AuthContext, VerifiedAuthContext,
+};
 pub use dpop::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, DpopParseError, DpopProof,
     DpopProofParseError, DpopToken, SenderConstrainedAuthError,
@@ -57,6 +60,10 @@ pub use error::{AuthError, AuthErrorContract};
 pub use mcp_toolkit_http::oauth::AuthorizationServerMetadata;
 pub use replay::{
     InMemoryJtiReplayStore, JtiCache, JtiReplayStore, JtiReplayStoreError, SharedJtiReplayStore,
+};
+pub use surface::{
+    consume_verified_auth_surface_request, consume_verified_auth_surface_request_from_request,
+    AuthSurfaceContext, VerifiedAuthSurfaceRequest,
 };
 
 #[cfg(test)]

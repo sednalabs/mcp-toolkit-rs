@@ -15,6 +15,7 @@ use crate::replay::{InMemoryJtiReplayStore, SharedJtiReplayStore};
 use crate::util::{auth_debug_event, hash_identifier, token_ref};
 use crate::{
     AuthConfig, AuthContext, AuthError, AuthMode, DpopProof, DpopToken, SenderConstrainedAuthError,
+    VerifiedAuthContext,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +52,7 @@ pub struct Authenticator {
     pub(crate) introspection_cache: Option<Arc<RwLock<IntrospectionCache>>>,
     pub(crate) jwks_cache: Option<Arc<JwksCache>>,
     pub(crate) client: Client,
+    pub(crate) provenance_marker: Arc<u8>,
 }
 
 impl Authenticator {
@@ -177,26 +179,50 @@ impl Authenticator {
             introspection_cache,
             jwks_cache,
             client: Client::new(),
+            provenance_marker: Arc::new(0),
         })
     }
 
+    /// Authenticates a bearer credential from request headers.
+    ///
+    /// # Errors
+    /// Returns [`AuthError`] when the bearer credential is missing or fails
+    /// the configured authentication and replay checks.
+    ///
+    /// # Security
+    /// The returned [`VerifiedAuthContext`] is bound to this authenticator.
+    /// Trusted consumers must retain the wrapper when provenance matters.
     pub async fn authenticate_headers(
         &self,
         headers: &HeaderMap,
-    ) -> Result<AuthContext, AuthError> {
+    ) -> Result<VerifiedAuthContext, AuthError> {
         let token =
             bearer_token(headers, self.config.strict_oauth).ok_or(AuthError::MissingToken)?;
-        self.authenticate_token_with_binding(&token, TokenBinding::BearerOnly)
-            .await
+        let context = self
+            .authenticate_token_with_binding(&token, TokenBinding::BearerOnly)
+            .await?;
+        Ok(self.issue_verified_context(context))
     }
 
+    /// Authenticates a bearer token supplied directly by a trusted transport.
+    ///
+    /// # Errors
+    /// Returns [`AuthError`] when the token fails the configured authentication
+    /// and replay checks.
+    ///
+    /// # Security
+    /// The returned [`VerifiedAuthContext`] is bound to this authenticator.
+    /// The caller remains responsible for extracting `token` from a trusted
+    /// transport boundary.
     pub async fn authenticate_token(
         &self,
         _headers: &HeaderMap,
         token: &str,
-    ) -> Result<AuthContext, AuthError> {
-        self.authenticate_token_with_binding(token, TokenBinding::BearerOnly)
-            .await
+    ) -> Result<VerifiedAuthContext, AuthError> {
+        let context = self
+            .authenticate_token_with_binding(token, TokenBinding::BearerOnly)
+            .await?;
+        Ok(self.issue_verified_context(context))
     }
 
     /// Authenticates a sender-constrained token with an exact DPoP proof.
@@ -230,7 +256,7 @@ impl Authenticator {
         expected_htm: &str,
         verifier: &DpopVerifier,
         replay_store: &mut S,
-    ) -> Result<AuthContext, SenderConstrainedAuthError> {
+    ) -> Result<VerifiedAuthContext, SenderConstrainedAuthError> {
         let access_token = access_token.as_str();
         let context = self
             .authenticate_token_with_binding(access_token, TokenBinding::SenderConstrained)
@@ -267,7 +293,11 @@ impl Authenticator {
                 "token_ref": context.token_ref,
             }),
         );
-        Ok(context)
+        Ok(self.issue_verified_context(context))
+    }
+
+    fn issue_verified_context(&self, context: AuthContext) -> VerifiedAuthContext {
+        VerifiedAuthContext::from_authenticator(context, self.provenance_marker.clone())
     }
 
     async fn authenticate_token_with_binding(

@@ -7,7 +7,7 @@
 `dpop-verifier` 4.4.0 itself with the raw compact proof, the exact access
 token, canonical HTTP target and method, a configured `DpopVerifier`, and the
 resource server's `ReplayStore`. It then compares the verified JKT with
-`cnf.jkt` before returning an authentication context.
+`cnf.jkt` before returning an authenticator-bound `VerifiedAuthContext`.
 
 The operation accepts only `DpopToken` and `DpopProof` values produced by the
 strict header parsers. Raw strings and ordinary Bearer credentials cannot be
@@ -15,7 +15,9 @@ passed to the supported sender-constrained entrypoint. Both credential wrappers
 redact their `Debug` representation.
 
 Ordinary `authenticate_headers` and `authenticate_token` remain strictly
-Bearer-only. They reject every token that carries a `cnf` claim.
+Bearer-only. They reject every token that carries a `cnf` claim, and successful
+calls return the same authenticator-bound context type as the sender-constrained
+entrypoint.
 
 ## Rationale
 
@@ -52,7 +54,12 @@ not disclose verifier internals.
    provide one shared, atomic `ReplayStore` across workers.
 4. Call `authenticate_sender_constrained_dpop` exactly once. Map its typed
    `DpopError` only in trusted transport code; return generic failures to the
-   client unless the protocol expressly requires a nonce challenge.
+   client unless the protocol expressly requires a nonce challenge. Retain the
+   returned `VerifiedAuthContext` wherever downstream code requires provenance;
+   request-extension retrieval must name the expected authenticator.
+   Authenticator provenance is not a reusable HTTP authorization decision:
+   policy middleware must additionally consume a fresh request-bound surface
+   witness.
 
 ## Trust boundary
 
