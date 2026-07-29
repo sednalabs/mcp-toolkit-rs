@@ -378,17 +378,31 @@ fn charge_json_string_bytes(
     policy: &SchemaDialectPolicy,
     budget: &mut SchemaInputBudget,
 ) -> Result<(), SchemaDialectError> {
-    let mut extra_bytes = 2usize;
-    extra_bytes = extra_bytes.saturating_add(value.len());
+    // Each counter is bounded by `value.len()`. Only the weighted aggregation
+    // can overflow, and that arithmetic remains checked and fail-closed.
+    let mut two_byte_escape_count = 0usize;
+    let mut six_byte_escape_count = 0usize;
     for byte in value.bytes() {
-        let escaped_extra_bytes = match byte {
-            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
-            0x00..=0x1f => 5,
-            _ => 0,
-        };
-        extra_bytes = extra_bytes.saturating_add(escaped_extra_bytes);
+        match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => {
+                two_byte_escape_count += 1;
+            }
+            0x00..=0x1f => {
+                six_byte_escape_count += 1;
+            }
+            _ => {}
+        }
     }
-    charge_input_bytes(extra_bytes, policy, budget)
+    let escaped_extra_bytes = six_byte_escape_count
+        .checked_mul(5)
+        .and_then(|six_byte_extra| two_byte_escape_count.checked_add(six_byte_extra))
+        .ok_or_else(|| input_budget_exceeded(policy))?;
+    let serialized_bytes = value
+        .len()
+        .checked_add(2)
+        .and_then(|quoted_bytes| quoted_bytes.checked_add(escaped_extra_bytes))
+        .ok_or_else(|| input_budget_exceeded(policy))?;
+    charge_input_bytes(serialized_bytes, policy, budget)
 }
 
 fn charge_input_bytes(
@@ -396,19 +410,20 @@ fn charge_input_bytes(
     policy: &SchemaDialectPolicy,
     budget: &mut SchemaInputBudget,
 ) -> Result<(), SchemaDialectError> {
-    budget.bytes =
-        budget
-            .bytes
-            .checked_add(bytes)
-            .ok_or(SchemaDialectError::InputBudgetExceeded {
-                max_input_bytes: policy.max_input_bytes,
-            })?;
+    budget.bytes = budget
+        .bytes
+        .checked_add(bytes)
+        .ok_or_else(|| input_budget_exceeded(policy))?;
     if budget.bytes > policy.max_input_bytes {
-        return Err(SchemaDialectError::InputBudgetExceeded {
-            max_input_bytes: policy.max_input_bytes,
-        });
+        return Err(input_budget_exceeded(policy));
     }
     Ok(())
+}
+
+fn input_budget_exceeded(policy: &SchemaDialectPolicy) -> SchemaDialectError {
+    SchemaDialectError::InputBudgetExceeded {
+        max_input_bytes: policy.max_input_bytes,
+    }
 }
 
 fn check_root_keywords(
@@ -1143,8 +1158,9 @@ fn canonicalize_json(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        tool_names, tool_schema_snapshot_value, validate_schema_dialect, SchemaDialectError,
-        SchemaDialectPolicy, SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
+        charge_json_string_bytes, tool_names, tool_schema_snapshot_value, validate_schema_dialect,
+        SchemaDialectError, SchemaDialectPolicy, SchemaInputBudget,
+        SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
     };
     use serde_json::{json, Map, Value};
 
@@ -1255,6 +1271,27 @@ mod tests {
             })
         );
 
+        let escaped_string_schema = json!({
+            "type": "object",
+            "const": "\"\\\u{0000}\n"
+        });
+        assert_eq!(
+            validate_schema_dialect(
+                &escaped_string_schema,
+                &SchemaDialectPolicy::new().with_max_input_bytes(40),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &escaped_string_schema,
+                &SchemaDialectPolicy::new().with_max_input_bytes(39),
+            ),
+            Err(SchemaDialectError::InputBudgetExceeded {
+                max_input_bytes: 39,
+            })
+        );
+
         let reference = "#/$defs/root";
         let referenced_schema = json!({
             "$ref": reference,
@@ -1276,6 +1313,32 @@ mod tests {
                 max_reference_bytes: reference.len() - 1,
             })
         );
+    }
+
+    #[test]
+    fn dialect_string_byte_charge_fails_closed_at_usize_boundary() {
+        let policy = SchemaDialectPolicy::new().with_max_input_bytes(usize::MAX);
+        let mut exact_budget = SchemaInputBudget {
+            nodes: 0,
+            bytes: usize::MAX - 2,
+        };
+        assert_eq!(
+            charge_json_string_bytes("", &policy, &mut exact_budget),
+            Ok(())
+        );
+        assert_eq!(exact_budget.bytes, usize::MAX);
+
+        let mut crossing_budget = SchemaInputBudget {
+            nodes: 0,
+            bytes: usize::MAX - 1,
+        };
+        assert_eq!(
+            charge_json_string_bytes("", &policy, &mut crossing_budget),
+            Err(SchemaDialectError::InputBudgetExceeded {
+                max_input_bytes: usize::MAX,
+            })
+        );
+        assert_eq!(crossing_budget.bytes, usize::MAX - 1);
     }
 
     #[test]
