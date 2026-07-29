@@ -378,17 +378,17 @@ fn charge_json_string_bytes(
     policy: &SchemaDialectPolicy,
     budget: &mut SchemaInputBudget,
 ) -> Result<(), SchemaDialectError> {
-    charge_input_bytes(2, policy, budget)?;
-    charge_input_bytes(value.len(), policy, budget)?;
+    let mut extra_bytes = 2usize;
+    extra_bytes = extra_bytes.saturating_add(value.len());
     for byte in value.bytes() {
         let escaped_extra_bytes = match byte {
             b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
             0x00..=0x1f => 5,
             _ => 0,
         };
-        charge_input_bytes(escaped_extra_bytes, policy, budget)?;
+        extra_bytes = extra_bytes.saturating_add(escaped_extra_bytes);
     }
-    Ok(())
+    charge_input_bytes(extra_bytes, policy, budget)
 }
 
 fn charge_input_bytes(
