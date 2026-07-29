@@ -140,6 +140,16 @@ not resolved as references; use `$defs` for local definitions. Legacy tuple
 arrays remain supported for `items`; `additionalItems` must instead be one
 schema object or boolean schema.
 
+Resource bounds apply before semantic root resolution. The default policy
+preflights the complete compact-JSON representation at 1 MiB and 1,024 values,
+then limits each `$ref` to 4 KiB before percent decoding or JSON Pointer
+construction and limits active reference depth to 32. Callers can tighten these
+limits with `with_max_input_bytes`, `with_max_nodes`,
+`with_max_reference_bytes`, and `with_max_reference_depth`. Reference errors
+retain at most a fixed 128-byte source preview, and malformed non-string
+reference values are reported only by JSON shape; public errors never serialize
+or clone an unbounded attacker-controlled value.
+
 ## References
 
 - `docs/toolkit-boundary.md`

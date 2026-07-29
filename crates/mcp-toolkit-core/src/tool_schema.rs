@@ -32,8 +32,14 @@ pub const TOOL_SCHEMA_SNAPSHOT_VERSION: u64 = 1;
 
 /// Default maximum number of JSON values inspected while validating one schema.
 pub const DEFAULT_SCHEMA_DIALECT_MAX_NODES: usize = 1_024;
+/// Default maximum compact-JSON byte size accepted for one schema document.
+pub const DEFAULT_SCHEMA_DIALECT_MAX_INPUT_BYTES: usize = 1024 * 1024;
 /// Default maximum active local-reference depth while validating one schema.
 pub const DEFAULT_SCHEMA_DIALECT_MAX_REFERENCE_DEPTH: usize = 32;
+/// Default maximum UTF-8 byte length accepted for one local reference.
+pub const DEFAULT_SCHEMA_DIALECT_MAX_REFERENCE_BYTES: usize = 4 * 1024;
+/// Maximum source bytes retained in a reference error's diagnostic preview.
+pub const SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES: usize = 128;
 
 /// Validation policy for a consumer-specific JSON Schema dialect.
 ///
@@ -60,6 +66,8 @@ pub struct SchemaDialectPolicy {
     forbidden_root_keywords: Vec<String>,
     max_reference_depth: usize,
     max_nodes: usize,
+    max_input_bytes: usize,
+    max_reference_bytes: usize,
 }
 
 impl SchemaDialectPolicy {
@@ -70,6 +78,8 @@ impl SchemaDialectPolicy {
             forbidden_root_keywords: Vec::new(),
             max_reference_depth: DEFAULT_SCHEMA_DIALECT_MAX_REFERENCE_DEPTH,
             max_nodes: DEFAULT_SCHEMA_DIALECT_MAX_NODES,
+            max_input_bytes: DEFAULT_SCHEMA_DIALECT_MAX_INPUT_BYTES,
+            max_reference_bytes: DEFAULT_SCHEMA_DIALECT_MAX_REFERENCE_BYTES,
         }
     }
 
@@ -112,6 +122,24 @@ impl SchemaDialectPolicy {
         self.max_nodes = max_nodes;
         self
     }
+
+    /// Sets the maximum compact-JSON byte size of the submitted document.
+    ///
+    /// The validator computes this budget without serializing or cloning the
+    /// document and enforces it before root reference resolution.
+    pub fn with_max_input_bytes(mut self, max_input_bytes: usize) -> Self {
+        self.max_input_bytes = max_input_bytes;
+        self
+    }
+
+    /// Sets the maximum UTF-8 byte length of each `$ref` string.
+    ///
+    /// This limit is checked before percent decoding or JSON Pointer
+    /// construction.
+    pub fn with_max_reference_bytes(mut self, max_reference_bytes: usize) -> Self {
+        self.max_reference_bytes = max_reference_bytes;
+        self
+    }
 }
 
 impl Default for SchemaDialectPolicy {
@@ -128,6 +156,9 @@ pub enum SchemaDialectError {
     /// A configured root keyword was present.
     ForbiddenRootKeyword { keyword: String },
     /// A `$ref` was missing, malformed, or outside the permitted local `$defs` tree.
+    ///
+    /// The reference field is a bounded diagnostic preview, never the complete
+    /// value of a non-string reference.
     UnsupportedReference { reference: String },
     /// A local JSON Pointer used an escape other than `~0` or `~1`.
     InvalidJsonPointerEscape { reference: String },
@@ -144,6 +175,10 @@ pub enum SchemaDialectError {
     ReferenceDepthExceeded { max_reference_depth: usize },
     /// Traversal exceeded the configured JSON-value budget.
     NodeBudgetExceeded { max_nodes: usize },
+    /// The submitted document exceeded the configured compact-JSON byte budget.
+    InputBudgetExceeded { max_input_bytes: usize },
+    /// A `$ref` exceeded the configured UTF-8 byte budget.
+    ReferenceBudgetExceeded { max_reference_bytes: usize },
     /// A schema-bearing keyword contained a value with an invalid JSON shape.
     InvalidSchemaShape {
         /// The schema keyword whose value had the invalid shape.
@@ -199,6 +234,16 @@ impl Display for SchemaDialectError {
                     "schema exceeds configured node budget of {max_nodes}"
                 )
             }
+            Self::InputBudgetExceeded { max_input_bytes } => write!(
+                formatter,
+                "schema exceeds configured input budget of {max_input_bytes} bytes"
+            ),
+            Self::ReferenceBudgetExceeded {
+                max_reference_bytes,
+            } => write!(
+                formatter,
+                "schema reference exceeds configured budget of {max_reference_bytes} bytes"
+            ),
             Self::InvalidSchemaShape {
                 keyword,
                 expected,
@@ -218,13 +263,15 @@ impl std::error::Error for SchemaDialectError {}
 /// Only local references rooted at `#/$defs/` are accepted. Their URI-fragment
 /// suffix is percent-decoded before JSON Pointer resolution. Resolution never
 /// performs I/O, and unresolved or recursive references fail closed. The
-/// validator checks configured forbidden keys on every submitted or referenced
-/// root-chain schema, then counts and validates every raw document node once
-/// within the supplied node budget. Reference-chain validation is separate, so
-/// following a `$ref` cannot inflate whole-document accounting. Schema-bearing
-/// map and composition containers must have their required object or array
-/// shape, and each contained schema must be an object or permitted boolean
-/// schema. Legacy tuple arrays are supported for `items`, while
+/// validator first preflights the complete compact-JSON input byte size and raw
+/// node count before resolving a root `$ref`. It then checks configured
+/// forbidden keys on every submitted or referenced root-chain schema and
+/// validates every raw document node. Reference-chain validation is separate,
+/// so following a `$ref` cannot inflate whole-document accounting. Every
+/// reference is length-checked before percent decoding or JSON Pointer
+/// construction. Schema-bearing map and composition containers must have their
+/// required object or array shape, and each contained schema must be an object
+/// or permitted boolean schema. Legacy tuple arrays are supported for `items`, while
 /// `additionalItems` accepts only one object or boolean schema. `$dynamicRef`,
 /// `$recursiveRef`, and `$id` are not supported in schema positions. In
 /// particular, `$id` is rejected so a nested schema cannot establish an
@@ -240,16 +287,19 @@ impl std::error::Error for SchemaDialectError {}
 /// Returns an error if the root violates the policy, a reference is not a
 /// bounded local `$defs` reference, a local reference cannot be resolved, a
 /// reference cycle is found, an unsupported reference keyword or JSON Pointer
-/// escape is used, a schema-bearing value has an invalid shape, or either
-/// traversal budget is exceeded.
+/// escape is used, a schema-bearing value has an invalid shape, or an input,
+/// reference, node, or reference-depth budget is exceeded.
 ///
 /// # Security
-/// The function never follows remote references and bounds work performed on
-/// caller-controlled schema data.
+/// The function never follows remote references. It fail-closes on oversized
+/// documents before root resolution, bounds reference parsing separately, and
+/// retains only a fixed-size preview of attacker-controlled references in
+/// public errors.
 pub fn validate_schema_dialect(
     schema: &Value,
     policy: &SchemaDialectPolicy,
 ) -> Result<(), SchemaDialectError> {
+    preflight_schema_input(schema, policy)?;
     if !schema.is_object() {
         return Err(SchemaDialectError::RootMustBeObject);
     }
@@ -264,6 +314,101 @@ struct SchemaTraversalState {
     nodes: usize,
     reference_graph_nodes: usize,
     active_references: Vec<String>,
+}
+
+#[derive(Default)]
+struct SchemaInputBudget {
+    nodes: usize,
+    bytes: usize,
+}
+
+fn preflight_schema_input(
+    schema: &Value,
+    policy: &SchemaDialectPolicy,
+) -> Result<(), SchemaDialectError> {
+    preflight_json_value(schema, policy, &mut SchemaInputBudget::default())
+}
+
+fn preflight_json_value(
+    value: &Value,
+    policy: &SchemaDialectPolicy,
+    budget: &mut SchemaInputBudget,
+) -> Result<(), SchemaDialectError> {
+    budget.nodes = budget
+        .nodes
+        .checked_add(1)
+        .ok_or(SchemaDialectError::NodeBudgetExceeded {
+            max_nodes: policy.max_nodes,
+        })?;
+    if budget.nodes > policy.max_nodes {
+        return Err(SchemaDialectError::NodeBudgetExceeded {
+            max_nodes: policy.max_nodes,
+        });
+    }
+
+    match value {
+        Value::Null => charge_input_bytes(4, policy, budget),
+        Value::Bool(true) => charge_input_bytes(4, policy, budget),
+        Value::Bool(false) => charge_input_bytes(5, policy, budget),
+        Value::Number(number) => charge_input_bytes(number.to_string().len(), policy, budget),
+        Value::String(string) => charge_json_string_bytes(string, policy, budget),
+        Value::Array(values) => {
+            charge_input_bytes(2, policy, budget)?;
+            charge_input_bytes(values.len().saturating_sub(1), policy, budget)?;
+            for value in values {
+                preflight_json_value(value, policy, budget)?;
+            }
+            Ok(())
+        }
+        Value::Object(object) => {
+            charge_input_bytes(2, policy, budget)?;
+            charge_input_bytes(object.len().saturating_sub(1), policy, budget)?;
+            charge_input_bytes(object.len(), policy, budget)?;
+            for (key, value) in object {
+                charge_json_string_bytes(key, policy, budget)?;
+                preflight_json_value(value, policy, budget)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn charge_json_string_bytes(
+    value: &str,
+    policy: &SchemaDialectPolicy,
+    budget: &mut SchemaInputBudget,
+) -> Result<(), SchemaDialectError> {
+    charge_input_bytes(2, policy, budget)?;
+    charge_input_bytes(value.len(), policy, budget)?;
+    for byte in value.bytes() {
+        let escaped_extra_bytes = match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
+            0x00..=0x1f => 5,
+            _ => 0,
+        };
+        charge_input_bytes(escaped_extra_bytes, policy, budget)?;
+    }
+    Ok(())
+}
+
+fn charge_input_bytes(
+    bytes: usize,
+    policy: &SchemaDialectPolicy,
+    budget: &mut SchemaInputBudget,
+) -> Result<(), SchemaDialectError> {
+    budget.bytes =
+        budget
+            .bytes
+            .checked_add(bytes)
+            .ok_or(SchemaDialectError::InputBudgetExceeded {
+                max_input_bytes: policy.max_input_bytes,
+            })?;
+    if budget.bytes > policy.max_input_bytes {
+        return Err(SchemaDialectError::InputBudgetExceeded {
+            max_input_bytes: policy.max_input_bytes,
+        });
+    }
+    Ok(())
 }
 
 fn check_root_keywords(
@@ -299,7 +444,7 @@ fn resolve_root<'a>(
     let reference = reference
         .as_str()
         .ok_or_else(|| SchemaDialectError::UnsupportedReference {
-            reference: reference.to_string(),
+            reference: reference_value_preview(reference),
         })?;
     resolve_reference(reference, document, policy, state, |resolved, state| {
         resolve_root(resolved, document, policy, state)
@@ -600,7 +745,7 @@ fn validate_reference_graph(
     let reference = reference
         .as_str()
         .ok_or_else(|| SchemaDialectError::UnsupportedReference {
-            reference: reference.to_string(),
+            reference: reference_value_preview(reference),
         })?;
     resolve_reference(reference, document, policy, state, |resolved, state| {
         traverse_reference_graph_schema(resolved, document, policy, state)
@@ -794,7 +939,7 @@ fn resolve_reference<'a, T, F>(
 where
     F: FnOnce(&'a Value, &mut SchemaTraversalState) -> Result<T, SchemaDialectError>,
 {
-    let pointer = local_reference_pointer(reference)?;
+    let pointer = local_reference_pointer(reference, policy)?;
     if state.active_references.len() >= policy.max_reference_depth {
         return Err(SchemaDialectError::ReferenceDepthExceeded {
             max_reference_depth: policy.max_reference_depth,
@@ -806,14 +951,14 @@ where
         .any(|active_reference| active_reference == &pointer)
     {
         return Err(SchemaDialectError::RecursiveReference {
-            reference: reference.to_string(),
+            reference: reference_error_preview(reference),
         });
     }
     let resolved =
         document
             .pointer(&pointer)
             .ok_or_else(|| SchemaDialectError::UnresolvedReference {
-                reference: reference.to_string(),
+                reference: reference_error_preview(reference),
             })?;
     state.active_references.push(pointer);
     let result = visit(resolved, state);
@@ -821,23 +966,56 @@ where
     result
 }
 
-fn local_reference_pointer(reference: &str) -> Result<String, SchemaDialectError> {
+fn local_reference_pointer(
+    reference: &str,
+    policy: &SchemaDialectPolicy,
+) -> Result<String, SchemaDialectError> {
+    if reference.len() > policy.max_reference_bytes {
+        return Err(SchemaDialectError::ReferenceBudgetExceeded {
+            max_reference_bytes: policy.max_reference_bytes,
+        });
+    }
     let encoded_path = reference.strip_prefix("#/$defs/").ok_or_else(|| {
         SchemaDialectError::UnsupportedReference {
-            reference: reference.to_string(),
+            reference: reference_error_preview(reference),
         }
     })?;
     let decoded_path = decode_uri_fragment(encoded_path).ok_or_else(|| {
         SchemaDialectError::UnsupportedReference {
-            reference: reference.to_string(),
+            reference: reference_error_preview(reference),
         }
     })?;
     if !has_valid_json_pointer_escapes(&decoded_path) {
         return Err(SchemaDialectError::InvalidJsonPointerEscape {
-            reference: reference.to_string(),
+            reference: reference_error_preview(reference),
         });
     }
     Ok(format!("/$defs/{decoded_path}"))
+}
+
+fn reference_value_preview(reference: &Value) -> String {
+    match reference {
+        Value::String(reference) => reference_error_preview(reference),
+        Value::Null => "<null>".to_string(),
+        Value::Bool(_) => "<boolean>".to_string(),
+        Value::Number(_) => "<number>".to_string(),
+        Value::Array(_) => "<array>".to_string(),
+        Value::Object(_) => "<object>".to_string(),
+    }
+}
+
+fn reference_error_preview(reference: &str) -> String {
+    if reference.len() <= SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES {
+        return reference.to_string();
+    }
+    let mut preview_end = SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES;
+    while !reference.is_char_boundary(preview_end) {
+        preview_end -= 1;
+    }
+    let mut preview = String::with_capacity(preview_end + 3);
+    preview.push_str(&reference[..preview_end]);
+    preview.push_str("...");
+    preview
 }
 
 fn has_valid_json_pointer_escapes(pointer: &str) -> bool {
@@ -966,9 +1144,9 @@ fn canonicalize_json(value: Value) -> Value {
 mod tests {
     use super::{
         tool_names, tool_schema_snapshot_value, validate_schema_dialect, SchemaDialectError,
-        SchemaDialectPolicy,
+        SchemaDialectPolicy, SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
     };
-    use serde_json::json;
+    use serde_json::{json, Map, Value};
 
     #[test]
     fn dialect_validation_accepts_an_object_root_resolved_from_local_defs() {
@@ -1031,6 +1209,138 @@ mod tests {
     }
 
     #[test]
+    fn dialect_validation_preflights_giant_root_values_before_semantic_errors() {
+        let max_input_bytes = 256;
+        let policy = SchemaDialectPolicy::new()
+            .with_max_input_bytes(max_input_bytes)
+            .with_max_nodes(4_096);
+        let giant_string_root = Value::String("x".repeat(4_096));
+        let giant_array_root = Value::Array(vec![Value::Null; 256]);
+        let giant_non_string_root_reference = json!({
+            "$ref": {"payload": "x".repeat(4_096)}
+        });
+        let expected = Err(SchemaDialectError::InputBudgetExceeded { max_input_bytes });
+
+        assert_eq!(
+            validate_schema_dialect(&giant_string_root, &policy),
+            expected.clone()
+        );
+        assert_eq!(
+            validate_schema_dialect(&giant_array_root, &policy),
+            expected.clone()
+        );
+        assert_eq!(
+            validate_schema_dialect(&giant_non_string_root_reference, &policy),
+            expected
+        );
+    }
+
+    #[test]
+    fn dialect_validation_enforces_exact_input_and_reference_byte_boundaries() {
+        let smallest_object_schema = json!({"type": "object"});
+        assert_eq!(
+            validate_schema_dialect(
+                &smallest_object_schema,
+                &SchemaDialectPolicy::new().with_max_input_bytes(17),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &smallest_object_schema,
+                &SchemaDialectPolicy::new().with_max_input_bytes(16),
+            ),
+            Err(SchemaDialectError::InputBudgetExceeded {
+                max_input_bytes: 16,
+            })
+        );
+
+        let reference = "#/$defs/root";
+        let referenced_schema = json!({
+            "$ref": reference,
+            "$defs": {"root": {"type": "object"}}
+        });
+        assert_eq!(
+            validate_schema_dialect(
+                &referenced_schema,
+                &SchemaDialectPolicy::new().with_max_reference_bytes(reference.len()),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &referenced_schema,
+                &SchemaDialectPolicy::new().with_max_reference_bytes(reference.len() - 1),
+            ),
+            Err(SchemaDialectError::ReferenceBudgetExceeded {
+                max_reference_bytes: reference.len() - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_bounds_reference_errors_without_serializing_attacker_values() {
+        let non_string_reference = json!({
+            "$ref": {"payload": ["attacker", "controlled"]}
+        });
+        assert_eq!(
+            validate_schema_dialect(&non_string_reference, &SchemaDialectPolicy::new()),
+            Err(SchemaDialectError::UnsupportedReference {
+                reference: "<object>".to_string(),
+            })
+        );
+
+        let long_reference = format!("https://example.invalid/{}", "x".repeat(1_024));
+        let long_reference_schema = json!({
+            "type": "object",
+            "properties": {"entry": {"$ref": long_reference.clone()}}
+        });
+        let expected_preview = format!(
+            "{}...",
+            &long_reference[..SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES]
+        );
+        assert_eq!(
+            validate_schema_dialect(
+                &long_reference_schema,
+                &SchemaDialectPolicy::new()
+                    .with_max_input_bytes(4_096)
+                    .with_max_reference_bytes(2_048),
+            ),
+            Err(SchemaDialectError::UnsupportedReference {
+                reference: expected_preview,
+            })
+        );
+    }
+
+    #[test]
+    fn dialect_validation_rejects_many_large_references_as_one_bounded_input() {
+        let mut properties = Map::new();
+        for index in 0..32 {
+            properties.insert(
+                format!("property_{index}"),
+                json!({"$ref": format!("#/$defs/{index}_{}", "x".repeat(128))}),
+            );
+        }
+        let schema = json!({
+            "type": "object",
+            "properties": properties
+        });
+
+        assert_eq!(
+            validate_schema_dialect(
+                &schema,
+                &SchemaDialectPolicy::new()
+                    .with_max_nodes(1_024)
+                    .with_max_input_bytes(1_024)
+                    .with_max_reference_bytes(256),
+            ),
+            Err(SchemaDialectError::InputBudgetExceeded {
+                max_input_bytes: 1_024,
+            })
+        );
+    }
+
+    #[test]
     fn dialect_validation_handles_type_arrays_for_direct_and_referenced_roots() {
         let policy = SchemaDialectPolicy::new();
         let relaxed = policy.clone().with_object_root_requirement(false);
@@ -1052,8 +1362,8 @@ mod tests {
             json!({"type": ["object", 1]}),
             json!({"type": ["object", "object"]}),
             json!({"type": "unknown"}),
-            json!({"type": vec!["object"; 4_096]}),
         ];
+        let oversized_type_array = json!({"type": vec!["object"; 4_096]});
         let malformed_referenced = json!({
             "$ref": "#/$defs/root",
             "$defs": {"root": {"type": ["object", null]}}
@@ -1097,6 +1407,14 @@ mod tests {
                 Err(SchemaDialectError::RootMustBeObject)
             );
         }
+        assert_eq!(
+            validate_schema_dialect(&oversized_type_array, &policy),
+            Err(SchemaDialectError::NodeBudgetExceeded { max_nodes: 1_024 })
+        );
+        assert_eq!(
+            validate_schema_dialect(&oversized_type_array, &relaxed),
+            Err(SchemaDialectError::NodeBudgetExceeded { max_nodes: 1_024 })
+        );
         assert_eq!(
             validate_schema_dialect(&malformed_referenced, &policy),
             Err(SchemaDialectError::RootMustBeObject)
