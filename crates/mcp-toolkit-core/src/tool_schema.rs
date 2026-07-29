@@ -84,6 +84,7 @@ impl SchemaDialectPolicy {
     }
 
     /// Replaces the keywords prohibited at the schema root.
+    #[must_use = "this method returns the updated schema dialect policy"]
     pub fn with_forbidden_root_keywords<I, S>(mut self, keywords: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -106,18 +107,21 @@ impl SchemaDialectPolicy {
     /// boolean schema only when this requirement is disabled. A JSON Schema
     /// `type` declaration may be either one valid type name or a non-empty array
     /// of unique valid type names.
+    #[must_use = "this method returns the updated schema dialect policy"]
     pub fn with_object_root_requirement(mut self, require_object_root: bool) -> Self {
         self.require_object_root = require_object_root;
         self
     }
 
     /// Sets the maximum active `#/$defs` reference depth.
+    #[must_use = "this method returns the updated schema dialect policy"]
     pub fn with_max_reference_depth(mut self, max_reference_depth: usize) -> Self {
         self.max_reference_depth = max_reference_depth;
         self
     }
 
     /// Sets the maximum raw-document and reference-graph node budget.
+    #[must_use = "this method returns the updated schema dialect policy"]
     pub fn with_max_nodes(mut self, max_nodes: usize) -> Self {
         self.max_nodes = max_nodes;
         self
@@ -127,6 +131,7 @@ impl SchemaDialectPolicy {
     ///
     /// The validator computes this budget without serializing or cloning the
     /// document and enforces it before root reference resolution.
+    #[must_use = "this method returns the updated schema dialect policy"]
     pub fn with_max_input_bytes(mut self, max_input_bytes: usize) -> Self {
         self.max_input_bytes = max_input_bytes;
         self
@@ -136,6 +141,7 @@ impl SchemaDialectPolicy {
     ///
     /// This limit is checked before percent decoding or JSON Pointer
     /// construction.
+    #[must_use = "this method returns the updated schema dialect policy"]
     pub fn with_max_reference_bytes(mut self, max_reference_bytes: usize) -> Self {
         self.max_reference_bytes = max_reference_bytes;
         self
