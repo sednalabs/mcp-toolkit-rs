@@ -16,7 +16,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit` | Umbrella crate with optional feature groups. |
 | `mcp-toolkit-core` | Protocol-facing helpers, notifications, query-evidence helpers, and tool inventory types. |
 | `mcp-toolkit-auth` | Bearer auth, token validation, replay protection, and auth-surface helpers. |
-| `mcp-toolkit-http` | OAuth/PRM metadata helpers, device-authorization metadata, and optional streamable HTTP session support. |
+| `mcp-toolkit-http` | OAuth/PRM metadata helpers, device-authorization metadata, and optional streamable HTTP session support with typed live-session routing context. |
 | `mcp-toolkit-observability` | Redaction, sanitization, tracing bridge, metrics facade, and optional OTel helpers. |
 | `mcp-toolkit-policy-core` | Pure policy decisions, claims helpers, route/scope checks, and SQL read-only classification. |
 | `mcp-toolkit-policy-runtime` | Runtime policy authority adapters and capability guard helpers. |

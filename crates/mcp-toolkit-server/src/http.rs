@@ -41,7 +41,7 @@ use mcp_toolkit_http::{
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
     streamable::{
-        build_local_streamable_http_service, resolve_mcp_session_route,
+        build_local_streamable_http_service, resolve_mcp_session_route, LiveMcpSessionId,
         LocalStreamableHttpServiceConfig, McpSessionRoute,
     },
 };
@@ -1077,8 +1077,8 @@ where
     S: Service<RoleServer> + Send + 'static,
 {
     match session_route {
-        McpSessionRoute::Live(_) => {
-            return forward_service(state.stateful_service, req, "stateful_session").await;
+        McpSessionRoute::Live(session_id) => {
+            return forward_live_service(state.stateful_service, req, session_id).await;
         }
         McpSessionRoute::InvalidOrExpired => {
             log_route_rejection(
@@ -1198,9 +1198,22 @@ where
                 "Re-initialize with POST /mcp to obtain a new session id.",
             );
         }
-        McpSessionRoute::Live(_) => {}
+        McpSessionRoute::Live(session_id) => {
+            return forward_live_service(state.stateful_service, req, session_id).await;
+        }
     }
-    forward_service(state.stateful_service, req, "stateful_session").await
+}
+
+async fn forward_live_service<S>(
+    service: StreamableHttpService<S, RecordingSessionManager>,
+    mut req: Request,
+    session_id: LiveMcpSessionId,
+) -> Response
+where
+    S: Service<RoleServer> + Send + 'static,
+{
+    req.extensions_mut().insert(session_id);
+    forward_service(service, req, "stateful_session").await
 }
 
 async fn forward_service<S>(

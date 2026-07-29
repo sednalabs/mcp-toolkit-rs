@@ -15,11 +15,15 @@
 //! * **Loopback-First**: Employs conservative loopback defaults for host allowlisting.
 //! * **Stateful Request Routing**: Provides handlers to route MCP requests to the
 //!   correct session context.
+//! * **Live Session Context**: Marks forwarded stateful requests only after the
+//!   authoritative session store confirms exact live membership.
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for:
 //! * Configuring appropriate session capacities (`max_sessions`, `channel_capacity`).
 //! * Ensuring that host allowlists match their deployment environment requirements.
+//! * Binding [`LiveMcpSessionId`] to an authenticated actor before treating the
+//!   session as application authorization.
 //!
 //! ## References
 //! * [MCP Streamable HTTP Transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
@@ -49,6 +53,27 @@ use crate::session::{BoundedSessionManager, RecordingSessionManager, SessionLife
 
 const SESSIONLESS_INITIALIZE_BODY_LIMIT: usize = 64 * 1024;
 
+/// Identifies a session confirmed present in the authoritative session store.
+///
+/// The Streamable HTTP router inserts this type into the forwarded request's
+/// extensions after one successful live-session lookup. Downstream middleware
+/// can consume it from the `http::request::Parts` carried by `rmcp`.
+///
+/// # Security
+/// This marker proves only live session-store membership at routing time. It
+/// does not authenticate an actor, bind the session to an actor, or authorize
+/// any operation. Services that require those guarantees must derive their own
+/// stronger marker after applying service-specific authentication policy.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LiveMcpSessionId(String);
+
+impl LiveMcpSessionId {
+    /// Returns the exact canonical session identifier accepted by the store.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// Classifies the authority carried by an MCP session header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpSessionRoute {
@@ -57,7 +82,7 @@ pub enum McpSessionRoute {
     Headerless,
     /// The request named a session that is currently live using its exact,
     /// canonical identifier.
-    Live(String),
+    Live(LiveMcpSessionId),
     /// The request supplied a malformed, unknown, expired, or unverifiable
     /// session identifier.
     InvalidOrExpired,
@@ -112,7 +137,7 @@ where
     let session_id = value.to_string();
     let lookup_session_id = session_id.as_str().into();
     match session_manager.has_session(&lookup_session_id).await {
-        Ok(true) => McpSessionRoute::Live(session_id),
+        Ok(true) => McpSessionRoute::Live(LiveMcpSessionId(session_id)),
         Ok(false) | Err(_) => McpSessionRoute::InvalidOrExpired,
     }
 }
@@ -230,8 +255,8 @@ where
     match method {
         Method::POST => {
             match session_route {
-                McpSessionRoute::Live(_) => {
-                    return forward_service(service, req, "stateful_session").await;
+                McpSessionRoute::Live(session_id) => {
+                    return forward_live_service(service, req, session_id).await;
                 }
                 McpSessionRoute::InvalidOrExpired => {
                     log_session_rejection(
@@ -295,38 +320,37 @@ where
                 "Initialize with POST /mcp to obtain a session id.",
             )
         }
-        Method::GET | Method::DELETE => {
-            match session_route {
-                McpSessionRoute::Headerless => {
-                    log_session_rejection(
-                        &method,
-                        false,
-                        "missing_session_id",
-                        StatusCode::BAD_REQUEST,
-                    );
-                    return session_error(
-                        StatusCode::BAD_REQUEST,
-                        "Missing session ID.",
-                        "Initialize with POST /mcp to obtain a session id.",
-                    );
-                }
-                McpSessionRoute::InvalidOrExpired => {
-                    log_session_rejection(
-                        &method,
-                        true,
-                        "invalid_or_expired_session",
-                        StatusCode::NOT_FOUND,
-                    );
-                    return session_error(
-                        StatusCode::NOT_FOUND,
-                        "Invalid or expired session ID.",
-                        "Re-initialize with POST /mcp to obtain a new session id.",
-                    );
-                }
-                McpSessionRoute::Live(_) => {}
+        Method::GET | Method::DELETE => match session_route {
+            McpSessionRoute::Headerless => {
+                log_session_rejection(
+                    &method,
+                    false,
+                    "missing_session_id",
+                    StatusCode::BAD_REQUEST,
+                );
+                return session_error(
+                    StatusCode::BAD_REQUEST,
+                    "Missing session ID.",
+                    "Initialize with POST /mcp to obtain a session id.",
+                );
             }
-            forward_service(service, req, "stateful_session").await
-        }
+            McpSessionRoute::InvalidOrExpired => {
+                log_session_rejection(
+                    &method,
+                    true,
+                    "invalid_or_expired_session",
+                    StatusCode::NOT_FOUND,
+                );
+                return session_error(
+                    StatusCode::NOT_FOUND,
+                    "Invalid or expired session ID.",
+                    "Re-initialize with POST /mcp to obtain a new session id.",
+                );
+            }
+            McpSessionRoute::Live(session_id) => {
+                return forward_live_service(service, req, session_id).await;
+            }
+        },
         _ => {
             log_session_rejection(
                 &method,
@@ -341,6 +365,19 @@ where
             )
         }
     }
+}
+
+async fn forward_live_service<S, M>(
+    service: StreamableHttpService<S, M>,
+    mut req: Request<Body>,
+    session_id: LiveMcpSessionId,
+) -> Response<Body>
+where
+    S: rmcp::Service<RoleServer> + Send + 'static,
+    M: SessionManager + Send + Sync + 'static,
+{
+    req.extensions_mut().insert(session_id);
+    forward_service(service, req, "stateful_session").await
 }
 
 async fn forward_service<S, M>(
@@ -423,11 +460,12 @@ mod tests {
     use bytes::Bytes;
     use http::{
         header::{ACCEPT, CONTENT_TYPE, HOST},
+        request::Parts,
         HeaderMap, HeaderValue, Request, StatusCode,
     };
     use http_body_util::{BodyExt, Full};
     use rmcp::{
-        handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+        handler::server::{router::tool::ToolRouter, tool::Extension, wrapper::Parameters},
         model::{ServerCapabilities, ServerInfo},
         schemars, tool, tool_router,
         transport::{
@@ -439,8 +477,8 @@ mod tests {
 
     use super::{
         build_local_streamable_http_service, handle_stateful_mcp_request,
-        resolve_mcp_session_route, LocalStreamableHttpServiceConfig, McpSessionRoute,
-        SessionConfig, SESSIONLESS_INITIALIZE_BODY_LIMIT,
+        resolve_mcp_session_route, LiveMcpSessionId, LocalStreamableHttpServiceConfig,
+        McpSessionRoute, SessionConfig, SESSIONLESS_INITIALIZE_BODY_LIMIT,
     };
 
     #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -469,6 +507,16 @@ mod tests {
         fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
             (a + b).to_string()
         }
+
+        #[tool(description = "Report the routed live-session marker")]
+        fn routed_session(&self, Extension(parts): Extension<Parts>) -> String {
+            parts
+                .extensions
+                .get::<LiveMcpSessionId>()
+                .map(LiveMcpSessionId::as_str)
+                .unwrap_or("absent")
+                .to_string()
+        }
     }
 
     impl ServerHandler for Calculator {
@@ -492,6 +540,19 @@ mod tests {
                     "name": "test",
                     "version": "1.0"
                 }
+            }
+        })
+        .to_string()
+    }
+
+    fn routed_session_body(id: u64) -> String {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": "routed_session",
+                "arguments": {}
             }
         })
         .to_string()
@@ -688,7 +749,7 @@ mod tests {
         );
         assert_eq!(
             resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
-            McpSessionRoute::Live(session_id.clone())
+            McpSessionRoute::Live(LiveMcpSessionId(session_id.clone()))
         );
 
         let mut headers = HeaderMap::new();
@@ -885,5 +946,58 @@ mod tests {
                 .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key("mcp-session-id"));
+    }
+
+    #[tokio::test]
+    async fn handle_stateful_mcp_request_forwards_live_session_marker() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let initialize = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(ACCEPT, ACCEPT_STREAMABLE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(init_body()))
+            .expect("initialize request");
+        let initialize_response = handle_stateful_mcp_request(
+            runtime.service.clone(),
+            runtime.session_manager.clone(),
+            initialize,
+        )
+        .await;
+        let session_id = initialize_response
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|value| value.to_str().ok())
+            .expect("live session id")
+            .to_string();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(ACCEPT, ACCEPT_STREAMABLE)
+            .header(CONTENT_TYPE, "application/json")
+            .header(HEADER_SESSION_ID, session_id.as_str())
+            .body(Body::from(routed_session_body(2)))
+            .expect("live session request");
+        let response =
+            handle_stateful_mcp_request(runtime.service, runtime.session_manager, request).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("live session response body")
+            .to_bytes();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("live session JSON response");
+        assert_eq!(
+            payload.pointer("/result/content/0/text"),
+            Some(&serde_json::Value::String(session_id)),
+            "the exact store-verified session id must reach downstream request extensions"
+        );
     }
 }
