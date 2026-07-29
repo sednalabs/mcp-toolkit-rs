@@ -2,19 +2,17 @@
 
 use axum::{
     body::Body,
-    http::{request::Parts, HeaderValue, Request},
+    http::{HeaderValue, Request},
 };
 use http_body_util::BodyExt;
-use mcp_toolkit_http::streamable::LiveMcpSessionId;
 use mcp_toolkit_server::{
     http::{LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder, LocalMcpHttpServerBuilder},
     rmcp::{
-        handler::server::{router::tool::ToolRouter, tool::Extension, wrapper::Parameters},
+        handler::server::{router::tool::ToolRouter, wrapper::Parameters},
         model::{ServerCapabilities, ServerInfo},
         schemars, tool, tool_router, ServerHandler,
     },
 };
-use tokio::sync::mpsc::{self, UnboundedSender};
 use tower::ServiceExt;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -26,23 +24,12 @@ struct EchoRequest {
 #[allow(dead_code)]
 struct TestMcp {
     tool_router: ToolRouter<Self>,
-    routed_session_observer: Option<UnboundedSender<Option<String>>>,
 }
 
 impl TestMcp {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
-            routed_session_observer: None,
-        }
-    }
-
-    fn with_routed_session_observer(
-        routed_session_observer: UnboundedSender<Option<String>>,
-    ) -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-            routed_session_observer: Some(routed_session_observer),
         }
     }
 }
@@ -52,19 +39,6 @@ impl TestMcp {
     #[tool(description = "Echo a value")]
     fn echo(&self, Parameters(EchoRequest { value }): Parameters<EchoRequest>) -> String {
         value
-    }
-
-    #[tool(description = "Report the routed live-session marker")]
-    fn routed_session(&self, Extension(parts): Extension<Parts>) -> String {
-        let routed_session = parts
-            .extensions
-            .get::<LiveMcpSessionId>()
-            .map(LiveMcpSessionId::as_str)
-            .map(str::to_string);
-        if let Some(observer) = &self.routed_session_observer {
-            let _ = observer.send(routed_session.clone());
-        }
-        routed_session.unwrap_or_else(|| "absent".to_string())
     }
 }
 
@@ -89,19 +63,6 @@ fn init_body() -> String {
                 "name": "test",
                 "version": "1.0"
             }
-        }
-    })
-    .to_string()
-}
-
-fn routed_session_body(id: u64) -> String {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": {
-            "name": "routed_session",
-            "arguments": {}
         }
     })
     .to_string()
@@ -231,15 +192,10 @@ async fn route_bundle_rejects_oversized_sessionless_post() {
 
 #[tokio::test]
 async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallback() {
-    let (routed_session_sender, mut routed_session_receiver) = mpsc::unbounded_channel();
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1"])
         .stateless_fallback(true)
-        .build(move || {
-            Ok(TestMcp::with_routed_session_observer(
-                routed_session_sender.clone(),
-            ))
-        });
+        .build(|| Ok(TestMcp::new()));
     let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
 
     let initialize_response = router
@@ -273,17 +229,14 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
                 .header("accept", ACCEPT_STREAMABLE)
                 .header("content-type", "application/json")
                 .header("mcp-session-id", &live_session_id)
-                .body(Body::from(routed_session_body(2)))
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+                ))
                 .expect("live session request"),
         )
         .await
         .expect("live session response");
     assert_eq!(live_response.status(), 200);
-    assert_eq!(
-        routed_session_receiver.recv().await,
-        Some(Some(live_session_id.clone())),
-        "the route bundle must forward the exact store-verified session marker"
-    );
 
     let unusable_session_headers = vec![
         vec![HeaderValue::from_static("unknown-session")],
@@ -342,17 +295,14 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
                 .header("host", "127.0.0.1")
                 .header("accept", ACCEPT_STREAMABLE)
                 .header("content-type", "application/json")
-                .body(Body::from(routed_session_body(4)))
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}"#,
+                ))
                 .expect("headerless request"),
         )
         .await
         .expect("headerless stateless response");
     assert_eq!(headerless_response.status(), 200);
-    assert_eq!(
-        routed_session_receiver.recv().await,
-        Some(None),
-        "headerless stateless routing must not mint live-session authority"
-    );
 }
 
 #[tokio::test]

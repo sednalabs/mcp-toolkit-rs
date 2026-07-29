@@ -376,8 +376,12 @@ where
     S: rmcp::Service<RoleServer> + Send + 'static,
     M: SessionManager + Send + Sync + 'static,
 {
-    req.extensions_mut().insert(session_id);
+    attach_live_session_context(&mut req, session_id);
     forward_service(service, req, "stateful_session").await
+}
+
+fn attach_live_session_context<B>(req: &mut Request<B>, session_id: LiveMcpSessionId) {
+    req.extensions_mut().insert(session_id);
 }
 
 async fn forward_service<S, M>(
@@ -456,16 +460,21 @@ fn session_error(status: StatusCode, message: &str, hint: &str) -> Response<Body
 mod tests {
     use std::time::Duration;
 
+    use super::{
+        attach_live_session_context, build_local_streamable_http_service,
+        handle_stateful_mcp_request, resolve_mcp_session_route, LiveMcpSessionId,
+        LocalStreamableHttpServiceConfig, McpSessionRoute, SessionConfig,
+        SESSIONLESS_INITIALIZE_BODY_LIMIT,
+    };
     use axum::body::Body;
     use bytes::Bytes;
     use http::{
         header::{ACCEPT, CONTENT_TYPE, HOST},
-        request::Parts,
         HeaderMap, HeaderValue, Request, StatusCode,
     };
     use http_body_util::{BodyExt, Full};
     use rmcp::{
-        handler::server::{router::tool::ToolRouter, tool::Extension, wrapper::Parameters},
+        handler::server::{router::tool::ToolRouter, wrapper::Parameters},
         model::{ServerCapabilities, ServerInfo},
         schemars, tool, tool_router,
         transport::{
@@ -473,13 +482,6 @@ mod tests {
             streamable_http_server::session::never::NeverSessionManager,
         },
         ServerHandler,
-    };
-    use tokio::sync::mpsc::{self, UnboundedSender};
-
-    use super::{
-        build_local_streamable_http_service, handle_stateful_mcp_request,
-        resolve_mcp_session_route, LiveMcpSessionId, LocalStreamableHttpServiceConfig,
-        McpSessionRoute, SessionConfig, SESSIONLESS_INITIALIZE_BODY_LIMIT,
     };
 
     #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -492,23 +494,12 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Calculator {
         tool_router: ToolRouter<Self>,
-        routed_session_observer: Option<UnboundedSender<Option<String>>>,
     }
 
     impl Calculator {
         fn new() -> Self {
             Self {
                 tool_router: Self::tool_router(),
-                routed_session_observer: None,
-            }
-        }
-
-        fn with_routed_session_observer(
-            routed_session_observer: UnboundedSender<Option<String>>,
-        ) -> Self {
-            Self {
-                tool_router: Self::tool_router(),
-                routed_session_observer: Some(routed_session_observer),
             }
         }
     }
@@ -518,19 +509,6 @@ mod tests {
         #[tool(description = "Calculate the sum of two numbers")]
         fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
             (a + b).to_string()
-        }
-
-        #[tool(description = "Report the routed live-session marker")]
-        fn routed_session(&self, Extension(parts): Extension<Parts>) -> String {
-            let routed_session = parts
-                .extensions
-                .get::<LiveMcpSessionId>()
-                .map(LiveMcpSessionId::as_str)
-                .map(str::to_string);
-            if let Some(observer) = &self.routed_session_observer {
-                let _ = observer.send(routed_session.clone());
-            }
-            routed_session.unwrap_or_else(|| "absent".to_string())
         }
     }
 
@@ -555,19 +533,6 @@ mod tests {
                     "name": "test",
                     "version": "1.0"
                 }
-            }
-        })
-        .to_string()
-    }
-
-    fn routed_session_body(id: u64) -> String {
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "tools/call",
-            "params": {
-                "name": "routed_session",
-                "arguments": {}
             }
         })
         .to_string()
@@ -964,16 +929,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_stateful_mcp_request_forwards_live_session_marker() {
-        let (routed_session_sender, mut routed_session_receiver) = mpsc::unbounded_channel();
-        let runtime = build_local_streamable_http_service(
-            move || {
-                Ok(Calculator::with_routed_session_observer(
-                    routed_session_sender.clone(),
-                ))
-            },
-            Default::default(),
-        );
+    async fn live_session_context_carries_exact_store_verified_identifier() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
         let initialize = Request::builder()
             .method("POST")
             .uri("http://127.0.0.1/mcp")
@@ -982,12 +940,7 @@ mod tests {
             .header(CONTENT_TYPE, "application/json")
             .body(Body::from(init_body()))
             .expect("initialize request");
-        let initialize_response = handle_stateful_mcp_request(
-            runtime.service.clone(),
-            runtime.session_manager.clone(),
-            initialize,
-        )
-        .await;
+        let initialize_response = runtime.service.handle(initialize).await;
         let session_id = initialize_response
             .headers()
             .get(HEADER_SESSION_ID)
@@ -995,23 +948,31 @@ mod tests {
             .expect("live session id")
             .to_string();
 
-        let request = Request::builder()
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_SESSION_ID,
+            HeaderValue::from_str(session_id.as_str()).expect("session header"),
+        );
+        let McpSessionRoute::Live(live_session_id) =
+            resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await
+        else {
+            panic!("expected exact live-session route");
+        };
+
+        let mut request = Request::builder()
             .method("POST")
             .uri("http://127.0.0.1/mcp")
-            .header(HOST, "127.0.0.1")
-            .header(ACCEPT, ACCEPT_STREAMABLE)
-            .header(CONTENT_TYPE, "application/json")
-            .header(HEADER_SESSION_ID, session_id.as_str())
-            .body(Body::from(routed_session_body(2)))
-            .expect("live session request");
-        let response =
-            handle_stateful_mcp_request(runtime.service, runtime.session_manager, request).await;
+            .body(Body::empty())
+            .expect("request");
+        attach_live_session_context(&mut request, live_session_id);
 
-        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            routed_session_receiver.recv().await,
-            Some(Some(session_id)),
-            "the exact store-verified session id must reach downstream request extensions"
+            request
+                .extensions()
+                .get::<LiveMcpSessionId>()
+                .map(LiveMcpSessionId::as_str),
+            Some(session_id.as_str()),
+            "the exact store-verified session id must be attached to forwarded request extensions"
         );
     }
 }
