@@ -116,9 +116,82 @@ impl MutationOutcome {
     }
 }
 
+/// Classifies what is known about an individual mutation attempt after its
+/// admission and dispatch boundaries.
+///
+/// This is intentionally separate from [`MutationOutcome`]. An outcome
+/// describes the semantic result a domain reports (such as `added` or
+/// `already_match`); this status describes whether this particular request was
+/// rejected before it could apply, confirmed by its immediate result, supported
+/// by caller-defined evidence, or left uncertain after dispatch.
+///
+/// Neither [`Self::Applied`] nor [`Self::Proven`] makes a persistence or
+/// durability claim. `Proven` means only that the caller has supplied evidence
+/// appropriate to its own domain and verification boundary.
+///
+/// ```
+/// use mcp_toolkit_core::response_contract::MutationApplyStatus;
+///
+/// let status = MutationApplyStatus::UncertainAfterDispatch;
+/// assert!(status.requires_effect_check());
+/// assert!(status.may_have_applied());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationApplyStatus {
+    /// The request was rejected before the mutation application boundary.
+    RejectedBeforeApply,
+    /// The immediate mutation result confirms application for this request.
+    Applied,
+    /// Caller-defined evidence confirms the intended effect for this request.
+    Proven,
+    /// The request crossed the dispatch boundary, but its effect is unknown.
+    UncertainAfterDispatch,
+}
+
+impl MutationApplyStatus {
+    /// Returns the stable JSON string for this status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RejectedBeforeApply => "rejected_before_apply",
+            Self::Applied => "applied",
+            Self::Proven => "proven",
+            Self::UncertainAfterDispatch => "uncertain_after_dispatch",
+        }
+    }
+
+    /// Returns whether this request crossed the mutation application boundary.
+    #[must_use]
+    pub const fn crossed_apply_boundary(self) -> bool {
+        !matches!(self, Self::RejectedBeforeApply)
+    }
+
+    /// Returns whether the immediate result or caller-defined evidence confirms
+    /// the effect without asserting any persistence guarantee.
+    #[must_use]
+    pub const fn is_confirmed(self) -> bool {
+        matches!(self, Self::Applied | Self::Proven)
+    }
+
+    /// Returns whether this request might have applied and therefore must not
+    /// be assumed absent solely from this status.
+    #[must_use]
+    pub const fn may_have_applied(self) -> bool {
+        self.crossed_apply_boundary()
+    }
+
+    /// Returns whether callers need an effect check before deciding how to
+    /// proceed with an uncertain dispatched request.
+    #[must_use]
+    pub const fn requires_effect_check(self) -> bool {
+        matches!(self, Self::UncertainAfterDispatch)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MutationOutcome, ToolErrorPayload};
+    use super::{MutationApplyStatus, MutationOutcome, ToolErrorPayload};
     use serde_json::json;
 
     #[test]
@@ -170,5 +243,45 @@ mod tests {
         assert!(!MutationOutcome::WouldAdd.changed());
         assert!(MutationOutcome::WouldRemove.is_preview());
         assert!(!MutationOutcome::AlreadyMatch.is_preview());
+    }
+
+    #[test]
+    fn mutation_apply_status_serializes_a_complete_transport_neutral_contract() {
+        let statuses = [
+            MutationApplyStatus::RejectedBeforeApply,
+            MutationApplyStatus::Applied,
+            MutationApplyStatus::Proven,
+            MutationApplyStatus::UncertainAfterDispatch,
+        ];
+
+        assert_eq!(
+            serde_json::to_value(statuses).expect("serialize statuses"),
+            json!([
+                "rejected_before_apply",
+                "applied",
+                "proven",
+                "uncertain_after_dispatch"
+            ])
+        );
+    }
+
+    #[test]
+    fn mutation_apply_status_keeps_effect_uncertainty_separate_from_outcome() {
+        let status = MutationApplyStatus::UncertainAfterDispatch;
+
+        assert!(status.crossed_apply_boundary());
+        assert!(status.may_have_applied());
+        assert!(!status.is_confirmed());
+        assert!(status.requires_effect_check());
+        assert_eq!(status.as_str(), "uncertain_after_dispatch");
+
+        let rejected = MutationApplyStatus::RejectedBeforeApply;
+        assert!(!rejected.crossed_apply_boundary());
+        assert!(!rejected.may_have_applied());
+        assert!(!rejected.is_confirmed());
+        assert!(!rejected.requires_effect_check());
+
+        assert!(MutationApplyStatus::Applied.is_confirmed());
+        assert!(MutationApplyStatus::Proven.is_confirmed());
     }
 }
