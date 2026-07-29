@@ -37,9 +37,9 @@ use std::fmt::Debug;
 /// ```
 ///
 /// # Panics
-/// Panics when the expected set is empty, receipt cardinality differs, the
-/// extractor rejects an identity, an identity is duplicated or unexpected, or
-/// an expected identity is missing.
+/// Panics when receipt cardinality differs, the extractor rejects an identity,
+/// an identity is duplicated or unexpected, or an expected identity is
+/// missing.
 pub fn assert_exact_receipt_identity_set<T, I, E, F>(
     receipts: &[T],
     expected_identities: &BTreeSet<I>,
@@ -49,10 +49,6 @@ pub fn assert_exact_receipt_identity_set<T, I, E, F>(
     E: Debug,
     F: FnMut(&T) -> Result<I, E>,
 {
-    assert!(
-        !expected_identities.is_empty(),
-        "receipt identity contract must declare at least one expected identity"
-    );
     assert_eq!(
         receipts.len(),
         expected_identities.len(),
@@ -161,7 +157,7 @@ mod tests {
         assert_exact_receipt_identity_set, assert_exactly_one_receipt_identity,
         assert_serialized_receipt_within_byte_budget, canonical_json_bytes,
     };
-    use serde_json::json;
+    use serde_json::{json, Map, Value};
     use std::collections::BTreeSet;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -196,6 +192,31 @@ mod tests {
         let bytes = canonical_json_bytes(&payload).expect("canonical JSON");
         assert_eq!(bytes, br#"{"a":["receipt"],"z":{"a":1,"b":2}}"#.to_vec());
         assert_serialized_receipt_within_byte_budget(&payload, bytes.len());
+    }
+
+    #[test]
+    fn accepts_empty_receipt_identity_set() {
+        let receipts: [Receipt; 0] = [];
+        let expected = BTreeSet::<String>::new();
+
+        assert_exact_receipt_identity_set(&receipts, &expected, identity);
+    }
+
+    #[test]
+    fn rejects_mismatched_empty_and_non_empty_identity_sets() {
+        let empty_receipts: [Receipt; 0] = [];
+        let expected = BTreeSet::from(["alpha".to_string()]);
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            assert_exact_receipt_identity_set(&empty_receipts, &expected, identity);
+        }))
+        .is_err());
+
+        let receipts = [receipt("alpha")];
+        let empty_expected = BTreeSet::<String>::new();
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            assert_exact_receipt_identity_set(&receipts, &empty_expected, identity);
+        }))
+        .is_err());
     }
 
     #[test]
@@ -248,6 +269,42 @@ mod tests {
     fn rejects_receipts_that_exceed_the_canonical_byte_budget() {
         let payload = json!({"receipt": "alpha"});
         let bytes = canonical_json_bytes(&payload).expect("canonical JSON");
+        assert!(catch_unwind(|| {
+            assert_serialized_receipt_within_byte_budget(&payload, bytes.len() - 1);
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn canonical_json_bytes_ignores_object_insertion_order() {
+        let mut first_nested = Map::new();
+        first_nested.insert("z".to_string(), json!(2));
+        first_nested.insert("a".to_string(), json!(1));
+        let mut first = Map::new();
+        first.insert("z".to_string(), Value::Object(first_nested));
+        first.insert("a".to_string(), json!("receipt"));
+
+        let mut second_nested = Map::new();
+        second_nested.insert("a".to_string(), json!(1));
+        second_nested.insert("z".to_string(), json!(2));
+        let mut second = Map::new();
+        second.insert("a".to_string(), json!("receipt"));
+        second.insert("z".to_string(), Value::Object(second_nested));
+
+        assert_eq!(
+            canonical_json_bytes(&Value::Object(first)).expect("first canonical JSON"),
+            canonical_json_bytes(&Value::Object(second)).expect("second canonical JSON")
+        );
+    }
+
+    #[test]
+    fn enforces_exact_utf8_receipt_byte_budget_boundary() {
+        let payload = json!({"receipt": "é🦀"});
+        let bytes = canonical_json_bytes(&payload).expect("canonical JSON");
+        let rendered = String::from_utf8(bytes.clone()).expect("valid JSON UTF-8");
+        assert!(bytes.len() > rendered.chars().count());
+
+        assert_serialized_receipt_within_byte_budget(&payload, bytes.len());
         assert!(catch_unwind(|| {
             assert_serialized_receipt_within_byte_budget(&payload, bytes.len() - 1);
         })
