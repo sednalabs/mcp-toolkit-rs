@@ -115,7 +115,7 @@ or server-authoring policy:
 | Tool inventory defaults | `ToolInventoryPolicy::default()` is fail-closed for unknown tools, with an explicit `permissive()` migration helper for incomplete legacy catalogs. | Keep. Generated and public-facing servers should not list or call unregistered tools by accident. |
 | Profile-filtered schema discovery | Catalog `search_response` attaches schemas only for the tools visible in the filtered result set. Full catalog snapshots may still include all registered schemas. | Keep. Deferred discovery must not leak hidden operator or profile-specific tool schemas through a profile-filtered search response. |
 | Tool list changes | `ToolListTracker` fingerprints stable tool names and exposes `notifications/tools/list_changed` method metadata. | Keep with invariant: a negotiated session's tool list must not vary as an incidental side effect of ordinary requests. Emit list-changed only for explicit refresh/profile changes. |
-| Streamable HTTP session routing | Route bundles use `rmcp` Streamable HTTP services plus bounded local session management and optional stateless fallback for sessionless POSTs. Requests that carry an unknown or expired `MCP-Session-Id` return HTTP 404 instead of falling back to stateless handling. | Keep. This is deployment assembly, not protocol reimplementation. |
+| Streamable HTTP session routing | Route bundles use `rmcp` Streamable HTTP services plus bounded local session management and optional stateless fallback for headerless POSTs. Requests that carry a malformed, whitespace-padded, duplicate, unknown, expired, or unverifiable `MCP-Session-Id` return HTTP 404 instead of falling back to stateless handling. | Keep. This is deployment assembly, not protocol reimplementation. Session resume and retained-event replay remain a separate opt-in policy after a live session has been accepted. |
 | DNS rebinding defense | Route bundles validate Host/authority and validate present `Origin` headers. Explicit `allowed_origins` are now wired through to the underlying `rmcp` stateful and stateless services and use full origin tuple matching in the outer route guard. When explicit origins are not configured, the toolkit keeps the older host-derived Origin guard for safer local defaults. | Keep for route-bundle preflight and endpoint-ready hints. Do not add more custom parsing here when an `rmcp` configuration surface exists. Public browser-facing deployments should configure explicit `allowed_origins`. |
 | Session errors | Toolkit route bundles return HTTP errors for missing/invalid sessions before forwarding to `rmcp`. | Keep, but periodically compare with `rmcp` Streamable HTTP behavior when upgrading the SDK. |
 | Auth metadata | Toolkit auth helpers generate protected-resource and authorization-server metadata. | Keep. Resource URL, issuer, scopes, and challenges are deployment-owned configuration. |
@@ -145,10 +145,11 @@ or server-authoring policy:
    `{issuer}/.well-known/openid-configuration` shape. It now follows the
    MCP 2025-11-25 OAuth/OIDC discovery order for pathful issuers, while keeping
    the path-appended OIDC endpoint as the compatibility fallback.
-8. Route-bundle stateless fallback no longer accepts POST requests that carry an
-   unknown or expired `MCP-Session-Id`. Those requests now return HTTP 404 so
-   clients re-initialize the session as required by Streamable HTTP session
-   semantics.
+8. Route-bundle stateless fallback accepts only requests that omit
+   `MCP-Session-Id`. Malformed, whitespace-padded, duplicate, unknown, expired,
+   and lookup-failed values return HTTP 404 so clients re-initialize the session
+   as required by Streamable HTTP session semantics. The route guard never
+   normalizes an identifier that the underlying service will receive unchanged.
 9. The hosted HTTP/auth starter now validates deployment settings before router
    construction. Loopback development still works with scaffold values, but
    non-loopback serving rejects the development delegation secret, placeholder

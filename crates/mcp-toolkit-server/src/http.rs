@@ -40,14 +40,15 @@ use mcp_toolkit_http::{
     },
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
-    streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
+    streamable::{
+        build_local_streamable_http_service, resolve_mcp_session_route,
+        LocalStreamableHttpServiceConfig, McpSessionRoute,
+    },
 };
 use rmcp::{
     transport::{
         common::http_header::HEADER_SESSION_ID,
-        streamable_http_server::{
-            SessionManager, StreamableHttpServerConfig, StreamableHttpService,
-        },
+        streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService},
     },
     RoleServer, Service,
 };
@@ -1035,8 +1036,9 @@ where
     S: Service<RoleServer> + Send + 'static,
 {
     let method = req.method().clone();
-    let session_id = session_id_from_headers(req.headers());
-    let has_session_header = session_id.is_some();
+    let session_route =
+        resolve_mcp_session_route(req.headers(), state.session_manager.as_ref()).await;
+    let has_session_header = session_route.header_present();
     tracing::debug!(
         method = %method,
         has_session_header,
@@ -1046,8 +1048,10 @@ where
     );
 
     match method {
-        Method::POST => handle_post(state, req, session_id).await,
-        Method::GET | Method::DELETE => handle_stateful_read(state, req, session_id, method).await,
+        Method::POST => handle_post(state, req, session_route).await,
+        Method::GET | Method::DELETE => {
+            handle_stateful_read(state, req, session_route, method).await
+        }
         _ => {
             log_route_rejection(
                 &method,
@@ -1067,26 +1071,29 @@ where
 async fn handle_post<S>(
     state: LocalMcpHttpState<S>,
     req: Request,
-    session_id: Option<String>,
+    session_route: McpSessionRoute,
 ) -> Response
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    if let Some(session_id) = session_id {
-        if session_exists(&state.session_manager, &session_id).await {
+    match session_route {
+        McpSessionRoute::Live(_) => {
             return forward_service(state.stateful_service, req, "stateful_session").await;
         }
-        log_route_rejection(
-            req.method(),
-            true,
-            "invalid_or_expired_session",
-            StatusCode::NOT_FOUND,
-        );
-        return session_error(
-            StatusCode::NOT_FOUND,
-            "Invalid or expired session ID.",
-            "Re-initialize with POST /mcp to obtain a new session id.",
-        );
+        McpSessionRoute::InvalidOrExpired => {
+            log_route_rejection(
+                req.method(),
+                true,
+                "invalid_or_expired_session",
+                StatusCode::NOT_FOUND,
+            );
+            return session_error(
+                StatusCode::NOT_FOUND,
+                "Invalid or expired session ID.",
+                "Re-initialize with POST /mcp to obtain a new session id.",
+            );
+        }
+        McpSessionRoute::Headerless => {}
     }
 
     if content_length_exceeds(req.headers(), SESSIONLESS_POST_PROBE_LIMIT) {
@@ -1148,47 +1155,50 @@ where
 async fn handle_stateful_read<S>(
     state: LocalMcpHttpState<S>,
     req: Request,
-    session_id: Option<String>,
+    session_route: McpSessionRoute,
     method: Method,
 ) -> Response
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    let Some(session_id) = session_id else {
-        if matches!(method, Method::GET) && !state.auth_enabled {
-            tracing::debug!(
-                method = %method,
-                has_session_header = false,
-                phase = "endpoint_ready_hint",
-                status = StatusCode::OK.as_u16(),
-                "streamable HTTP route-bundle request completed"
+    match session_route {
+        McpSessionRoute::Headerless => {
+            if matches!(method, Method::GET) && !state.auth_enabled {
+                tracing::debug!(
+                    method = %method,
+                    has_session_header = false,
+                    phase = "endpoint_ready_hint",
+                    status = StatusCode::OK.as_u16(),
+                    "streamable HTTP route-bundle request completed"
+                );
+                return endpoint_ready_hint();
+            }
+            log_route_rejection(
+                &method,
+                false,
+                "missing_session_id",
+                StatusCode::BAD_REQUEST,
             );
-            return endpoint_ready_hint();
+            return session_error(
+                StatusCode::BAD_REQUEST,
+                "Missing session ID.",
+                "Initialize with POST /mcp to obtain a session id.",
+            );
         }
-        log_route_rejection(
-            &method,
-            false,
-            "missing_session_id",
-            StatusCode::BAD_REQUEST,
-        );
-        return session_error(
-            StatusCode::BAD_REQUEST,
-            "Missing session ID.",
-            "Initialize with POST /mcp to obtain a session id.",
-        );
-    };
-    if !session_exists(&state.session_manager, &session_id).await {
-        log_route_rejection(
-            &method,
-            true,
-            "invalid_or_expired_session",
-            StatusCode::NOT_FOUND,
-        );
-        return session_error(
-            StatusCode::NOT_FOUND,
-            "Invalid or expired session ID.",
-            "Re-initialize with POST /mcp to obtain a new session id.",
-        );
+        McpSessionRoute::InvalidOrExpired => {
+            log_route_rejection(
+                &method,
+                true,
+                "invalid_or_expired_session",
+                StatusCode::NOT_FOUND,
+            );
+            return session_error(
+                StatusCode::NOT_FOUND,
+                "Invalid or expired session ID.",
+                "Re-initialize with POST /mcp to obtain a new session id.",
+            );
+        }
+        McpSessionRoute::Live(_) => {}
     }
     forward_service(state.stateful_service, req, "stateful_session").await
 }
@@ -1202,7 +1212,7 @@ where
     S: Service<RoleServer> + Send + 'static,
 {
     let method = req.method().clone();
-    let has_session_header = session_id_from_headers(req.headers()).is_some();
+    let has_session_header = req.headers().contains_key(HEADER_SESSION_ID);
     let response = service.handle(req).await.map(Body::new);
     tracing::debug!(
         method = %method,
@@ -1241,7 +1251,7 @@ where
     {
         tracing::warn!(
             method = %req.method(),
-            has_session_header = session_id_from_headers(req.headers()).is_some(),
+            has_session_header = req.headers().contains_key(HEADER_SESSION_ID),
             rejection_class = "host_rejected",
             status = err.status_code().as_u16(),
             "streamable HTTP route-bundle request rejected"
@@ -1256,7 +1266,7 @@ where
     if let Err(err) = origin_result {
         tracing::warn!(
             method = %req.method(),
-            has_session_header = session_id_from_headers(req.headers()).is_some(),
+            has_session_header = req.headers().contains_key(HEADER_SESSION_ID),
             rejection_class = "origin_rejected",
             status = err.status_code().as_u16(),
             "streamable HTTP route-bundle request rejected"
@@ -1287,14 +1297,6 @@ fn session_stats_json(stats: SessionStats) -> serde_json::Value {
         "lifecycle_disconnected_sessions": stats.lifecycle_disconnected_sessions,
         "lifecycle_expired_sessions_total": stats.lifecycle_expired_sessions_total,
     })
-}
-
-fn session_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
-    headers
-        .get(HEADER_SESSION_ID)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn log_route_rejection(
@@ -1341,10 +1343,6 @@ fn is_initialize_payload(body: &[u8]) -> bool {
             .unwrap_or(false),
         _ => false,
     }
-}
-
-async fn session_exists(session_manager: &BoundedSessionManager, session_id: &str) -> bool {
-    (session_manager.has_session(&session_id.into()).await).unwrap_or_default()
 }
 
 fn session_error(status: StatusCode, message: &str, hint: &str) -> Response {
