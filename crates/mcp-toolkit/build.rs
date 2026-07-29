@@ -1,0 +1,829 @@
+use std::collections::BTreeSet;
+use std::env;
+use std::error::Error;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+fn main() {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.join("../..");
+    let templates_root = repo_root.join("templates");
+    let manifests_root = repo_root.join("docs/pattern-manifests");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let templates_out_file = out_dir.join("new_server_templates.rs");
+    let pattern_registry_out_file = out_dir.join("pattern_registry.rs");
+
+    println!("cargo:rerun-if-changed={}", templates_root.display());
+    println!("cargo:rerun-if-changed={}", manifests_root.display());
+
+    let generated = generate_templates_module(&templates_root).expect("generate template module");
+    fs::write(templates_out_file, generated).expect("write generated template module");
+
+    let generated =
+        generate_pattern_registry_module(&manifests_root).expect("generate pattern registry");
+    fs::write(pattern_registry_out_file, generated).expect("write generated pattern registry");
+}
+
+fn generate_templates_module(templates_root: &Path) -> io::Result<String> {
+    let mut templates = Vec::new();
+
+    for entry in sorted_entries(templates_root)? {
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let template_root = entry.path();
+        let template_name = entry.file_name().to_string_lossy().into_owned();
+        let mut assets = Vec::new();
+        collect_assets(&template_root, &template_root, &mut assets)?;
+        assets.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        templates.push(TemplateAssets {
+            source_dir: template_name,
+            assets,
+        });
+    }
+
+    templates.sort_by(|left, right| left.source_dir.cmp(&right.source_dir));
+
+    let mut module = String::from(
+        "pub(crate) struct EmbeddedTemplateAsset {\n    pub(crate) relative_path: &'static str,\n    pub(crate) contents: &'static [u8],\n    pub(crate) executable: bool,\n}\n\npub(crate) struct EmbeddedTemplate {\n    pub(crate) source_dir: &'static str,\n    pub(crate) assets: &'static [EmbeddedTemplateAsset],\n}\n\npub(crate) static EMBEDDED_TEMPLATES: &[EmbeddedTemplate] = &[\n",
+    );
+
+    for template in templates {
+        module.push_str("    EmbeddedTemplate {\n");
+        module.push_str(&format!(
+            "        source_dir: {:?},\n        assets: &[\n",
+            template.source_dir
+        ));
+
+        for asset in template.assets {
+            module.push_str("            EmbeddedTemplateAsset {\n");
+            module.push_str(&format!(
+                "                relative_path: {:?},\n",
+                asset.relative_path
+            ));
+            module.push_str(&format!(
+                "                contents: include_bytes!({:?}),\n",
+                asset.absolute_path.display().to_string()
+            ));
+            module.push_str(&format!(
+                "                executable: {},\n",
+                asset.executable
+            ));
+            module.push_str("            },\n");
+        }
+
+        module.push_str("        ],\n    },\n");
+    }
+
+    module.push_str("];\n");
+    Ok(module)
+}
+
+fn generate_pattern_registry_module(manifests_root: &Path) -> Result<String, Box<dyn Error>> {
+    let mut manifests = Vec::new();
+
+    for entry in sorted_entries(manifests_root)? {
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+
+        println!("cargo:rerun-if-changed={}", path.display());
+        let contents = fs::read_to_string(&path)?;
+        let value: Value = serde_json::from_str(&contents)?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        manifests.push(read_pattern_manifest(file_name, &value)?);
+    }
+
+    manifests.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let mut module =
+        String::from("pub(crate) static PATTERN_MANIFESTS: &[PatternManifestSpec] = &[\n");
+
+    for manifest in manifests {
+        module.push_str("    PatternManifestSpec {\n");
+        module.push_str(&format!("        path: {:?},\n", manifest.path));
+        module.push_str("        server: PatternServerSpec {\n");
+        module.push_str(&format!("            name: {:?},\n", manifest.server.name));
+        module.push_str(&format!(
+            "            repository: {:?},\n",
+            manifest.server.repository
+        ));
+        module.push_str(&format!("            role: {:?},\n", manifest.server.role));
+        module.push_str(&format!(
+            "            notes: {:?},\n",
+            manifest.server.notes
+        ));
+        module.push_str("        },\n");
+        module.push_str(&format!(
+            "        patterns: &{},\n",
+            string_array_literal(&manifest.patterns)
+        ));
+        module.push_str(&format!(
+            "        toolkit_crates: &{},\n",
+            string_array_literal(&manifest.toolkit_crates)
+        ));
+        module.push_str(&format!(
+            "        transports: &{},\n",
+            string_array_literal(&manifest.transports)
+        ));
+        module.push_str(&format!(
+            "        auth_modes: &{},\n",
+            string_array_literal(&manifest.auth_modes)
+        ));
+        module.push_str(&format!(
+            "        discovery: &{},\n",
+            string_array_literal(&manifest.discovery)
+        ));
+        module.push_str(&format!(
+            "        mutation_policy: {:?},\n",
+            manifest.mutation_policy
+        ));
+        module.push_str(&format!(
+            "        schema_snapshot: {:?},\n",
+            manifest.schema_snapshot
+        ));
+        module.push_str("        scratchpad: PatternScratchpadSpec {\n");
+        module.push_str(&format!(
+            "            supported: {},\n",
+            manifest.scratchpad.supported
+        ));
+        module.push_str(&format!(
+            "            engine: {:?},\n",
+            manifest.scratchpad.engine
+        ));
+        module.push_str(&format!(
+            "            profile: {:?},\n",
+            manifest.scratchpad.profile
+        ));
+        module.push_str(&format!(
+            "            notes: {:?},\n",
+            manifest.scratchpad.notes
+        ));
+        module.push_str("        },\n");
+        module.push_str(&format!(
+            "        default_profiles: &{},\n",
+            string_array_literal(&manifest.default_profiles)
+        ));
+        module.push_str(&format!(
+            "        profiles: &{},\n",
+            string_array_literal(&manifest.profiles)
+        ));
+        module.push_str("        conformance: PatternConformanceSpec {\n");
+        module.push_str(&format!(
+            "            schema_snapshot: {:?},\n",
+            manifest.conformance.schema_snapshot
+        ));
+        module.push_str(&format!(
+            "            transport_contract: {:?},\n",
+            manifest.conformance.transport_contract
+        ));
+        module.push_str(&format!(
+            "            auth_surface_contract: {:?},\n",
+            manifest.conformance.auth_surface_contract
+        ));
+        module.push_str(&format!(
+            "            domain_contracts: {:?},\n",
+            manifest.conformance.domain_contracts
+        ));
+        module.push_str(&format!(
+            "            hosted_validation: {:?},\n",
+            manifest.conformance.hosted_validation
+        ));
+        module.push_str(&format!(
+            "            release_evidence: {:?},\n",
+            manifest.conformance.release_evidence
+        ));
+        module.push_str(&format!(
+            "            notes: {:?},\n",
+            manifest.conformance.notes
+        ));
+        module.push_str("        },\n");
+        module.push_str(&format!(
+            "        conformance_notes: {:?},\n",
+            manifest.conformance.notes
+        ));
+        module.push_str("        references: &[\n");
+        for reference in manifest.references {
+            module.push_str("            PatternReferenceSpec {\n");
+            module.push_str(&format!("                label: {:?},\n", reference.label));
+            module.push_str(&format!("                kind: {:?},\n", reference.kind));
+            module.push_str(&format!("                path: {:?},\n", reference.path));
+            module.push_str("            },\n");
+        }
+        module.push_str("        ],\n");
+        module.push_str("    },\n");
+    }
+
+    module.push_str("];\n");
+    Ok(module)
+}
+
+fn read_pattern_manifest(path: String, value: &Value) -> Result<PatternManifest, Box<dyn Error>> {
+    validate_manifest_contract(value)?;
+
+    let server = object_field(value, "server")?;
+    let tool_surface = object_field(value, "tool_surface")?;
+    let scratchpad = object_field(value, "scratchpad")?;
+    let conformance = object_field(value, "conformance")?;
+
+    let mut default_profiles = Vec::new();
+    let mut profiles = Vec::new();
+    for profile in array_field(value, "profiles")? {
+        let profile = profile
+            .as_object()
+            .ok_or_else(|| manifest_error("profile entries must be objects"))?;
+        let name = string_field_object(profile, "name")?.to_string();
+        if optional_bool_field_object(profile, "default", false)? {
+            default_profiles.push(name.clone());
+        }
+        profiles.push(name);
+    }
+
+    let mut references = Vec::new();
+    for reference in array_field(value, "references")? {
+        let reference = reference
+            .as_object()
+            .ok_or_else(|| manifest_error("reference entries must be objects"))?;
+        references.push(PatternReference {
+            label: string_field_object(reference, "label")?.to_string(),
+            kind: string_field_object(reference, "kind")?.to_string(),
+            path: string_field_object(reference, "path")?.to_string(),
+        });
+    }
+
+    Ok(PatternManifest {
+        path: format!("docs/pattern-manifests/{path}"),
+        server: PatternServer {
+            name: string_field(server, "name")?.to_string(),
+            repository: string_field(server, "repository")?.to_string(),
+            role: string_field(server, "role")?.to_string(),
+            notes: optional_string_field(server, "notes")
+                .unwrap_or("")
+                .to_string(),
+        },
+        patterns: string_array(value, "patterns")?,
+        toolkit_crates: string_array(value, "toolkit_crates")?,
+        transports: string_array(value, "transports")?,
+        auth_modes: string_array(value, "auth_modes")?,
+        discovery: string_array(tool_surface, "discovery")?,
+        mutation_policy: string_field(tool_surface, "mutation_policy")?.to_string(),
+        schema_snapshot: string_field(tool_surface, "schema_snapshot")?.to_string(),
+        scratchpad: PatternScratchpad {
+            supported: bool_field(scratchpad, "supported")?,
+            engine: string_field(scratchpad, "engine")?.to_string(),
+            profile: string_field(scratchpad, "profile")?.to_string(),
+            notes: string_field(scratchpad, "notes")?.to_string(),
+        },
+        default_profiles,
+        profiles,
+        conformance: PatternConformance {
+            schema_snapshot: string_field(conformance, "schema_snapshot")?.to_string(),
+            transport_contract: string_field(conformance, "transport_contract")?.to_string(),
+            auth_surface_contract: string_field(conformance, "auth_surface_contract")?.to_string(),
+            domain_contracts: string_field(conformance, "domain_contracts")?.to_string(),
+            hosted_validation: string_field(conformance, "hosted_validation")?.to_string(),
+            release_evidence: string_field(conformance, "release_evidence")?.to_string(),
+            notes: optional_string_field(conformance, "notes")
+                .unwrap_or("")
+                .to_string(),
+        },
+        references,
+    })
+}
+
+fn object_field<'a>(value: &'a Value, field: &str) -> Result<&'a Value, Box<dyn Error>> {
+    value
+        .get(field)
+        .filter(|value| value.is_object())
+        .ok_or_else(|| manifest_error(format!("missing object field `{field}`")))
+}
+
+fn array_field<'a>(value: &'a Value, field: &str) -> Result<&'a [Value], Box<dyn Error>> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| manifest_error(format!("missing array field `{field}`")))
+}
+
+fn string_field<'a>(value: &'a Value, field: &str) -> Result<&'a str, Box<dyn Error>> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| manifest_error(format!("missing string field `{field}`")))
+}
+
+fn optional_string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(Value::as_str)
+}
+
+fn bool_field(value: &Value, field: &str) -> Result<bool, Box<dyn Error>> {
+    value
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| manifest_error(format!("missing bool field `{field}`")))
+}
+
+fn string_field_object<'a>(
+    value: &'a serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<&'a str, Box<dyn Error>> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| manifest_error(format!("missing string field `{field}`")))
+}
+
+fn optional_bool_field_object(
+    value: &serde_json::Map<String, Value>,
+    field: &str,
+    default: bool,
+) -> Result<bool, Box<dyn Error>> {
+    match value.get(field) {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| manifest_error(format!("field `{field}` must be a bool"))),
+        None => Ok(default),
+    }
+}
+
+fn string_array(value: &Value, field: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    array_field(value, field)?
+        .iter()
+        .map(|item| {
+            item.as_str().map(str::to_string).ok_or_else(|| {
+                manifest_error(format!("array field `{field}` must contain strings"))
+            })
+        })
+        .collect()
+}
+
+fn validate_manifest_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    object_has_only(
+        value,
+        "manifest",
+        &[
+            "schema_version",
+            "server",
+            "patterns",
+            "toolkit_crates",
+            "transports",
+            "auth_modes",
+            "tool_surface",
+            "scratchpad",
+            "profiles",
+            "conformance",
+            "references",
+        ],
+    )?;
+    match value.get("schema_version").and_then(Value::as_i64) {
+        Some(1) => {}
+        _ => return Err(manifest_error("schema_version must be 1")),
+    }
+
+    validate_server_contract(object_field(value, "server")?)?;
+    validate_pattern_array(value, "patterns")?;
+    validate_toolkit_crates(value)?;
+    validate_unique_allowed_array(
+        value,
+        "transports",
+        &[
+            "stdio",
+            "streamable-http",
+            "hosted-http",
+            "service-adoption",
+        ],
+        true,
+    )?;
+    validate_unique_allowed_array(
+        value,
+        "auth_modes",
+        &[
+            "none",
+            "google-adc",
+            "google-oauth-client",
+            "service-account",
+            "mcp-bearer",
+            "oauth-metadata",
+            "device-auth-metadata",
+            "jwks",
+            "introspection",
+            "request-header",
+            "database-policy",
+            "external-policy",
+        ],
+        false,
+    )?;
+    validate_tool_surface_contract(object_field(value, "tool_surface")?)?;
+    validate_scratchpad_contract(object_field(value, "scratchpad")?)?;
+    validate_profiles_contract(value)?;
+    validate_conformance_contract(object_field(value, "conformance")?)?;
+    validate_references_contract(value)?;
+
+    Ok(())
+}
+
+fn validate_server_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    object_has_only(
+        value,
+        "server",
+        &["name", "repository", "language", "role", "notes"],
+    )?;
+    nonempty_string_field(value, "name")?;
+    nonempty_string_field(value, "repository")?;
+    nonempty_string_field(value, "language")?;
+    enum_field(
+        value,
+        "role",
+        &[
+            "reference_server",
+            "starter_template",
+            "adoption_slice",
+            "adjacent_reference",
+        ],
+    )?;
+    optional_string_contract(value, "notes")
+}
+
+fn validate_pattern_array(value: &Value, field: &str) -> Result<(), Box<dyn Error>> {
+    validate_unique_allowed_array(
+        value,
+        field,
+        &[
+            "minimal-stdio-intent",
+            "google-provider-read-only",
+            "analytics-scratchpad",
+            "hosted-http-auth",
+            "operator-mutation",
+            "database-policy",
+            "public-release-ready",
+        ],
+        true,
+    )
+}
+
+fn validate_toolkit_crates(value: &Value) -> Result<(), Box<dyn Error>> {
+    let crates = string_array(value, "toolkit_crates")?;
+    ensure_unique("toolkit_crates", &crates)?;
+    for crate_name in crates {
+        if !crate_name.starts_with("mcp-toolkit") {
+            return Err(manifest_error(format!(
+                "toolkit_crates entry `{crate_name}` must start with mcp-toolkit"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_surface_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    object_has_only(
+        value,
+        "tool_surface",
+        &["discovery", "mutation_policy", "schema_snapshot", "notes"],
+    )?;
+    validate_unique_allowed_array(
+        value,
+        "discovery",
+        &[
+            "tool-inventory",
+            "find-tools",
+            "profile-filtered-discovery",
+            "openai-tool-search",
+            "resource-templates",
+            "static-tools-list",
+            "schema_snapshot",
+        ],
+        false,
+    )?;
+    enum_field(
+        value,
+        "mutation_policy",
+        &[
+            "none",
+            "read-only",
+            "profile-gated",
+            "operator-only",
+            "external-policy",
+        ],
+    )?;
+    enum_field(
+        value,
+        "schema_snapshot",
+        &["present", "planned", "not-applicable", "unknown"],
+    )?;
+    optional_string_contract(value, "notes")
+}
+
+fn validate_scratchpad_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    object_has_only(
+        value,
+        "scratchpad",
+        &["supported", "engine", "profile", "notes"],
+    )?;
+    bool_field(value, "supported")?;
+    enum_field(value, "engine", &["none", "duckdb", "external"])?;
+    nonempty_string_field(value, "profile")?;
+    nonempty_string_field(value, "notes")?;
+    Ok(())
+}
+
+fn validate_profiles_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    for profile in array_field(value, "profiles")? {
+        object_has_only(
+            profile,
+            "profile",
+            &["name", "default", "tool_groups", "notes"],
+        )?;
+        nonempty_string_field(profile, "name")?;
+        optional_bool_field(profile, "default")?;
+        let groups = string_array(profile, "tool_groups")?;
+        for group in groups {
+            if group.is_empty() {
+                return Err(manifest_error(
+                    "profile tool_groups entries must not be empty",
+                ));
+            }
+        }
+        optional_string_contract(profile, "notes")?;
+    }
+    Ok(())
+}
+
+fn validate_conformance_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    object_has_only(
+        value,
+        "conformance",
+        &[
+            "schema_snapshot",
+            "transport_contract",
+            "auth_surface_contract",
+            "domain_contracts",
+            "hosted_validation",
+            "release_evidence",
+            "notes",
+        ],
+    )?;
+    for field in [
+        "schema_snapshot",
+        "transport_contract",
+        "auth_surface_contract",
+        "domain_contracts",
+        "hosted_validation",
+        "release_evidence",
+    ] {
+        enum_field(
+            value,
+            field,
+            &[
+                "present",
+                "planned",
+                "reference-only",
+                "not-applicable",
+                "unknown",
+            ],
+        )?;
+    }
+    optional_string_contract(value, "notes")
+}
+
+fn validate_references_contract(value: &Value) -> Result<(), Box<dyn Error>> {
+    let references = array_field(value, "references")?;
+    if references.is_empty() {
+        return Err(manifest_error("references must contain at least one entry"));
+    }
+    for reference in references {
+        object_has_only(reference, "reference", &["label", "kind", "path"])?;
+        nonempty_string_field(reference, "label")?;
+        enum_field(
+            reference,
+            "kind",
+            &["repo", "doc", "source", "test", "workflow", "template"],
+        )?;
+        nonempty_string_field(reference, "path")?;
+    }
+    Ok(())
+}
+
+fn validate_unique_allowed_array(
+    value: &Value,
+    field: &str,
+    allowed: &[&str],
+    require_nonempty: bool,
+) -> Result<(), Box<dyn Error>> {
+    let values = string_array(value, field)?;
+    if require_nonempty && values.is_empty() {
+        return Err(manifest_error(format!("{field} must not be empty")));
+    }
+    ensure_unique(field, &values)?;
+    for value in values {
+        if !allowed.contains(&value.as_str()) {
+            return Err(manifest_error(format!(
+                "{field} contains unsupported value `{value}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_unique(field: &str, values: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut seen = BTreeSet::new();
+    for value in values {
+        if !seen.insert(value) {
+            return Err(manifest_error(format!(
+                "{field} contains duplicate `{value}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn object_has_only(value: &Value, label: &str, allowed: &[&str]) -> Result<(), Box<dyn Error>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| manifest_error(format!("{label} must be an object")))?;
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(manifest_error(format!(
+                "{label} contains unsupported field `{key}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn enum_field(value: &Value, field: &str, allowed: &[&str]) -> Result<(), Box<dyn Error>> {
+    let found = string_field(value, field)?;
+    if allowed.contains(&found) {
+        Ok(())
+    } else {
+        Err(manifest_error(format!(
+            "{field} contains unsupported value `{found}`"
+        )))
+    }
+}
+
+fn nonempty_string_field<'a>(value: &'a Value, field: &str) -> Result<&'a str, Box<dyn Error>> {
+    let found = string_field(value, field)?;
+    if found.is_empty() {
+        Err(manifest_error(format!("{field} must not be empty")))
+    } else {
+        Ok(found)
+    }
+}
+
+fn optional_string_contract(value: &Value, field: &str) -> Result<(), Box<dyn Error>> {
+    match value.get(field) {
+        Some(value) if value.is_string() => Ok(()),
+        Some(_) => Err(manifest_error(format!("field `{field}` must be a string"))),
+        None => Ok(()),
+    }
+}
+
+fn optional_bool_field(value: &Value, field: &str) -> Result<(), Box<dyn Error>> {
+    match value.get(field) {
+        Some(value) if value.is_boolean() => Ok(()),
+        Some(_) => Err(manifest_error(format!("field `{field}` must be a bool"))),
+        None => Ok(()),
+    }
+}
+
+fn manifest_error(message: impl Into<String>) -> Box<dyn Error> {
+    Box::new(io::Error::new(io::ErrorKind::InvalidData, message.into()))
+}
+
+fn string_array_literal(values: &[String]) -> String {
+    let mut literal = String::from("[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            literal.push_str(", ");
+        }
+        literal.push_str(&format!("{value:?}"));
+    }
+    literal.push(']');
+    literal
+}
+
+fn collect_assets(root: &Path, current: &Path, assets: &mut Vec<TemplateAsset>) -> io::Result<()> {
+    for entry in sorted_entries(current)? {
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+
+        if file_type.is_dir() {
+            if is_ignored_dir(&path) {
+                continue;
+            }
+            collect_assets(root, &path, assets)?;
+            continue;
+        }
+
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let relative_path = path
+            .strip_prefix(root)
+            .map_err(io::Error::other)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        println!("cargo:rerun-if-changed={}", path.display());
+        assets.push(TemplateAsset {
+            relative_path,
+            absolute_path: path.clone(),
+            executable: is_executable(&path)?,
+        });
+    }
+
+    Ok(())
+}
+
+fn is_ignored_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".git" | "target")
+    )
+}
+
+fn sorted_entries(path: &Path) -> io::Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    Ok(entries)
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+
+    Ok(fs::metadata(path)?.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_path: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+struct TemplateAssets {
+    source_dir: String,
+    assets: Vec<TemplateAsset>,
+}
+
+struct TemplateAsset {
+    relative_path: String,
+    absolute_path: PathBuf,
+    executable: bool,
+}
+
+struct PatternManifest {
+    path: String,
+    server: PatternServer,
+    patterns: Vec<String>,
+    toolkit_crates: Vec<String>,
+    transports: Vec<String>,
+    auth_modes: Vec<String>,
+    discovery: Vec<String>,
+    mutation_policy: String,
+    schema_snapshot: String,
+    scratchpad: PatternScratchpad,
+    default_profiles: Vec<String>,
+    profiles: Vec<String>,
+    conformance: PatternConformance,
+    references: Vec<PatternReference>,
+}
+
+struct PatternServer {
+    name: String,
+    repository: String,
+    role: String,
+    notes: String,
+}
+
+struct PatternScratchpad {
+    supported: bool,
+    engine: String,
+    profile: String,
+    notes: String,
+}
+
+struct PatternConformance {
+    schema_snapshot: String,
+    transport_contract: String,
+    auth_surface_contract: String,
+    domain_contracts: String,
+    hosted_validation: String,
+    release_evidence: String,
+    notes: String,
+}
+
+struct PatternReference {
+    label: String,
+    kind: String,
+    path: String,
+}

@@ -28,11 +28,20 @@
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io)
 
 pub mod capability;
+pub mod guarded_action;
 pub mod mcp_apps;
 pub mod notifications;
 pub mod openai_tool_search;
 pub mod pagination;
 pub mod query_evidence;
+pub mod response_contract;
 pub mod rmcp_models;
 pub mod tool_inventory;
 pub mod tool_schema;
+
+/// Re-export the pinned RMCP SDK used by toolkit helpers.
+///
+/// Downstream MCP servers can import `mcp_toolkit_core::rmcp` to keep model
+/// types aligned with toolkit helper return values instead of independently
+/// drifting to a different RMCP version.
+pub use rmcp;

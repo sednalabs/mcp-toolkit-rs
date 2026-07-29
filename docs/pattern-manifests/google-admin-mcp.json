@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "google-admin-mcp",
+    "repository": "https://github.com/sednalabs/google-admin-mcp",
+    "language": "rust",
+    "role": "reference_server",
+    "notes": "Small Google auth and discovery reference."
+  },
+  "patterns": ["minimal-stdio-intent", "google-provider-read-only"],
+  "toolkit_crates": ["mcp-toolkit-core", "mcp-toolkit-testing"],
+  "transports": ["stdio"],
+  "auth_modes": ["google-adc", "google-oauth-client"],
+  "tool_surface": {
+    "discovery": [
+      "tool-inventory",
+      "find-tools",
+      "profile-filtered-discovery",
+      "schema_snapshot"
+    ],
+    "mutation_policy": "read-only",
+    "schema_snapshot": "present",
+    "notes": "Uses inventory-backed discovery with a read-only default posture."
+  },
+  "scratchpad": {
+    "supported": false,
+    "engine": "none",
+    "profile": "none",
+    "notes": "No large-result scratchpad workflow."
+  },
+  "profiles": [
+    {
+      "name": "read_only",
+      "default": true,
+      "tool_groups": ["auth", "directory-read", "discovery"]
+    }
+  ],
+  "conformance": {
+    "schema_snapshot": "present",
+    "transport_contract": "present",
+    "auth_surface_contract": "present",
+    "domain_contracts": "present",
+    "hosted_validation": "present",
+    "release_evidence": "planned",
+    "notes": "Reference row should stay focused on auth UX and discovery."
+  },
+  "references": [
+    {
+      "label": "README",
+      "kind": "doc",
+      "path": "README.md"
+    },
+    {
+      "label": "Tool surface",
+      "kind": "source",
+      "path": "src/tool_surface.rs"
+    }
+  ]
+}

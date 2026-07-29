@@ -1,0 +1,25 @@
+{
+  "name": "hosted HTTP auth starter smoke",
+  "description": "Calls the deterministic read-only starter tool through a running authenticated Streamable HTTP MCP server.",
+  "transport": "streamable-http",
+  "url": "http://127.0.0.1:9411/mcp",
+  "access_token_path": "hosted-http-auth-server.access-token.json",
+  "timeout_ms": 20000,
+  "steps": [
+    {
+      "id": "status",
+      "tool": "read_status",
+      "input": {
+        "component": "service"
+      },
+      "expect": {
+        "content": [
+          {
+            "type": "text",
+            "text": "service: starter template is running"
+          }
+        ]
+      }
+    }
+  ]
+}

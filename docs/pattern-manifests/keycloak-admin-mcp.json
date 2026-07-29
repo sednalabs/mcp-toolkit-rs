@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "keycloak-admin-mcp",
+    "repository": "https://github.com/sednalabs/keycloak-admin-mcp",
+    "language": "typescript",
+    "role": "adjacent_reference",
+    "notes": "Adjacent auth-policy reference, not a Rust scaffold source."
+  },
+  "patterns": ["hosted-http-auth", "operator-mutation"],
+  "toolkit_crates": [],
+  "transports": ["hosted-http", "streamable-http"],
+  "auth_modes": ["oauth-metadata", "mcp-bearer", "request-header", "external-policy"],
+  "tool_surface": {
+    "discovery": ["static-tools-list", "profile-filtered-discovery"],
+    "mutation_policy": "operator-only",
+    "schema_snapshot": "unknown",
+    "notes": "Use as auth-policy evidence without copying runtime APIs into Rust."
+  },
+  "scratchpad": {
+    "supported": false,
+    "engine": "none",
+    "profile": "none",
+    "notes": "No large-result scratchpad workflow."
+  },
+  "profiles": [
+    {
+      "name": "read",
+      "default": true,
+      "tool_groups": ["realm-read", "auth-status"]
+    },
+    {
+      "name": "operator",
+      "default": false,
+      "tool_groups": ["realm-write", "admin"]
+    }
+  ],
+  "conformance": {
+    "schema_snapshot": "unknown",
+    "transport_contract": "reference-only",
+    "auth_surface_contract": "present",
+    "domain_contracts": "present",
+    "hosted_validation": "unknown",
+    "release_evidence": "unknown",
+    "notes": "Keep this row as an adjacent policy reference."
+  },
+  "references": [
+    {
+      "label": "Auth philosophy",
+      "kind": "doc",
+      "path": "docs/auth-philosophy.md"
+    },
+    {
+      "label": "Scope policy",
+      "kind": "doc",
+      "path": "docs/scope-policy.md"
+    },
+    {
+      "label": "Auth guard source",
+      "kind": "source",
+      "path": "src/auth.ts"
+    }
+  ]
+}

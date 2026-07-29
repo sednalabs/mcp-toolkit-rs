@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sednalabs/mcp-toolkit-rs/docs/pattern-manifest.schema.json",
+  "title": "MCP Toolkit Pattern Manifest",
+  "description": "Declarative summary of reusable MCP server patterns mined from a reference server, template, or adoption slice.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "server",
+    "patterns",
+    "toolkit_crates",
+    "transports",
+    "auth_modes",
+    "tool_surface",
+    "scratchpad",
+    "profiles",
+    "conformance",
+    "references"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "repository", "language", "role"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "minLength": 1 },
+        "language": { "type": "string", "minLength": 1 },
+        "role": {
+          "type": "string",
+          "enum": [
+            "reference_server",
+            "starter_template",
+            "adoption_slice",
+            "adjacent_reference"
+          ]
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "patterns": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "minimal-stdio-intent",
+          "google-provider-read-only",
+          "analytics-scratchpad",
+          "hosted-http-auth",
+          "operator-mutation",
+          "database-policy",
+          "public-release-ready"
+        ]
+      }
+    },
+    "toolkit_crates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^mcp-toolkit" }
+    },
+    "transports": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["stdio", "streamable-http", "hosted-http", "service-adoption"]
+      }
+    },
+    "auth_modes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "none",
+          "google-adc",
+          "google-oauth-client",
+          "service-account",
+          "mcp-bearer",
+          "oauth-metadata",
+          "device-auth-metadata",
+          "jwks",
+          "introspection",
+          "request-header",
+          "database-policy",
+          "external-policy"
+        ]
+      }
+    },
+    "tool_surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["discovery", "mutation_policy", "schema_snapshot"],
+      "properties": {
+        "discovery": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "tool-inventory",
+              "find-tools",
+              "profile-filtered-discovery",
+              "openai-tool-search",
+              "resource-templates",
+              "static-tools-list",
+              "schema_snapshot"
+            ]
+          }
+        },
+        "mutation_policy": {
+          "type": "string",
+          "enum": [
+            "none",
+            "read-only",
+            "profile-gated",
+            "operator-only",
+            "external-policy"
+          ]
+        },
+        "schema_snapshot": {
+          "type": "string",
+          "enum": ["present", "planned", "not-applicable", "unknown"]
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "scratchpad": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "engine", "profile", "notes"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "engine": { "type": "string", "enum": ["none", "duckdb", "external"] },
+        "profile": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "tool_groups"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "default": { "type": "boolean" },
+          "tool_groups": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "conformance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_snapshot",
+        "transport_contract",
+        "auth_surface_contract",
+        "domain_contracts",
+        "hosted_validation",
+        "release_evidence"
+      ],
+      "properties": {
+        "schema_snapshot": { "$ref": "#/$defs/conformance_state" },
+        "transport_contract": { "$ref": "#/$defs/conformance_state" },
+        "auth_surface_contract": { "$ref": "#/$defs/conformance_state" },
+        "domain_contracts": { "$ref": "#/$defs/conformance_state" },
+        "hosted_validation": { "$ref": "#/$defs/conformance_state" },
+        "release_evidence": { "$ref": "#/$defs/conformance_state" },
+        "notes": { "type": "string" }
+      }
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "kind", "path"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1 },
+          "kind": {
+            "type": "string",
+            "enum": ["repo", "doc", "source", "test", "workflow", "template"]
+          },
+          "path": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "conformance_state": {
+      "type": "string",
+      "enum": ["present", "planned", "reference-only", "not-applicable", "unknown"]
+    }
+  }
+}

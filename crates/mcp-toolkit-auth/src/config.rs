@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::providers::read_body_limited;
 use crate::AuthError;
+use mcp_toolkit_http::oauth::authorization_server_discovery_urls;
 
 const OIDC_DISCOVERY_MAX_BYTES: usize = 1024 * 1024;
 
@@ -50,22 +51,6 @@ pub enum ClientAuthMethod {
     #[default]
     ClientSecretBasic,
     ClientSecretPost,
-}
-
-/// Context for an authentication request.
-#[derive(Debug, Clone, Copy)]
-pub struct AuthRequestContext {
-    pub bearer_only: bool,
-}
-
-impl AuthRequestContext {
-    pub fn bearer_only() -> Self {
-        Self { bearer_only: true }
-    }
-
-    pub fn token_bound() -> Self {
-        Self { bearer_only: false }
-    }
 }
 
 /// Configuration structure for authentication policies.
@@ -148,7 +133,7 @@ impl AuthConfig {
 }
 
 /// OIDC metadata discovered from an authorization server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OidcDiscovery {
     #[serde(rename = "issuer")]
     pub issuer: Option<String>,
@@ -174,7 +159,16 @@ pub struct OidcDiscovery {
     pub code_challenge_methods_supported: Option<Vec<String>>,
 }
 
-/// Performs OIDC discovery to retrieve authorization server metadata.
+/// Performs OIDC discovery at the metadata URLs derived from an issuer.
+///
+/// # Errors
+/// Returns an error when the issuer is empty or invalid, every derived metadata
+/// endpoint fails, or the discovered metadata does not satisfy the OIDC
+/// identity and endpoint contract.
+///
+/// # Security
+/// The discovered `issuer` must exactly match `issuer_url`. Metadata endpoints
+/// must use HTTPS, except for loopback HTTP used by local development.
 pub async fn discover_oidc_metadata(
     issuer_url: &str,
     client: Option<&Client>,
@@ -183,10 +177,74 @@ pub async fn discover_oidc_metadata(
     if issuer.is_empty() {
         return Err(AuthError::new("OIDC issuer URL is empty"));
     }
-    let well_known = format!("{issuer}/.well-known/openid-configuration");
+    let discovery_urls = authorization_server_discovery_urls(issuer).map_err(|e| {
+        AuthError::new(format!("Discovery issuer URL is invalid: {e}"))
+            .with_reason("invalid_issuer_url")
+            .with_status(400)
+    })?;
     let http = client.cloned().unwrap_or_else(Client::new);
+
+    let mut failures = Vec::new();
+    for discovery_url in discovery_urls {
+        match fetch_oidc_metadata(&http, issuer, &discovery_url).await {
+            Ok(metadata) => return Ok(metadata),
+            Err(err) => failures.push(format!("{discovery_url}: {err}")),
+        }
+    }
+
+    let detail = if failures.is_empty() {
+        "no discovery endpoints were derived".to_string()
+    } else {
+        failures.join("; ")
+    };
+    Err(AuthError::new(format!(
+        "Discovery failed for all metadata endpoints: {detail}"
+    )))
+}
+
+/// Fetches OIDC metadata through an explicit transport URL for a canonical issuer.
+///
+/// Use this when an authorization server has a public issuer but its metadata is
+/// reached through a private backchannel during startup.
+///
+/// # Errors
+/// Returns an error when the issuer or discovery URL is empty or invalid, the
+/// transport request fails, or the discovered metadata does not satisfy the
+/// canonical issuer and endpoint contract.
+///
+/// # Security
+/// The transport URL must use HTTPS, except for loopback HTTP. It affects only
+/// where metadata is fetched: the returned `issuer` must still exactly match
+/// `issuer_url`, so a private route cannot redefine token identity.
+pub async fn discover_oidc_metadata_from_url(
+    issuer_url: &str,
+    discovery_url: &str,
+    client: Option<&Client>,
+) -> Result<OidcDiscovery, AuthError> {
+    let issuer = issuer_url.trim().trim_end_matches('/');
+    if issuer.is_empty() {
+        return Err(AuthError::new("OIDC issuer URL is empty"));
+    }
+    validate_metadata_url("issuer", issuer)?;
+
+    let discovery_url = discovery_url.trim();
+    if discovery_url.is_empty() {
+        return Err(AuthError::new("OIDC discovery URL is empty"));
+    }
+    validate_metadata_url("discovery_url", discovery_url)?;
+
+    let http = client.cloned().unwrap_or_else(Client::new);
+    let metadata = fetch_oidc_metadata(&http, issuer, discovery_url).await;
+    metadata
+}
+
+async fn fetch_oidc_metadata(
+    http: &Client,
+    issuer: &str,
+    discovery_url: &str,
+) -> Result<OidcDiscovery, AuthError> {
     let response = http
-        .get(&well_known)
+        .get(discovery_url)
         .timeout(Duration::from_secs(5))
         .send()
         .await
@@ -301,7 +359,21 @@ impl Default for AuthConfig {
 
 #[cfg(test)]
 mod profile_tests {
-    use super::{validate_oidc_metadata, AuthConfig, AuthMode, AuthSecurityProfile, OidcDiscovery};
+    use std::sync::Arc;
+
+    use axum::{
+        extract::{Request, State},
+        response::{IntoResponse, Response},
+        routing::any,
+        Json, Router,
+    };
+    use http::StatusCode;
+    use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
+
+    use super::{
+        discover_oidc_metadata, discover_oidc_metadata_from_url, validate_oidc_metadata,
+        AuthConfig, AuthMode, AuthSecurityProfile, OidcDiscovery,
+    };
 
     #[test]
     fn l1_profile_defaults() {
@@ -404,5 +476,199 @@ mod profile_tests {
         metadata.jwks_uri = "http://127.0.0.1:8080/jwks".to_string();
         validate_oidc_metadata("http://127.0.0.1:8080", &metadata)
             .expect("loopback http metadata should pass");
+    }
+
+    #[tokio::test]
+    async fn discover_oidc_metadata_tries_pathful_issuer_order_before_appended_fallback() {
+        let fixture = DiscoveryFixture::spawn("/tenant/.well-known/openid-configuration").await;
+        let metadata = discover_oidc_metadata(&fixture.issuer, None)
+            .await
+            .expect("discovery should fall back to appended OIDC metadata");
+
+        assert_eq!(metadata.issuer.as_deref(), Some(fixture.issuer.as_str()));
+        assert_eq!(
+            fixture.observed_paths().await,
+            vec![
+                "/.well-known/oauth-authorization-server/tenant".to_string(),
+                "/.well-known/openid-configuration/tenant".to_string(),
+                "/tenant/.well-known/openid-configuration".to_string(),
+            ]
+        );
+        fixture.shutdown();
+    }
+
+    #[tokio::test]
+    async fn discover_oidc_metadata_accepts_path_inserted_authorization_metadata() {
+        let fixture =
+            DiscoveryFixture::spawn("/.well-known/oauth-authorization-server/tenant").await;
+        let metadata = discover_oidc_metadata(&fixture.issuer, None)
+            .await
+            .expect("discovery should accept first path-inserted endpoint");
+
+        assert_eq!(metadata.issuer.as_deref(), Some(fixture.issuer.as_str()));
+        assert_eq!(
+            fixture.observed_paths().await,
+            vec!["/.well-known/oauth-authorization-server/tenant".to_string()]
+        );
+        fixture.shutdown();
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_url_preserves_canonical_issuer_identity() {
+        let canonical_issuer = "https://issuer.example/tenant";
+        let fixture =
+            DiscoveryFixture::spawn_for_issuer("/private/openid-configuration", canonical_issuer)
+                .await;
+        let discovery_url = fixture.url("/private/openid-configuration");
+
+        let metadata = discover_oidc_metadata_from_url(canonical_issuer, &discovery_url, None)
+            .await
+            .expect("private transport should preserve public issuer identity");
+
+        assert_eq!(
+            metadata,
+            OidcDiscovery {
+                issuer: Some(canonical_issuer.to_string()),
+                authorization_endpoint: Some(format!("{canonical_issuer}/authorize")),
+                token_endpoint: Some(format!("{canonical_issuer}/token")),
+                registration_endpoint: None,
+                jwks_uri: format!("{canonical_issuer}/jwks"),
+                introspection_endpoint: None,
+                device_authorization_endpoint: None,
+                grant_types_supported: None,
+                client_id_metadata_document_supported: None,
+                token_endpoint_auth_methods_supported: None,
+                code_challenge_methods_supported: None,
+            }
+        );
+        assert_eq!(
+            fixture.observed_paths().await,
+            vec!["/private/openid-configuration".to_string()]
+        );
+        fixture.shutdown();
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_url_rejects_issuer_substitution() {
+        let fixture = DiscoveryFixture::spawn_for_issuer(
+            "/private/openid-configuration",
+            "https://unexpected.example/tenant",
+        )
+        .await;
+        let discovery_url = fixture.url("/private/openid-configuration");
+
+        let err =
+            discover_oidc_metadata_from_url("https://issuer.example/tenant", &discovery_url, None)
+                .await
+                .expect_err("private transport must not redefine issuer identity");
+
+        assert_eq!(
+            err.to_string(),
+            "Authentication failed: Discovery issuer mismatch"
+        );
+        fixture.shutdown();
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_url_rejects_cleartext_remote_transport() {
+        let err = discover_oidc_metadata_from_url(
+            "https://issuer.example/tenant",
+            "http://metadata.example/openid-configuration", // DevSkim: ignore DS137138 denial-path fixture
+            None,
+        )
+        .await
+        .expect_err("cleartext remote discovery must fail before fetching");
+
+        assert_eq!(
+            err.to_string(),
+            "Authentication failed: Discovery metadata has unsupported discovery_url scheme"
+        );
+    }
+
+    struct DiscoveryFixture {
+        base_url: String,
+        issuer: String,
+        observed_paths: Arc<Mutex<Vec<String>>>,
+        server: JoinHandle<()>,
+    }
+
+    impl DiscoveryFixture {
+        async fn spawn(success_path: &'static str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind discovery fixture");
+            let base_url = format!("http://{}", listener.local_addr().expect("local addr")); // DevSkim: ignore DS137138 loopback test fixture
+            let issuer = format!("{base_url}/tenant");
+            Self::spawn_with_listener(listener, base_url, issuer, success_path).await
+        }
+
+        async fn spawn_for_issuer(success_path: &'static str, issuer: &str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind discovery fixture");
+            let base_url = format!("http://{}", listener.local_addr().expect("local addr")); // DevSkim: ignore DS137138 loopback test fixture
+            Self::spawn_with_listener(listener, base_url, issuer.to_string(), success_path).await
+        }
+
+        async fn spawn_with_listener(
+            listener: TcpListener,
+            base_url: String,
+            issuer: String,
+            success_path: &'static str,
+        ) -> Self {
+            let observed_paths = Arc::new(Mutex::new(Vec::new()));
+            let state = DiscoveryState {
+                issuer: issuer.clone(),
+                success_path,
+                observed_paths: observed_paths.clone(),
+            };
+            let app = Router::new()
+                .route("/{*path}", any(discovery_handler))
+                .with_state(state);
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            Self {
+                base_url,
+                issuer,
+                observed_paths,
+                server,
+            }
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("{}{}", self.base_url, path)
+        }
+
+        async fn observed_paths(&self) -> Vec<String> {
+            self.observed_paths.lock().await.clone()
+        }
+
+        fn shutdown(self) {
+            self.server.abort();
+        }
+    }
+
+    #[derive(Clone)]
+    struct DiscoveryState {
+        issuer: String,
+        success_path: &'static str,
+        observed_paths: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn discovery_handler(State(state): State<DiscoveryState>, req: Request) -> Response {
+        let path = req.uri().path().to_string();
+        state.observed_paths.lock().await.push(path.clone());
+        if path != state.success_path {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+
+        Json(serde_json::json!({
+            "issuer": state.issuer,
+            "authorization_endpoint": format!("{}/authorize", state.issuer),
+            "token_endpoint": format!("{}/token", state.issuer),
+            "jwks_uri": format!("{}/jwks", state.issuer)
+        }))
+        .into_response()
     }
 }

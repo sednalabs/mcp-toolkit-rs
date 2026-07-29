@@ -5,6 +5,11 @@ with `mcp-toolkit-rs`. Use it when starting a new server or when an existing
 service is being reshaped enough that its MCP surface, tests, or release proof
 need a fresh gate.
 
+Use `docs/new-server-cli-reference.md` for exact command syntax, generated file
+layout, generator overwrite behavior, and generated-project customization
+points. This page defines the evidence gates; the CLI reference is the
+operator-facing command manual.
+
 The lane keeps rapid server creation disciplined. The toolkit should remove
 transport, auth, schema, and validation boilerplate; the service repository
 still owns product-specific tools, backend clients, policy, data fixtures,
@@ -34,8 +39,45 @@ missing evidence line means the lane is not complete.
 
 Choose the server shape before writing domain code.
 
+Prefer the generator front door when starting a new crate:
+
+```bash
+cargo run -p mcp-toolkit --bin mcp-toolkit -- patterns
+cargo run -p mcp-toolkit --bin mcp-toolkit -- new --name my-mcp-server --pattern minimal-stdio-intent
+```
+
+Use `mcp-toolkit patterns <id>` to inspect manifest evidence for an archetype,
+including transports, auth modes, profiles, scratchpad posture, and the linked
+recipe. Use `mcp-toolkit templates` to list maintained template ids when you
+already know the scaffold shape. The generator uses the same `templates/`
+sources documented below, rewrites package names and toolkit dependency
+sources, writes only to relative output directories, and refuses changed-file
+overwrites unless `--force` is provided.
+
+First check `docs/reference-server-atlas.md` for the closest living reference
+service or adjacent auth/policy reference. Record the row used in the evidence
+block so reviewers can see which real pattern informed the scaffold.
+
+If a row fits, also record the matching `docs/pattern-manifests/*.json` file
+and recipe from `docs/pattern-recipes.md`. The manifest should identify the
+transport, auth modes, tool-surface posture, profiles, scratchpad posture, and
+conformance expectations that the implementation is borrowing.
+
+Run `mcp-toolkit conformance --pattern <id>` to see the current downstream
+proof posture for that archetype before using it as generator evidence. Use
+`mcp-toolkit conformance --strict` in PRs that add or change pattern manifests.
+
+For the `analytics-scratchpad` archetype, use `docs/scratchpad.md` plus the
+GA4 and Search Console manifests to decide which behavior belongs in
+`mcp-toolkit-scratchpad` and which ingest or evidence behavior remains in the
+service repository.
+
 Use `templates/curated-stdio-intent-server` when the MCP server is
 process-local and should expose a compact curated tool surface over stdio.
+
+Use `templates/single-crate-public-stdio-server` when you are starting a new
+public stdio MCP repository and want GitHub-hosted CI, CodeQL, coverage, query-
+pack tests, and dependency governance included from the first commit.
 
 Use `templates/hosted-http-auth-server` when the server exposes Streamable HTTP,
 publishes OAuth Protected Resource Metadata, and needs bearer challenges, host
@@ -46,7 +88,12 @@ seam is safer than copying a full template.
 
 Required evidence:
 
+- the reference atlas row used, or why no row fits;
+- the pattern manifest and recipe used, or why no manifest fits yet;
+- the generated command used, including `--template` or `--pattern` and
+  `--toolkit-git` or `--toolkit-root`;
 - the selected template or adoption helper;
+- the downstream conformance posture if a pattern manifest was used;
 - the transport and trust boundary;
 - the reason any raw `rmcp` runtime wiring remains;
 - the validation commands or workflow that cover the chosen shape.
@@ -93,17 +140,34 @@ For stdio servers:
 
 - use `mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list`, or a
   service-specific equivalent that spawns the real binary, initializes the MCP
-  session, and calls `tools/list`.
+  session, and calls `tools/list`;
+- add a response-safety assertion for starter tools, proof-only readbacks, or
+  sensitive-adjacent reads using
+  `stdio_contract::assert_stdio_tool_response_excludes_substrings`.
+
+For servers with multiple catalog profiles:
+
+- add catalog-profile contract tests that pin the default profile and any
+  explicit operator, scratchpad, or deployment-specific profile;
+- assert the required tools for each profile instead of checking only that a
+  profile exists.
 
 For hosted HTTP/auth servers:
 
+- use `mcp-toolkit-server::http::LocalMcpHttpServerBuilder` as the default
+  hosted route-bundle front door;
 - assert Protected Resource Metadata;
 - assert authorization-server metadata when discovery is served;
 - assert missing-token bearer challenges;
-- assert pre-auth host rejection when host allowlists are configured.
+- assert pre-auth host and Origin rejection when allowlists are configured.
 
 Tests that call handlers directly are useful, but they do not satisfy this
 gate by themselves.
+
+When the service can be exercised by a compatible MCP probe runner, commit a
+small `spec/mcp_probe_*.v1.json` scenario beside the schema snapshots. The
+scenario should cover the first useful MCP call and any required transport
+guard, such as stdio launch permission or loopback host allowlists.
 
 ## Gate 4: Add Domain Output Contract Tests For Every Intent Tool
 
@@ -188,6 +252,21 @@ After promotion, verify the installed thing, not only the pointer:
 
 Untracked local builds are not promotion sources for this lane.
 
+## Public Repository Addendum
+
+When the server lives in a public repository, the lane also requires:
+
+- a repository README that explains the operator value and first-run path;
+- a committed license file and Cargo metadata aligned with that license;
+- hosted CodeQL, dependency-governance, and code-coverage workflows when the
+  server is expected to be publicly maintained;
+- secret scanning, code scanning, and Dependabot enabled where GitHub supports
+  them for the repository;
+- public-output hygiene review for docs, examples, branch names, and workflow
+  summaries;
+- final evidence that records the public repository URL, commit SHA, workflow
+  run URLs, and code-scanning posture.
+
 ## Completion Checklist
 
 - Gate 1 evidence records the selected template or adoption helper.
@@ -207,4 +286,5 @@ Close the work item only when each checklist line has concrete evidence.
 Keep this lane stable and boring. Add a new gate only when a repeated failure
 mode cannot be caught by strengthening one of the existing gates. When a new
 template or transport shape is added, update this document, `docs/golden-path.md`,
-and the doc contract test that pins the lane gates.
+`docs/reference-server-atlas.md`, `docs/pattern-manifests.md`,
+`docs/pattern-recipes.md`, and the doc contract test that pins the lane gates.

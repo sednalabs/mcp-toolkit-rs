@@ -9214,7 +9214,7 @@ impl GeminiMcp {
 impl ServerHandler for GeminiMcp {
     fn get_info(&self) -> ServerInfo {
         rmcp_models::server_info(
-            ProtocolVersion::V_2024_11_05,
+            ProtocolVersion::LATEST,
             ServerCapabilities::builder().enable_tools().build(),
             Implementation::from_build_env(),
             Some(

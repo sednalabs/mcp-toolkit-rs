@@ -4,7 +4,8 @@
 //!
 //! ## Ownership
 //! This crate functions as the primary facade for the MCP toolkit, orchestrating
-//! access to modular sub-crates (Core, Auth, HTTP, Policy, Process).
+//! access to modular sub-crates (Core, Auth, HTTP, Policy, Process,
+//! Scratchpad).
 //!
 //! ## Non-ownership
 //! This crate does not perform functional operations itself; it facilitates
@@ -26,6 +27,13 @@
 
 pub use mcp_toolkit_core as core;
 
+pub mod client_config;
+pub mod doctor;
+pub mod draft_generator;
+pub mod new_server;
+pub mod patterns;
+pub mod release_preflight;
+
 #[cfg(feature = "http")]
 pub use mcp_toolkit_http as http;
 
@@ -44,6 +52,9 @@ pub use mcp_toolkit_policy_ffi as policy_ffi;
 #[cfg(feature = "process")]
 pub use mcp_toolkit_process as process;
 
+#[cfg(feature = "scratchpad")]
+pub use mcp_toolkit_scratchpad as scratchpad;
+
 #[cfg(feature = "gemini")]
 pub use mcp_toolkit_gemini as gemini;
 
@@ -54,3 +65,11 @@ pub use mcp_toolkit_gemini as gemini;
     feature = "server-auth"
 ))]
 pub use mcp_toolkit_server as server;
+
+#[cfg(any(
+    feature = "server",
+    feature = "server-stdio",
+    feature = "server-http",
+    feature = "server-auth"
+))]
+pub use rmcp;

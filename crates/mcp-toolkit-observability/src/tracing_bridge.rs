@@ -411,9 +411,16 @@ mod tests {
 
     #[test]
     fn make_span_uses_stable_metadata_name() {
-        let span = make_span("tool.call", &EventContext::new());
-        let metadata = span.metadata().expect("span metadata available");
-        assert_eq!(metadata.name(), "mcp.observability");
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(io::sink)
+            .without_time()
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = make_span("tool.call", &EventContext::new());
+            let metadata = span.metadata().expect("span metadata available");
+            assert_eq!(metadata.name(), "mcp.observability");
+        });
     }
 
     #[derive(Clone, Default)]

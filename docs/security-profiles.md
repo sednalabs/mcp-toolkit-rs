@@ -134,9 +134,20 @@ auth.jwks_url = Some("https://issuer.example/certs".to_string());
 auth.required_scopes = vec!["service:read".to_string()];
 ```
 
-Where the toolkit does not yet cover a feature (e.g., DPoP/mTLS sender
-constraints), document the divergence and prefer alignment work in the toolkit
-before service-specific implementations.
+Auth profiles are separate from tool-surface profiles. Generated servers should
+use `ToolCatalog::with_standard_profiles(["read"])` so the live MCP surface
+starts in `read_only` mode while an explicit `operator` profile can expose
+reviewed mutation tools. If a provider write scope is missing, report that as
+provider auth/permission state; if the tool is hidden by `read_only`, report the
+tool-profile denial such as `TOOL_DENIED_READ_ONLY_PROFILE`.
+
+Security-profile presets and `AuthSurfaceLayer` do not automatically enable
+sender-constrained authentication. Explicit DPoP ingress adapters must parse
+the RFC 9449 headers and call
+`Authenticator::authenticate_sender_constrained_dpop` as documented in
+`docs/design/dpop-atomic-authentication-boundary.md`. The toolkit does not yet
+cover mTLS sender constraints or token exchange; document those divergences and
+prefer alignment work in the toolkit before service-specific implementations.
 
 ## Selection Checklist for New Services
 

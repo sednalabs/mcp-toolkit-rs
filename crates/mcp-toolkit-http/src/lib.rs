@@ -22,7 +22,7 @@
 //! * Managing the lifecycle of session stores if persistence is required.
 //!
 //! ## References
-//! * [MCP HTTP Transport](https://modelcontextprotocol.io/docs/concepts/transports#http-sse)
+//! * [MCP Streamable HTTP Transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 
 pub mod host;
 pub mod oauth;

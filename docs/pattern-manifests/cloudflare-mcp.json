@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "cloudflare-mcp",
+    "repository": "https://github.com/sednalabs/cloudflare-mcp",
+    "language": "rust",
+    "role": "reference_server",
+    "notes": "Hosted HTTP auth, deferred discovery, and public release evidence reference."
+  },
+  "patterns": [
+    "hosted-http-auth",
+    "operator-mutation",
+    "public-release-ready"
+  ],
+  "toolkit_crates": [
+    "mcp-toolkit-core",
+    "mcp-toolkit-server",
+    "mcp-toolkit-http",
+    "mcp-toolkit-auth",
+    "mcp-toolkit-testing"
+  ],
+  "transports": ["stdio", "hosted-http", "streamable-http"],
+  "auth_modes": [
+    "mcp-bearer",
+    "oauth-metadata",
+    "device-auth-metadata",
+    "jwks",
+    "introspection"
+  ],
+  "tool_surface": {
+    "discovery": [
+      "tool-inventory",
+      "find-tools",
+      "profile-filtered-discovery",
+      "openai-tool-search",
+      "resource-templates",
+      "schema_snapshot"
+    ],
+    "mutation_policy": "profile-gated",
+    "schema_snapshot": "present",
+    "notes": "Read-only discovery hides mutation surfaces where possible."
+  },
+  "scratchpad": {
+    "supported": false,
+    "engine": "none",
+    "profile": "none",
+    "notes": "No generic large-result scratchpad workflow."
+  },
+  "profiles": [
+    {
+      "name": "read_only",
+      "default": true,
+      "tool_groups": ["auth", "read", "discovery"]
+    },
+    {
+      "name": "operator",
+      "default": false,
+      "tool_groups": ["mutation", "admin"]
+    }
+  ],
+  "conformance": {
+    "schema_snapshot": "present",
+    "transport_contract": "present",
+    "auth_surface_contract": "present",
+    "domain_contracts": "present",
+    "hosted_validation": "present",
+    "release_evidence": "present",
+    "notes": "Use for hosted auth and release provenance patterns."
+  },
+  "references": [
+    {
+      "label": "Client contract",
+      "kind": "doc",
+      "path": "docs/CLIENT-CONTRACT.md"
+    },
+    {
+      "label": "Conformance dogfood",
+      "kind": "doc",
+      "path": "docs/CONFORMANCE_DOGFOOD.md"
+    },
+    {
+      "label": "Schema and release provenance",
+      "kind": "doc",
+      "path": "spec/README.md"
+    }
+  ]
+}

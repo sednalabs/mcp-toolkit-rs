@@ -10,13 +10,15 @@ how to keep tool discovery lightweight without making the server surface vague.
 - tool availability depends on session state, backend capability, or feature flags
 - users need a search or discovery step before the final tool list is materialized
 
-If your tool list is small and static, start with `ToolInventory` and skip the
-rest of this guide.
+If your tool list is small and static, start with `ToolCatalog` plus the
+derived `ToolInventory`, then skip the rest of this guide.
 
 ## Recommended split
 
-1. Use `ToolInventory` for the authoritative, exported tool surface.
-   - Keep it explicit so `tools/list` reflects the real contract.
+1. Use `ToolCatalog` for the authoritative declaration and derive
+   `ToolInventory` for the exported tool surface.
+   - Keep the catalog explicit so `tools/list`, docs, schemas, and search
+     metadata reflect the same contract.
 2. Use `ToolListTracker` when that surface can change per session.
    - It tells you when a session needs `notifications/tools/list_changed`.
 3. Use deferred loading for heavy implementation details.
@@ -30,17 +32,26 @@ implementation load only what it needs.
 
 ## Practical pattern
 
-Think of the flow as three layers:
+Think of the host flow as four ordered layers:
 
-- discovery: a small, cheap way to narrow candidate tools
-- publication: the inventory that defines what the session can actually see
-- execution: the deferred implementation that loads or initializes on demand
+- collection: drain every non-null opaque `nextCursor` and build one complete
+  catalogue
+- publication: atomically expose only that complete catalogue as the current
+  inventory
+- discovery: index the complete inventory for direct selection or deferred
+  search
+- execution: load or initialize the selected implementation on demand
 
-In practice, that usually means:
+`mcp-toolkit-core::pagination::collect_paginated_list` provides a bounded,
+cycle-safe collection seam for hosts or adapters whose metadata wrappers cannot
+use `rmcp::Peer::list_all_tools` directly. A failed or non-terminating walk must
+not publish its partial items. If a server advertises `listChanged`, the host
+should invalidate and rebuild the complete snapshot before updating its search
+index.
 
-- a lightweight search or browse tool for broad user intent
-- a curated inventory of the tools that are currently available
-- lazy construction of the expensive tool internals
+Some non-hosted clients may also use a lightweight search or browse tool to
+construct an `allowed_tools` subset. That is an application tool, not an MCP
+replacement for collecting `tools/list`.
 
 ## OpenAI Responses API
 
@@ -73,6 +84,11 @@ OpenAI tool search does not call them automatically. Use a local discovery tool
 when non-hosted clients need a narrow `allowed_tools` list, optional schemas, or
 extra application-owned search results before making a follow-up request.
 
+MCP itself does not define a semantic `tools/search` operation. `tool_search`
+and `defer_loading` are OpenAI host/API mechanisms layered over the catalogue
+the host has collected. They cannot recover tools omitted because an MCP client
+stopped after page one.
+
 `mcp-toolkit-core::openai_tool_search` provides generic builders for two
 closely related shapes:
 
@@ -90,6 +106,74 @@ needs companion allowed tools or extra result records, wrap it with
 `ToolSearchResponse::into_openai_response()` and add those OpenAI-specific
 extensions there.
 
+Use `ToolInventory::search` when a caller depends on strict all-terms substring
+matching. Use the additive `ToolInventory::search_ranked` or
+`ToolCatalog::ranked_search_response` path for natural-language agent queries.
+Ranked search ignores common conversational stop words, down-weights query terms
+that appear across most visible tools, matches conservative canonical tokens
+rather than unsafe substrings, and uses guarded-action posture as a deterministic
+tie-break. It preserves original terms while adding conservative singular
+variants as one scoring concept, and excludes tools matching explicitly negated
+terms such as `not apply`, `don't delete`, or `without deleting`; coordinated
+`and`/`or` negative lists remain excluded. To avoid turning an unfamiliar modifier
+or punctuation pattern back into positive intent, an explicit negative marker
+keeps the remaining content terms in exclusion scope. Put positive intent before
+the exclusion, for example `campaign preview without apply or delete`. Negated
+action forms are canonicalized on both the query and visible capability sides,
+so `without traffic` also excludes metadata that says `trafficking` or
+`trafficked`. Inflection expansion is restricted to recognized operational
+verbs, avoiding collisions such as `canvas`/`canva` or `adding`/`ad`. The
+toolkit carries a conservative built-in action vocabulary; providers with
+additional action roots register them explicitly with
+`ToolCapability::with_action_lexemes` or the matching
+`ToolCatalogEntry::with_action_lexemes` builder so their own inflected exclusions
+remain fail-closed without widening the global matcher. Provider roots are
+validated as canonical alphanumeric roots, bounded in count and length at
+registration, and subject to an aggregate per-search cap. Invalid, too-short,
+or overflowing metadata is reported as truncated result metadata and makes
+negative-intent search fail closed. Negated
+terms are reported separately in `excluded_query_terms`. A truncated query,
+dangling negation, or truncated negative-term list fails closed. A genuine
+browse request is safety-ordered; a supplied query that has no searchable terms
+returns no matches instead of widening to the whole catalog.
+Ranked search defaults to 20 results, hard-caps requested limits at 100, and
+bounds query, group-filter, and result metadata. An overlong group filter fails
+closed instead of matching a truncated prefix. Its `match_summary` reports
+normalized, excluded, and ignored terms, total matches, returned count, the effective
+result limit, and stable reasons for every applied truncation. Metadata bounds
+across the visible search corpus are reported even when the bounded-away text
+would otherwise hide a match. Ranked matching tokenizes a bounded document once
+per visible capability, so caller-supplied names, groups, descriptions, or
+keywords cannot multiply unbounded work across every query variant.
+Raw query, group, and compact companion inputs are bounded before trimming, and
+metadata truncated inside an alphanumeric token drops that partial token instead
+of manufacturing a false exact match at the boundary. Empty description or
+keyword fragments produced by that boundary rule are omitted from results.
+
+Both standard and ranked response types provide `to_compact_value()` for the
+selection step. The compact shape retains result metadata and
+`openai_allowed_tools`, but deliberately omits schemas and hosted-client metadata.
+Both compact serializers bound input and result fields before materializing JSON
+and enforce a 32 KiB byte budget. The standard response adds `compact_summary`
+with source/returned counts and truncation reasons. The ranked response preserves
+its match counts and records `compact_response_bytes` when selection metadata or
+results must be reduced. When the byte budget is exceeded, the compact fallback
+omits echoed query, group, and term diagnostics before removing valid inventory
+results. It retains counts and the byte-budget reason. Call
+`to_value()` when the same response must also carry
+schemas and deferred-load configuration; the full shape is intentionally not
+subject to the compact byte budget and is intended for bounded debug, human, or
+configuration surfaces. Agent-facing discovery tools should emit the compact
+shape and may impose a stricter adapter-level context budget; the 32 KiB limit
+is a deterministic encoded-byte ceiling, not a tokenizer-specific token promise.
+Use the ranked response's
+`into_openai_response()` builder when adding companion allowed tools, extra
+results, or custom deferred-loading metadata so the match summary is preserved.
+Both OpenAI response builders also provide `to_compact_value()`. Their compact
+projection bounds companion names and extra result records before cloning them,
+retains inventory and extra-result prefixes while shrinking, reports source and
+returned counts for every extension, and enforces the same 32 KiB budget.
+
 The default OpenAI MCP config leaves `require_approval` unset. If a trusted
 workflow wants to reduce approval friction for read-only tools, supply an
 explicit reviewed read-only override with service-owned tool names. The toolkit
@@ -101,8 +185,10 @@ another workflow-level review gate applies.
 
 ## When to choose each helper
 
+- `ToolCatalog`
+  - use for explicit tool declarations, schemas, examples, and generated docs
 - `ToolInventory`
-  - use for explicit capability registration and method-aware exposure
+  - use for the derived capability registration and method-aware exposure checks
 - `openai_tool_search`
   - use for OpenAI MCP `defer_loading` and `tool_search` config payloads
 - `ToolListTracker`
@@ -114,6 +200,8 @@ another workflow-level review gate applies.
 
 ## Rule of thumb
 
+If you are asking "which tools exist and what metadata should ship with them?",
+use `ToolCatalog`.
 If you are asking "which tools should be visible?", use `ToolInventory`.
 If you are asking "did the visible tool list change for this session?", use
 `ToolListTracker`.

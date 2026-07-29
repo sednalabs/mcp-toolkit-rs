@@ -16,7 +16,7 @@ Usage: ./scripts/dependency_governance_check.sh [--bootstrap-tools]
 
 Checks (per configured workspace):
   0) auth dependency posture -> token mechanics stay crate-backed or reviewed glue
-  1) rmcp macro/runtime pinning -> direct macro pins match rmcp runtime pins
+  1) rmcp SDK pinning -> direct rmcp pins match and direct macro pins match runtime pins
   2) cargo deny   -> advisory/license/source policy (blocking)
   3) cargo audit  -> RustSec vulnerabilities (blocking)
   4) cargo outdated (direct deps) -> stale-risk report (non-blocking by default)
@@ -146,7 +146,7 @@ fi
 echo "[repo] [0/5] auth dependency posture check"
 run_cmd python3 "${ROOT_DIR}/scripts/auth_dependency_posture_check.py"
 
-echo "[repo] [1/5] rmcp macro/runtime pin check"
+echo "[repo] [1/5] rmcp SDK pin check"
 run_cmd python3 "${ROOT_DIR}/scripts/rmcp_macro_runtime_pin_check.py"
 
 for workspace_dir in "${WORKSPACES[@]}"; do

@@ -30,7 +30,10 @@ use std::path::Path;
 
 pub mod auth_surface_contract;
 pub mod catalog_profile_contract;
+pub mod complete_catalogue_contract;
 pub mod openai_apps_contract;
+pub mod receipt_contract;
+pub mod response_safety_contract;
 pub mod stdio_contract;
 pub use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 
@@ -174,7 +177,7 @@ fn assert_canonical_snapshot(
 
     let expected_raw = std::fs::read_to_string(snapshot_path).unwrap_or_else(|err| {
         panic!(
-            "missing {snapshot_label} at {} ({err}). Re-run with {update_env}=1 to create.",
+            "missing {snapshot_label} at {} ({err}). Re-run with {update_env}=1 to create, or use your repository's snapshot rebaseline helper if it provides one.",
             snapshot_path.display()
         )
     });
@@ -193,7 +196,7 @@ fn assert_canonical_snapshot(
             .unwrap_or_else(|err| panic!("failed to format actual: {err}"));
         panic!(
             "{snapshot_label} drift at {}.\n\
-             Re-run with {update_env}=1 to update.\n\n\
+             Re-run with {update_env}=1 to update, or use your repository's snapshot rebaseline helper if it provides one.\n\n\
              Expected:\n{}\n\n\
              Actual:\n{}",
             snapshot_path.display(),
@@ -212,7 +215,13 @@ fn write_snapshot(path: &Path, value: &Value) -> std::io::Result<()> {
     std::fs::write(path, format!("{rendered}\n"))
 }
 
-fn canonicalize_json(value: Value) -> Value {
+/// Recursively orders JSON object keys for deterministic contract assertions.
+///
+/// Array order is preserved because it can be meaningful in external
+/// contracts. This helper does not validate the payload or change scalar
+/// values.
+#[must_use]
+pub fn canonicalize_json(value: Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut entries: Vec<(String, Value)> = map.into_iter().collect();

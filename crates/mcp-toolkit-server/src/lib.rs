@@ -16,6 +16,8 @@
 //!   deployment-specific bind, TLS, and reverse-proxy settings.
 //! * Auth helpers validate metadata through `mcp-toolkit-auth` and do not infer
 //!   issuers, audiences, or scopes beyond caller-supplied configuration.
+//! * Server authors can import the underlying `rmcp` authoring surface through
+//!   this crate instead of declaring `rmcp` directly.
 //!
 //! ## References
 //! * **DESIGN**: `docs/server-composition-layer.md`
@@ -28,3 +30,8 @@ pub mod auth;
 pub mod http;
 #[cfg(feature = "stdio")]
 pub mod stdio;
+#[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
+pub mod tools;
+
+#[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
+pub use rmcp;

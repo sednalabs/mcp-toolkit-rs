@@ -1,16 +1,49 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use dpop_verifier::{DpopError, DpopVerifier, ReplayContext, ReplayStore};
 use http::HeaderMap;
 use reqwest::Client;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::bearer::parse_strict_bearer_authorization;
-use crate::claims::{extract_roles, extract_scopes, merge_claims, validate_issuer_audience};
+use crate::claims::{
+    extract_roles, extract_scopes, has_confirmation_claim, merge_claims, validate_issuer_audience,
+};
 use crate::providers::{IntrospectionCache, JwksCache};
 use crate::replay::{InMemoryJtiReplayStore, SharedJtiReplayStore};
 use crate::util::{auth_debug_event, hash_identifier, token_ref};
-use crate::{AuthConfig, AuthContext, AuthError, AuthMode, AuthRequestContext};
+use crate::{
+    AuthConfig, AuthContext, AuthError, AuthMode, DpopProof, DpopToken, SenderConstrainedAuthError,
+    VerifiedAuthContext,
+};
+
+#[derive(Debug, Clone, Copy)]
+enum TokenBinding {
+    BearerOnly,
+    SenderConstrained,
+}
+
+struct ConfirmationBoundReplayStore<'a, S: ?Sized> {
+    inner: &'a mut S,
+    expected_jkt: &'a str,
+    confirmation_mismatch: bool,
+}
+
+#[async_trait::async_trait]
+impl<S: ReplayStore + Send + ?Sized> ReplayStore for ConfirmationBoundReplayStore<'_, S> {
+    async fn insert_once(
+        &mut self,
+        jti_hash: [u8; 32],
+        context: ReplayContext<'_>,
+    ) -> Result<bool, DpopError> {
+        if context.jkt != Some(self.expected_jkt) {
+            self.confirmation_mismatch = true;
+            return Ok(false);
+        }
+        self.inner.insert_once(jti_hash, context).await
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Authenticator {
@@ -19,6 +52,7 @@ pub struct Authenticator {
     pub(crate) introspection_cache: Option<Arc<RwLock<IntrospectionCache>>>,
     pub(crate) jwks_cache: Option<Arc<JwksCache>>,
     pub(crate) client: Client,
+    pub(crate) provenance_marker: Arc<u8>,
 }
 
 impl Authenticator {
@@ -28,9 +62,9 @@ impl Authenticator {
 
     /// Builds an authenticator with a caller-owned JTI replay store.
     ///
-    /// The supplied store is used for bearer JTI checks when
-    /// `AuthConfig::jti_enforce_bearer` is enabled and the request context is
-    /// bearer-only. `AuthConfig::jti_ttl_s` must remain positive; the
+    /// The supplied store is used for Bearer JTI checks when
+    /// `AuthConfig::jti_enforce_bearer` is enabled. `AuthConfig::jti_ttl_s`
+    /// must remain positive; the
     /// `jti_cache_size` setting only controls the default in-memory store. Use
     /// this for service-owned shared backends such as a DAS SQLite/Redis replay
     /// table.
@@ -145,44 +179,131 @@ impl Authenticator {
             introspection_cache,
             jwks_cache,
             client: Client::new(),
+            provenance_marker: Arc::new(0),
         })
     }
 
+    /// Authenticates a bearer credential from request headers.
+    ///
+    /// # Errors
+    /// Returns [`AuthError`] when the bearer credential is missing or fails
+    /// the configured authentication and replay checks.
+    ///
+    /// # Security
+    /// The returned [`VerifiedAuthContext`] is bound to this authenticator.
+    /// Trusted consumers must retain the wrapper when provenance matters.
     pub async fn authenticate_headers(
         &self,
         headers: &HeaderMap,
-    ) -> Result<AuthContext, AuthError> {
+    ) -> Result<VerifiedAuthContext, AuthError> {
         let token =
             bearer_token(headers, self.config.strict_oauth).ok_or(AuthError::MissingToken)?;
-        self.authenticate_token_with_context(headers, &token, AuthRequestContext::bearer_only())
-            .await
+        let context = self
+            .authenticate_token_with_binding(&token, TokenBinding::BearerOnly)
+            .await?;
+        Ok(self.issue_verified_context(context))
     }
 
+    /// Authenticates a bearer token supplied directly by a trusted transport.
+    ///
+    /// # Errors
+    /// Returns [`AuthError`] when the token fails the configured authentication
+    /// and replay checks.
+    ///
+    /// # Security
+    /// The returned [`VerifiedAuthContext`] is bound to this authenticator.
+    /// The caller remains responsible for extracting `token` from a trusted
+    /// transport boundary.
     pub async fn authenticate_token(
-        &self,
-        headers: &HeaderMap,
-        token: &str,
-    ) -> Result<AuthContext, AuthError> {
-        self.authenticate_token_with_context(headers, token, AuthRequestContext::bearer_only())
-            .await
-    }
-
-    pub async fn authenticate_headers_with_context(
-        &self,
-        headers: &HeaderMap,
-        context: AuthRequestContext,
-    ) -> Result<AuthContext, AuthError> {
-        let token =
-            bearer_token(headers, self.config.strict_oauth).ok_or(AuthError::MissingToken)?;
-        self.authenticate_token_with_context(headers, &token, context)
-            .await
-    }
-
-    pub async fn authenticate_token_with_context(
         &self,
         _headers: &HeaderMap,
         token: &str,
-        context: AuthRequestContext,
+    ) -> Result<VerifiedAuthContext, AuthError> {
+        let context = self
+            .authenticate_token_with_binding(token, TokenBinding::BearerOnly)
+            .await?;
+        Ok(self.issue_verified_context(context))
+    }
+
+    /// Authenticates a sender-constrained token with an exact DPoP proof.
+    ///
+    /// # Errors
+    /// Returns [`SenderConstrainedAuthError`] when DPoP proof verification, the
+    /// `cnf.jkt` match, or normal token policy validation fails.
+    ///
+    /// # Security
+    /// This is the only sender-constrained entrypoint. It verifies the compact
+    /// access token first, then verifies the DPoP proof and binds it to the
+    /// exact token, method, URI, and token `cnf.jkt` in the same call.
+    ///
+    /// `access_token` must be extracted from an RFC 9449
+    /// `Authorization: DPoP <token>` header, for example with
+    /// [`crate::parse_strict_dpop_authorization`]. It must not come from an
+    /// ordinary `Bearer` authorization header.
+    ///
+    /// `expected_htu` and `expected_htm` must come from the canonical inbound
+    /// request after trusted proxy handling. Configure nonce and freshness
+    /// policy on `verifier`; `replay_store` must provide shared atomic
+    /// insert-once semantics across the service's workers. The toolkit guards
+    /// the replay store with the token's expected confirmation thumbprint, so a
+    /// proof signed by a different key is rejected without consuming replay
+    /// capacity.
+    pub async fn authenticate_sender_constrained_dpop<S: ReplayStore + Send + ?Sized>(
+        &self,
+        access_token: DpopToken<'_>,
+        proof: DpopProof<'_>,
+        expected_htu: &str,
+        expected_htm: &str,
+        verifier: &DpopVerifier,
+        replay_store: &mut S,
+    ) -> Result<VerifiedAuthContext, SenderConstrainedAuthError> {
+        let access_token = access_token.as_str();
+        let context = self
+            .authenticate_token_with_binding(access_token, TokenBinding::SenderConstrained)
+            .await
+            .map_err(SenderConstrainedAuthError::Authentication)?;
+        let expected_jkt = confirmation_jkt(&context.claims).ok_or_else(|| {
+            SenderConstrainedAuthError::Authentication(confirmation_claim_mismatch(access_token))
+        })?;
+        let mut guarded_store = ConfirmationBoundReplayStore {
+            inner: replay_store,
+            expected_jkt,
+            confirmation_mismatch: false,
+        };
+        let verification = verifier
+            .verify(
+                &mut guarded_store,
+                proof.as_str(),
+                expected_htu,
+                expected_htm,
+                Some(access_token),
+            )
+            .await;
+        if guarded_store.confirmation_mismatch {
+            return Err(SenderConstrainedAuthError::Authentication(
+                confirmation_claim_mismatch(access_token),
+            ));
+        }
+        verification.map_err(SenderConstrainedAuthError::Dpop)?;
+
+        auth_debug_event(
+            "auth.dpop_success",
+            json!({
+                "actor_hash": hash_identifier(&context.actor),
+                "token_ref": context.token_ref,
+            }),
+        );
+        Ok(self.issue_verified_context(context))
+    }
+
+    fn issue_verified_context(&self, context: AuthContext) -> VerifiedAuthContext {
+        VerifiedAuthContext::from_authenticator(context, self.provenance_marker.clone())
+    }
+
+    async fn authenticate_token_with_binding(
+        &self,
+        token: &str,
+        binding: TokenBinding,
     ) -> Result<AuthContext, AuthError> {
         let mut claims = match self.config.mode {
             AuthMode::Delegation => self.decode_delegation(token)?,
@@ -217,6 +338,8 @@ impl Authenticator {
             claims = merge_claims(&claims, &introspected);
         }
 
+        validate_confirmation_claim(&claims, binding, token)?;
+
         let azp = claims
             .get("azp")
             .or_else(|| claims.get("client_id"))
@@ -228,7 +351,10 @@ impl Authenticator {
             "auth.claims",
             json!({
                 "mode": format!("{:?}", self.config.mode),
-                "bearer_only": context.bearer_only,
+                "token_binding": match binding {
+                    TokenBinding::BearerOnly => "bearer_only",
+                    TokenBinding::SenderConstrained => "sender_constrained_preflight",
+                },
                 "issuer": self.config.issuer,
                 "audience": self.config.audience,
                 "claims_iss": claims.get("iss").cloned(),
@@ -286,7 +412,7 @@ impl Authenticator {
             }
         }
 
-        if context.bearer_only && self.config.jti_enforce_bearer {
+        if matches!(binding, TokenBinding::BearerOnly) && self.config.jti_enforce_bearer {
             let jti_replay_store = self.jti_replay_store.as_ref().ok_or_else(|| {
                 AuthError::ConfigError(
                     "Bearer JTI replay enforcement requires an enabled replay store.".to_string(),
@@ -328,7 +454,10 @@ impl Authenticator {
             .filter(|value| !value.is_empty());
 
         auth_debug_event(
-            "auth.success",
+            match binding {
+                TokenBinding::BearerOnly => "auth.success",
+                TokenBinding::SenderConstrained => "auth.token_preflight_success",
+            },
             json!({
                 "actor_hash": hash_identifier(&actor),
                 "azp": azp,
@@ -349,6 +478,50 @@ impl Authenticator {
             raw_token: token.to_string(),
         })
     }
+}
+
+fn validate_confirmation_claim(
+    claims: &Value,
+    binding: TokenBinding,
+    token: &str,
+) -> Result<(), AuthError> {
+    match binding {
+        TokenBinding::BearerOnly if has_confirmation_claim(claims) => {
+            auth_debug_event(
+                "auth.sender_constrained_bearer_rejected",
+                json!({
+                    "token_ref": token_ref(token),
+                }),
+            );
+            Err(AuthError::new("Invalid bearer token.")
+                .with_code("SENDER_CONSTRAINED_BEARER_TOKEN")
+                .with_reason("sender_constrained"))
+        }
+        TokenBinding::BearerOnly => Ok(()),
+        TokenBinding::SenderConstrained if confirmation_jkt(claims).is_some() => Ok(()),
+        TokenBinding::SenderConstrained => Err(confirmation_claim_mismatch(token)),
+    }
+}
+
+fn confirmation_jkt(claims: &Value) -> Option<&str> {
+    claims
+        .get("cnf")
+        .and_then(Value::as_object)
+        .and_then(|cnf| cnf.get("jkt"))
+        .and_then(Value::as_str)
+        .filter(|jkt| !jkt.is_empty())
+}
+
+fn confirmation_claim_mismatch(token: &str) -> AuthError {
+    auth_debug_event(
+        "auth.dpop_confirmation_rejected",
+        json!({
+            "token_ref": token_ref(token),
+        }),
+    );
+    AuthError::new("Invalid bearer token.")
+        .with_code("DPOP_CONFIRMATION_CLAIM_MISMATCH")
+        .with_reason("dpop_confirmation_mismatch")
 }
 
 fn bearer_token(headers: &HeaderMap, strict: bool) -> Option<String> {

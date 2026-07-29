@@ -21,3 +21,6 @@ mcp-toolkit-core = { version = "0.1.0", path = "../mcp-toolkit-core" }
 mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http" }
 serde = "1.0.228"
 serde_json = "1.0.149"
+
+[dev-dependencies]
+rmcp = { version = "=2.1.0", default-features = false }

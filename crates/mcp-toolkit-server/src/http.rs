@@ -4,14 +4,14 @@
 //!
 //! ## Rationale
 //! HTTP MCP services commonly repeat bind safety checks, bounded session
-//! construction, optional stateless fallback, host guarding, health routes, and
+//! construction, optional stateless fallback, host/origin guarding, health routes, and
 //! `/mcp` request routing. This module packages those seams while preserving
 //! service-owned state and policy decisions.
 //!
 //! ## Security Boundaries
 //! * Non-loopback bind validation is explicit and requires auth unless callers
 //!   intentionally choose a different deployment policy outside this helper.
-//! * Host guarding uses `mcp-toolkit-http` allowlist validation.
+//! * Host and Origin guarding use `mcp-toolkit-http` allowlist validation.
 //! * Domain authorization and tool policy stay in service crates.
 //!
 //! ## References
@@ -34,14 +34,21 @@ use http::{
 };
 use http_body_util::LengthLimitError;
 use mcp_toolkit_http::{
-    host::validate_request_authority,
+    host::{
+        validate_origin_header, validate_origin_header_against_allowed_origins,
+        validate_request_authority,
+    },
     oauth::protected_resource_well_known_paths,
     session::{BoundedSessionManager, RecordingSessionManager, SessionStats},
-    streamable::{build_local_streamable_http_service, LocalStreamableHttpServiceConfig},
+    streamable::{
+        build_local_streamable_http_service, resolve_mcp_session_route,
+        LocalStreamableHttpServiceConfig, McpSessionRoute,
+    },
 };
 use rmcp::{
-    transport::streamable_http_server::{
-        SessionManager, StreamableHttpServerConfig, StreamableHttpService,
+    transport::{
+        common::http_header::HEADER_SESSION_ID,
+        streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService},
     },
     RoleServer, Service,
 };
@@ -51,7 +58,6 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "auth")]
 use crate::auth::AuthSurfaceLayer;
 
-const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
 const SESSIONLESS_POST_PROBE_LIMIT: usize = 64 * 1024;
 
 /// Bind safety policy for hosted HTTP MCP servers.
@@ -236,19 +242,36 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
-    /// Sets allowed Host header values on the stateful service.
+    /// Sets allowed Host/Origin header values on the stateful service.
     ///
     /// # Errors
     /// This function does not return errors.
     ///
     /// # Security
-    /// Host allowlists mitigate DNS rebinding attacks. Do not clear them for
-    /// public deployments.
+    /// Host/Origin allowlists mitigate DNS rebinding attacks. Do not clear them
+    /// for public deployments.
     ///
     /// # Panics
     /// This function does not panic.
     pub fn allowed_hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.config.server_config = self.config.server_config.with_allowed_hosts(hosts);
+        self
+    }
+
+    /// Sets allowed browser `Origin` header values on stateful and fallback services.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Origin allowlists must include the scheme, such as
+    /// `https://app.example.com`. Missing `Origin` headers remain accepted for
+    /// non-browser MCP clients.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allowed_origins(mut self, origins: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.config.server_config = self.config.server_config.with_allowed_origins(origins);
         self
     }
 
@@ -268,7 +291,7 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
-    /// Enables or disables stateless fallback for POST requests that cannot use a session.
+    /// Enables or disables stateless fallback for sessionless POST requests.
     ///
     /// # Errors
     /// This function does not return errors.
@@ -319,9 +342,11 @@ impl LocalMcpHttpRuntimeBuilder {
     {
         let stateful_config = self.config;
         let allowed_hosts = stateful_config.server_config.allowed_hosts.clone();
+        let allowed_origins = stateful_config.server_config.allowed_origins.clone();
         let fallback_config = self.stateless_server_config.unwrap_or_else(|| {
             StreamableHttpServerConfig::default()
                 .with_allowed_hosts(allowed_hosts.clone())
+                .with_allowed_origins(allowed_origins.clone())
                 .with_stateful_mode(false)
                 .with_sse_retry(None)
                 .with_cancellation_token(
@@ -352,6 +377,7 @@ impl LocalMcpHttpRuntimeBuilder {
             stateful_service: stateful.service,
             stateless_service,
             allowed_hosts,
+            allowed_origins,
         }
     }
 }
@@ -366,6 +392,8 @@ pub struct LocalMcpHttpRuntime<S> {
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
     /// Allowed Host header values copied from the stateful server config.
     pub allowed_hosts: Vec<String>,
+    /// Allowed Origin header values copied from the stateful server config.
+    pub allowed_origins: Vec<String>,
 }
 
 impl<S> LocalMcpHttpRuntime<S>
@@ -389,6 +417,7 @@ where
             stateful_service: self.stateful_service,
             stateless_service: self.stateless_service,
             allowed_hosts: self.allowed_hosts,
+            allowed_origins: self.allowed_origins,
             auth_enabled,
         }
     }
@@ -402,8 +431,10 @@ pub struct LocalMcpHttpState<S> {
     pub stateful_service: StreamableHttpService<S, RecordingSessionManager>,
     /// Optional stateless fallback service.
     pub stateless_service: Option<StreamableHttpService<S, RecordingSessionManager>>,
-    /// Allowed Host header values for the route-bundle host guard.
+    /// Allowed Host and Origin header values for the route-bundle guard.
     pub allowed_hosts: Vec<String>,
+    /// Allowed full browser Origin values for the route-bundle guard.
+    pub allowed_origins: Vec<String>,
     /// True when bearer authentication is active above the route bundle.
     pub auth_enabled: bool,
 }
@@ -415,8 +446,398 @@ impl<S> Clone for LocalMcpHttpState<S> {
             stateful_service: self.stateful_service.clone(),
             stateless_service: self.stateless_service.clone(),
             allowed_hosts: self.allowed_hosts.clone(),
+            allowed_origins: self.allowed_origins.clone(),
             auth_enabled: self.auth_enabled,
         }
+    }
+}
+
+/// Opinionated builder for a local Streamable HTTP MCP router.
+pub struct LocalMcpHttpServerBuilder {
+    runtime: LocalMcpHttpRuntimeBuilder,
+    auth_enabled: bool,
+    include_health: bool,
+    include_host_guard: bool,
+    include_oauth_not_configured: bool,
+    mcp_path: String,
+    resource_path: Option<String>,
+    #[cfg(feature = "auth")]
+    auth_layer: Option<AuthSurfaceLayer>,
+}
+
+impl std::fmt::Debug for LocalMcpHttpServerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut builder = f.debug_struct("LocalMcpHttpServerBuilder");
+        builder
+            .field("runtime", &self.runtime)
+            .field("auth_enabled", &self.auth_enabled)
+            .field("include_health", &self.include_health)
+            .field("include_host_guard", &self.include_host_guard)
+            .field(
+                "include_oauth_not_configured",
+                &self.include_oauth_not_configured,
+            )
+            .field("mcp_path", &self.mcp_path)
+            .field("resource_path", &self.resource_path);
+        #[cfg(feature = "auth")]
+        builder.field("auth_layer", &self.auth_layer.is_some());
+        builder.finish()
+    }
+}
+
+impl Default for LocalMcpHttpServerBuilder {
+    fn default() -> Self {
+        Self {
+            runtime: LocalMcpHttpRuntimeBuilder::new(),
+            auth_enabled: false,
+            include_health: true,
+            include_host_guard: true,
+            include_oauth_not_configured: false,
+            mcp_path: "/mcp".to_string(),
+            resource_path: None,
+            #[cfg(feature = "auth")]
+            auth_layer: None,
+        }
+    }
+}
+
+impl LocalMcpHttpServerBuilder {
+    /// Builds a hosted HTTP builder with safe local defaults.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Host guarding and health routes are enabled by default. Bearer auth is
+    /// not installed unless callers supply an auth layer.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the underlying Streamable HTTP runtime builder.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Callers replacing the runtime remain responsible for bounded sessions,
+    /// allowed hosts, cancellation, and stateless fallback posture.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn runtime(mut self, runtime: LocalMcpHttpRuntimeBuilder) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    /// Sets allowed Host header values on the stateful and fallback services.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Host allowlists mitigate DNS rebinding attacks. Keep them explicit for
+    /// public deployments.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allowed_hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.runtime = self.runtime.allowed_hosts(hosts);
+        self
+    }
+
+    /// Sets allowed browser `Origin` header values on stateful and fallback services.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Entries must include a scheme, such as `https://app.example.com`. When
+    /// omitted, the route bundle keeps its existing host-derived Origin guard.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allowed_origins(mut self, origins: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.runtime = self.runtime.allowed_origins(origins);
+        self
+    }
+
+    /// Sets the maximum number of bounded stateful sessions.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep this bound small enough for the deployment's memory budget.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn max_sessions(mut self, max_sessions: usize) -> Self {
+        self.runtime = self.runtime.max_sessions(max_sessions);
+        self
+    }
+
+    /// Enables or disables resumable sessions.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Resume mode retains disconnected session state until expiry.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn allow_resume(mut self, allow_resume: bool) -> Self {
+        self.runtime = self.runtime.allow_resume(allow_resume);
+        self
+    }
+
+    /// Sets the cancellation token used by the HTTP runtime.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Use a service-owned token so shutdown tears down session sweepers and
+    /// Streamable HTTP workers together.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.runtime = self.runtime.cancellation_token(token);
+        self
+    }
+
+    /// Enables or disables stateless fallback for sessionless POST requests.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep auth and host guards enabled around stateless fallback routes for
+    /// exposed deployments.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn stateless_fallback(mut self, enabled: bool) -> Self {
+        self.runtime = self.runtime.stateless_fallback(enabled);
+        self
+    }
+
+    /// Replaces the low-level Streamable HTTP service configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Callers must preserve safe allowed-host and cancellation-token posture
+    /// when replacing the full configuration.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn runtime_config(mut self, config: LocalStreamableHttpServiceConfig) -> Self {
+        self.runtime = self.runtime.config(config);
+        self
+    }
+
+    /// Replaces the low-level local session configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Session channel capacity and keepalive settings influence memory use and
+    /// retention behavior.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn session_config(
+        mut self,
+        session_config: rmcp::transport::streamable_http_server::session::local::SessionConfig,
+    ) -> Self {
+        self.runtime = self.runtime.session_config(session_config);
+        self
+    }
+
+    /// Replaces the stateful Streamable HTTP server configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Ensure allowed hosts and cancellation behavior match the deployment.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn server_config(mut self, server_config: StreamableHttpServerConfig) -> Self {
+        self.runtime = self.runtime.server_config(server_config);
+        self
+    }
+
+    /// Replaces the stateless fallback server configuration.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The supplied configuration should keep `stateful_mode` disabled unless
+    /// callers intentionally want two stateful services.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn stateless_server_config(mut self, config: StreamableHttpServerConfig) -> Self {
+        self.runtime = self.runtime.stateless_server_config(config);
+        self
+    }
+
+    /// Enables or disables the built-in health route.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The built-in health payload includes only transport/session posture.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn include_health(mut self, include: bool) -> Self {
+        self.include_health = include;
+        self
+    }
+
+    /// Enables or disables the route-bundle host/origin guard.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Disabling the guard is not recommended for public deployments.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn include_host_guard(mut self, include: bool) -> Self {
+        self.include_host_guard = include;
+        self
+    }
+
+    /// Enables unauthenticated OAuth protected-resource placeholder routes.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Authenticated deployments should prefer a real auth layer.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn include_oauth_not_configured(mut self, include: bool) -> Self {
+        self.include_oauth_not_configured = include;
+        self
+    }
+
+    /// Sets the MCP route path.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep this aligned with protected resource metadata when auth is enabled.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn mcp_path(mut self, path: impl Into<String>) -> Self {
+        self.mcp_path = normalize_route_path(&path.into());
+        self
+    }
+
+    /// Sets the protected resource path used for discovery routes.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Keep this aligned with the MCP resource path exposed to clients.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn resource_path(mut self, path: impl Into<String>) -> Self {
+        self.resource_path = Some(normalize_route_path(&path.into()));
+        self
+    }
+
+    /// Marks the route bundle as protected by auth middleware supplied elsewhere.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// This flag changes unauthenticated route hints only. It does not install
+    /// auth middleware; use `auth_layer` when this crate owns bearer
+    /// enforcement.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn auth_enabled(mut self, enabled: bool) -> Self {
+        self.auth_enabled = enabled;
+        self
+    }
+
+    /// Installs an auth layer around the route bundle.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The supplied layer must match the public resource URL for this route
+    /// bundle. Installing a layer also marks auth as enabled.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    #[cfg(feature = "auth")]
+    pub fn auth_layer(mut self, layer: AuthSurfaceLayer) -> Self {
+        self.auth_enabled = true;
+        self.auth_layer = Some(layer);
+        self
+    }
+
+    /// Builds the HTTP router from a service factory.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The service factory must not capture secrets that could be exposed in
+    /// debug output. Auth middleware is installed only when supplied.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn build<S, F>(self, service_factory: F) -> Router
+    where
+        S: Service<RoleServer> + Send + 'static,
+        F: Fn() -> Result<S, std::io::Error> + Clone + Send + Sync + 'static,
+    {
+        let runtime = self.runtime.build(service_factory);
+        let mut router = LocalMcpHttpRouterBuilder::new(runtime.into_state(self.auth_enabled))
+            .include_health(self.include_health)
+            .include_host_guard(self.include_host_guard)
+            .include_oauth_not_configured(self.include_oauth_not_configured)
+            .mcp_path(self.mcp_path);
+
+        if let Some(resource_path) = self.resource_path {
+            router = router.resource_path(resource_path);
+        }
+
+        #[cfg(feature = "auth")]
+        {
+            if let Some(layer) = self.auth_layer {
+                router = router.auth_layer(layer);
+            }
+        }
+
+        router.build()
     }
 }
 
@@ -442,7 +863,7 @@ where
     /// This function does not return errors.
     ///
     /// # Security
-    /// The default bundle includes host guarding and a generic health route.
+    /// The default bundle includes host/origin guarding and a generic health route.
     /// Auth middleware must be supplied separately when serving non-loopback.
     ///
     /// # Panics
@@ -476,13 +897,13 @@ where
         self
     }
 
-    /// Enables or disables the route-bundle host guard.
+    /// Enables or disables the route-bundle host/origin guard.
     ///
     /// # Errors
     /// This function does not return errors.
     ///
     /// # Security
-    /// Disabling the host guard is not recommended for public deployments.
+    /// Disabling the guard is not recommended for public deployments.
     ///
     /// # Panics
     /// This function does not panic.
@@ -615,42 +1036,73 @@ where
     S: Service<RoleServer> + Send + 'static,
 {
     let method = req.method().clone();
-    let session_id = session_id_from_headers(req.headers());
+    let session_route =
+        resolve_mcp_session_route(req.headers(), state.session_manager.as_ref()).await;
+    let has_session_header = session_route.header_present();
+    tracing::debug!(
+        method = %method,
+        has_session_header,
+        auth_enabled = state.auth_enabled,
+        stateless_fallback = state.stateless_service.is_some(),
+        "streamable HTTP route-bundle request received"
+    );
 
     match method {
-        Method::POST => handle_post(state, req, session_id).await,
-        Method::GET | Method::DELETE => handle_stateful_read(state, req, session_id, method).await,
-        _ => session_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Method not allowed.",
-            "Use POST /mcp to initialize, then reuse the session id for later requests.",
-        ),
+        Method::POST => handle_post(state, req, session_route).await,
+        Method::GET | Method::DELETE => {
+            handle_stateful_read(state, req, session_route, method).await
+        }
+        _ => {
+            log_route_rejection(
+                &method,
+                has_session_header,
+                "method_not_allowed",
+                StatusCode::METHOD_NOT_ALLOWED,
+            );
+            session_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Method not allowed.",
+                "Use POST /mcp to initialize, then reuse the session id for later requests.",
+            )
+        }
     }
 }
 
 async fn handle_post<S>(
     state: LocalMcpHttpState<S>,
     req: Request,
-    session_id: Option<String>,
+    session_route: McpSessionRoute,
 ) -> Response
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    if let Some(session_id) = session_id {
-        if session_exists(&state.session_manager, &session_id).await {
-            return forward_service(state.stateful_service, req).await;
+    match session_route {
+        McpSessionRoute::Live(_) => {
+            return forward_service(state.stateful_service, req, "stateful_session").await;
         }
-        if let Some(stateless) = state.stateless_service {
-            return forward_service(stateless, req).await;
+        McpSessionRoute::InvalidOrExpired => {
+            log_route_rejection(
+                req.method(),
+                true,
+                "invalid_or_expired_session",
+                StatusCode::NOT_FOUND,
+            );
+            return session_error(
+                StatusCode::NOT_FOUND,
+                "Invalid or expired session ID.",
+                "Re-initialize with POST /mcp to obtain a new session id.",
+            );
         }
-        return session_error(
-            StatusCode::NOT_FOUND,
-            "Invalid or expired session ID.",
-            "Re-initialize with POST /mcp to obtain a new session id.",
-        );
+        McpSessionRoute::Headerless => {}
     }
 
     if content_length_exceeds(req.headers(), SESSIONLESS_POST_PROBE_LIMIT) {
+        log_route_rejection(
+            req.method(),
+            false,
+            "sessionless_body_too_large",
+            StatusCode::PAYLOAD_TOO_LARGE,
+        );
         return sessionless_body_too_large_response();
     }
 
@@ -658,9 +1110,21 @@ where
     let bytes = match to_bytes(body, SESSIONLESS_POST_PROBE_LIMIT).await {
         Ok(bytes) => bytes,
         Err(err) if is_body_limit_error(&err) => {
+            log_route_rejection(
+                &parts.method,
+                false,
+                "sessionless_body_too_large",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            );
             return sessionless_body_too_large_response();
         }
         Err(_) => {
+            log_route_rejection(
+                &parts.method,
+                false,
+                "sessionless_body_read_failed",
+                StatusCode::BAD_REQUEST,
+            );
             return session_error(
                 StatusCode::BAD_REQUEST,
                 "Failed to read request body.",
@@ -670,11 +1134,17 @@ where
     };
     let req = Request::from_parts(parts, Body::from(bytes.clone()));
     if is_initialize_payload(&bytes) {
-        return forward_service(state.stateful_service, req).await;
+        return forward_service(state.stateful_service, req, "initialize").await;
     }
     if let Some(stateless) = state.stateless_service {
-        return forward_service(stateless, req).await;
+        return forward_service(stateless, req, "stateless_fallback").await;
     }
+    log_route_rejection(
+        req.method(),
+        false,
+        "missing_session_id",
+        StatusCode::BAD_REQUEST,
+    );
     session_error(
         StatusCode::BAD_REQUEST,
         "Missing session ID.",
@@ -685,40 +1155,73 @@ where
 async fn handle_stateful_read<S>(
     state: LocalMcpHttpState<S>,
     req: Request,
-    session_id: Option<String>,
+    session_route: McpSessionRoute,
     method: Method,
 ) -> Response
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    let Some(session_id) = session_id else {
-        if matches!(method, Method::GET) && !state.auth_enabled {
-            return endpoint_ready_hint();
+    match session_route {
+        McpSessionRoute::Headerless => {
+            if matches!(method, Method::GET) && !state.auth_enabled {
+                tracing::debug!(
+                    method = %method,
+                    has_session_header = false,
+                    phase = "endpoint_ready_hint",
+                    status = StatusCode::OK.as_u16(),
+                    "streamable HTTP route-bundle request completed"
+                );
+                return endpoint_ready_hint();
+            }
+            log_route_rejection(
+                &method,
+                false,
+                "missing_session_id",
+                StatusCode::BAD_REQUEST,
+            );
+            return session_error(
+                StatusCode::BAD_REQUEST,
+                "Missing session ID.",
+                "Initialize with POST /mcp to obtain a session id.",
+            );
         }
-        return session_error(
-            StatusCode::BAD_REQUEST,
-            "Missing session ID.",
-            "Initialize with POST /mcp to obtain a session id.",
-        );
-    };
-    if !session_exists(&state.session_manager, &session_id).await {
-        return session_error(
-            StatusCode::NOT_FOUND,
-            "Invalid or expired session ID.",
-            "Re-initialize with POST /mcp to obtain a new session id.",
-        );
+        McpSessionRoute::InvalidOrExpired => {
+            log_route_rejection(
+                &method,
+                true,
+                "invalid_or_expired_session",
+                StatusCode::NOT_FOUND,
+            );
+            return session_error(
+                StatusCode::NOT_FOUND,
+                "Invalid or expired session ID.",
+                "Re-initialize with POST /mcp to obtain a new session id.",
+            );
+        }
+        McpSessionRoute::Live(_) => {}
     }
-    forward_service(state.stateful_service, req).await
+    forward_service(state.stateful_service, req, "stateful_session").await
 }
 
 async fn forward_service<S>(
     service: StreamableHttpService<S, RecordingSessionManager>,
     req: Request,
+    phase: &'static str,
 ) -> Response
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    service.handle(req).await.map(Body::new)
+    let method = req.method().clone();
+    let has_session_header = req.headers().contains_key(HEADER_SESSION_ID);
+    let response = service.handle(req).await.map(Body::new);
+    tracing::debug!(
+        method = %method,
+        has_session_header,
+        phase,
+        status = response.status().as_u16(),
+        "streamable HTTP route-bundle request forwarded"
+    );
+    response
 }
 
 async fn health<S>(State(state): State<LocalMcpHttpState<S>>) -> Json<serde_json::Value>
@@ -746,6 +1249,28 @@ where
     if let Err(err) =
         validate_request_authority(Some(req.uri()), req.headers(), &state.allowed_hosts)
     {
+        tracing::warn!(
+            method = %req.method(),
+            has_session_header = req.headers().contains_key(HEADER_SESSION_ID),
+            rejection_class = "host_rejected",
+            status = err.status_code().as_u16(),
+            "streamable HTTP route-bundle request rejected"
+        );
+        return plain_response(err.status_code(), err.message());
+    }
+    let origin_result = if state.allowed_origins.is_empty() {
+        validate_origin_header(req.headers(), &state.allowed_hosts)
+    } else {
+        validate_origin_header_against_allowed_origins(req.headers(), &state.allowed_origins)
+    };
+    if let Err(err) = origin_result {
+        tracing::warn!(
+            method = %req.method(),
+            has_session_header = req.headers().contains_key(HEADER_SESSION_ID),
+            rejection_class = "origin_rejected",
+            status = err.status_code().as_u16(),
+            "streamable HTTP route-bundle request rejected"
+        );
         return plain_response(err.status_code(), err.message());
     }
 
@@ -774,12 +1299,19 @@ fn session_stats_json(stats: SessionStats) -> serde_json::Value {
     })
 }
 
-fn session_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
-    headers
-        .get(MCP_SESSION_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn log_route_rejection(
+    method: &Method,
+    has_session_header: bool,
+    rejection_class: &'static str,
+    status: StatusCode,
+) {
+    tracing::warn!(
+        method = %method,
+        has_session_header,
+        rejection_class,
+        status = status.as_u16(),
+        "streamable HTTP route-bundle request rejected"
+    );
 }
 
 fn content_length_exceeds(headers: &http::HeaderMap, limit: usize) -> bool {
@@ -811,10 +1343,6 @@ fn is_initialize_payload(body: &[u8]) -> bool {
             .unwrap_or(false),
         _ => false,
     }
-}
-
-async fn session_exists(session_manager: &BoundedSessionManager, session_id: &str) -> bool {
-    (session_manager.has_session(&session_id.into()).await).unwrap_or_default()
 }
 
 fn session_error(status: StatusCode, message: &str, hint: &str) -> Response {

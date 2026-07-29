@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "postgres-mcp",
+    "repository": "https://github.com/sednalabs/postgres-mcp",
+    "language": "rust",
+    "role": "reference_server",
+    "notes": "Database policy, response profile, and release safety reference."
+  },
+  "patterns": ["database-policy", "public-release-ready"],
+  "toolkit_crates": [
+    "mcp-toolkit-core",
+    "mcp-toolkit-policy-core",
+    "mcp-toolkit-policy-runtime",
+    "mcp-toolkit-policy-conformance",
+    "mcp-toolkit-postgres",
+    "mcp-toolkit-testing"
+  ],
+  "transports": ["stdio", "service-adoption"],
+  "auth_modes": ["database-policy", "external-policy"],
+  "tool_surface": {
+    "discovery": ["tool-inventory", "schema_snapshot"],
+    "mutation_policy": "external-policy",
+    "schema_snapshot": "present",
+    "notes": "Large database tool surface is governed by policy and response profiles."
+  },
+  "scratchpad": {
+    "supported": false,
+    "engine": "none",
+    "profile": "none",
+    "notes": "Database responses use response profiles rather than an analytics scratchpad."
+  },
+  "profiles": [
+    {
+      "name": "agent_compact",
+      "default": true,
+      "tool_groups": ["sql-read", "schema-read"]
+    },
+    {
+      "name": "human_debug",
+      "default": false,
+      "tool_groups": ["sql-read", "diagnostics"]
+    }
+  ],
+  "conformance": {
+    "schema_snapshot": "present",
+    "transport_contract": "present",
+    "auth_surface_contract": "not-applicable",
+    "domain_contracts": "present",
+    "hosted_validation": "present",
+    "release_evidence": "present",
+    "notes": "Use for SQL policy and release-safety checks."
+  },
+  "references": [
+    {
+      "label": "SQL policy contract",
+      "kind": "doc",
+      "path": "docs/sql-policy-contract.md"
+    },
+    {
+      "label": "Payload contract",
+      "kind": "doc",
+      "path": "docs/payload-v2-contract.md"
+    },
+    {
+      "label": "Schema snapshot",
+      "kind": "doc",
+      "path": "spec/tool_schema_snapshot.v1.json"
+    }
+  ]
+}

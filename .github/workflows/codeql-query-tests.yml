@@ -1,11 +1,10 @@
 name: codeql-query-tests
 
 on:
-  pull_request:
-    paths:
-      - ".github/codeql/actions-workflow-security/**"
-      - ".github/workflows/codeql.yml"
-      - ".github/workflows/codeql-query-tests.yml"
+  # Branch protection requires the gate context on every pull request. Keep the
+  # PR trigger unfiltered so required checks are not skipped for non-workflow
+  # changes.
+  pull_request: {}
   push:
     branches:
       - main
@@ -13,6 +12,9 @@ on:
       - ".github/codeql/actions-workflow-security/**"
       - ".github/workflows/codeql.yml"
       - ".github/workflows/codeql-query-tests.yml"
+      - "templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/**"
+      - "templates/single-crate-public-stdio-server/.github/workflows/codeql.yml"
+      - "templates/single-crate-public-stdio-server/.github/workflows/codeql-query-tests.yml"
   workflow_dispatch:
 
 permissions:
@@ -25,9 +27,23 @@ concurrency:
 
 jobs:
   actions-workflow-security:
-    name: Actions workflow security query tests
+    name: Actions workflow security query tests / ${{ matrix.pack.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pack:
+          - name: repository-pack
+            search_path: .github/codeql
+            pack_path: .github/codeql/actions-workflow-security
+            suite_path: .github/codeql/actions-workflow-security/suites/actions-workflow-security.qls
+            query_glob: .github/codeql/actions-workflow-security/*.ql
+          - name: public-stdio-template-pack
+            search_path: templates/single-crate-public-stdio-server/.github/codeql
+            pack_path: templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security
+            suite_path: templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/suites/actions-workflow-security.qls
+            query_glob: templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/*.ql
     steps:
       - name: Checkout repository
         # actions/checkout v6
@@ -44,20 +60,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.setup-codeql.outputs.codeql-path }}" pack install .github/codeql/actions-workflow-security
+          "${{ steps.setup-codeql.outputs.codeql-path }}" pack install "${{ matrix.pack.pack_path }}"
 
       - name: Resolve Actions workflow security suite
         shell: bash
         run: |
           set -euo pipefail
           "${{ steps.setup-codeql.outputs.codeql-path }}" resolve queries \
-            --search-path .github/codeql \
-            .github/codeql/actions-workflow-security/suites/actions-workflow-security.qls
+            --search-path "${{ matrix.pack.search_path }}" \
+            "${{ matrix.pack.suite_path }}"
 
       - name: Compile Actions workflow security queries
         shell: bash
         run: |
           set -euo pipefail
           "${{ steps.setup-codeql.outputs.codeql-path }}" query compile \
-            --search-path .github/codeql \
-            .github/codeql/actions-workflow-security/*.ql
+            --search-path "${{ matrix.pack.search_path }}" \
+            ${{ matrix.pack.query_glob }}
+
+  actions-workflow-security-gate:
+    name: Actions workflow security query tests
+    runs-on: ubuntu-24.04
+    needs: [actions-workflow-security]
+    if: ${{ always() }}
+    steps:
+      - name: Require every query-test lane to pass
+        shell: bash
+        run: |
+          if [[ "${{ needs.actions-workflow-security.result }}" != "success" ]]; then
+            echo "One or more Actions workflow security query-test lanes failed." >&2
+            exit 1
+          fi
+          echo "All Actions workflow security query-test lanes passed."

@@ -19,19 +19,73 @@ mcp-toolkit-policy-core = { version = "0.1.0", path = "../mcp-toolkit-policy-cor
 mcp-toolkit-policy-ffi = { version = "0.1.0", path = "../mcp-toolkit-policy-ffi", optional = true }
 mcp-toolkit-policy-runtime = { version = "0.1.0", path = "../mcp-toolkit-policy-runtime", optional = true }
 mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", optional = true }
+mcp-toolkit-scratchpad = { version = "0.1.0", path = "../mcp-toolkit-scratchpad", optional = true }
 mcp-toolkit-gemini = { version = "0.1.0", path = "../mcp-toolkit-gemini", optional = true }
 mcp-toolkit-server = { version = "0.1.0", path = "../mcp-toolkit-server", optional = true }
+rmcp = { version = "=2.1.0", default-features = false, optional = true }
+serde_json = "1.0.149"
+toml_edit = "0.25.12"
 
 [features]
 default = []
-full = ["auth", "http", "policy", "policy-ffi", "process", "gemini", "server"]
+full = [
+  "auth",
+  "http",
+  "policy",
+  "policy-ffi",
+  "process",
+  "scratchpad-tokio",
+  "gemini",
+  "server",
+]
 auth = ["mcp-toolkit-auth"]
 http = ["mcp-toolkit-http"]
 policy = ["mcp-toolkit-policy-core", "mcp-toolkit-policy-runtime"]
 policy-ffi = ["mcp-toolkit-policy-ffi"]
 process = ["mcp-toolkit-process"]
+scratchpad = ["mcp-toolkit-scratchpad"]
+scratchpad-tokio = ["scratchpad", "mcp-toolkit-scratchpad/tokio"]
 gemini = ["mcp-toolkit-gemini"]
-server = ["mcp-toolkit-server", "mcp-toolkit-server/full"]
-server-stdio = ["mcp-toolkit-server", "mcp-toolkit-server/stdio"]
-server-http = ["mcp-toolkit-server", "mcp-toolkit-server/http"]
-server-auth = ["mcp-toolkit-server", "mcp-toolkit-server/auth"]
+server = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/full",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-io",
+  "rmcp/transport-streamable-http-server",
+  "rmcp/transport-streamable-http-server-session",
+]
+server-stdio = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/stdio",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-io",
+]
+server-http = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/http",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-streamable-http-server",
+]
+
+server-auth = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/auth",
+  "dep:rmcp",
+  "rmcp/macros",
+  "rmcp/schemars",
+  "rmcp/server",
+  "rmcp/transport-streamable-http-server",
+  "rmcp/transport-streamable-http-server-session",
+]
+
+[build-dependencies]
+serde_json = "1.0.149"

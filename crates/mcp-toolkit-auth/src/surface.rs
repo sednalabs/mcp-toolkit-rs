@@ -33,18 +33,22 @@
 //! * [MCP Authorization Specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization.md)
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
 
 use axum::body::Body;
 use futures_util::future::BoxFuture;
 use http::header::{CONTENT_TYPE, LOCATION, WWW_AUTHENTICATE};
-use http::{HeaderMap, Request, Response, StatusCode};
+use http::{request::Parts, Extensions, HeaderMap, Method, Request, Response, StatusCode, Uri};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tower::Layer;
 
 use crate::challenge::{build_bearer_challenge, BearerChallenge};
-use crate::{AuthContext, AuthError, Authenticator};
+use crate::{AuthContext, AuthError, Authenticator, VerifiedAuthContext};
 use mcp_toolkit_http::oauth::{
     authorization_server_well_known_paths, oidc_metadata_url, oidc_well_known_paths,
     protected_resource_well_known_paths, resource_metadata_default, resource_metadata_hint,
@@ -104,6 +108,18 @@ pub struct IssuerEntry {
     pub resource_url_override: Option<String>,
 }
 
+/// Metadata-source inputs used to construct one issuer/resource entry.
+#[derive(Debug, Clone)]
+pub struct IssuerMetadataConfig {
+    pub resource_path: String,
+    pub metadata_source: AuthorizationServerMetadataSource,
+    pub realm: String,
+    pub scopes_supported: Vec<String>,
+    pub allowed_client_ids: HashSet<String>,
+    pub authenticator: Arc<Authenticator>,
+    pub resource_url_override: Option<String>,
+}
+
 impl IssuerEntry {
     /// Builds entry from metadata source.
     pub fn from_metadata_source(
@@ -136,6 +152,28 @@ impl IssuerEntry {
             resource_url_override,
         })
     }
+
+    /// Builds entry from named metadata-source inputs.
+    pub fn from_metadata_config(config: IssuerMetadataConfig) -> Result<Self, AuthSurfaceError> {
+        let IssuerMetadataConfig {
+            resource_path,
+            metadata_source,
+            realm,
+            scopes_supported,
+            allowed_client_ids,
+            authenticator,
+            resource_url_override,
+        } = config;
+        Self::from_metadata_source(
+            resource_path,
+            metadata_source,
+            realm,
+            scopes_supported,
+            allowed_client_ids,
+            authenticator,
+            resource_url_override,
+        )
+    }
 }
 
 /// Top-level configuration for the auth surface.
@@ -166,6 +204,24 @@ impl AuthSurfaceConfig {
             public_prefixes: Vec::new(),
             allow_insecure_http: false,
         }
+    }
+
+    /// Build a single-issuer configuration directly from a metadata source.
+    ///
+    /// # Errors
+    /// Returns `AuthSurfaceError` when the supplied metadata source fails
+    /// validation or cannot be resolved into deterministic authorization-server
+    /// metadata.
+    ///
+    /// # Security
+    /// Preserves the same metadata validation guarantees as
+    /// `IssuerEntry::from_metadata_source`.
+    pub fn single_issuer_from_metadata_source(
+        public_base_url: impl Into<String>,
+        issuer: IssuerMetadataConfig,
+    ) -> Result<Self, AuthSurfaceError> {
+        let entry = IssuerEntry::from_metadata_config(issuer)?;
+        Ok(Self::single_issuer(public_base_url, entry))
     }
 
     /// Return true when any configured auth-surface URL uses insecure `http://`.
@@ -811,11 +867,260 @@ fn insert_well_known_routes(
 ///
 /// # Panics
 /// * None.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSurfaceContext {
     pub resource_path: String,
     pub resource_url: String,
     pub issuer: String,
+}
+
+#[derive(Debug)]
+struct AuthSurfaceRequestLifecycle {
+    state: AtomicU8,
+}
+
+const AUTH_SURFACE_REQUEST_ACTIVE: u8 = 0;
+const AUTH_SURFACE_REQUEST_CONSUMED: u8 = 1;
+const AUTH_SURFACE_REQUEST_CLOSED: u8 = 2;
+
+#[derive(Clone)]
+struct AuthSurfaceRequestBinding {
+    method: Method,
+    uri: Uri,
+    authorization_digest: [u8; 32],
+    request_marker: Arc<()>,
+    lifecycle: Arc<AuthSurfaceRequestLifecycle>,
+    auth_surface_context: Option<AuthSurfaceContext>,
+}
+
+impl AuthSurfaceRequestBinding {
+    fn begin<B>(
+        request: &Request<B>,
+        request_marker: Arc<()>,
+        auth_surface_context: Option<AuthSurfaceContext>,
+    ) -> (Self, AuthSurfaceRequestGuard) {
+        let lifecycle = Arc::new(AuthSurfaceRequestLifecycle {
+            state: AtomicU8::new(AUTH_SURFACE_REQUEST_ACTIVE),
+        });
+        (
+            Self {
+                method: request.method().clone(),
+                uri: request.uri().clone(),
+                authorization_digest: authorization_digest(request.headers()),
+                request_marker,
+                lifecycle: lifecycle.clone(),
+                auth_surface_context,
+            },
+            AuthSurfaceRequestGuard { lifecycle },
+        )
+    }
+
+    fn matches(&self, method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+        self.method == *method
+            && self.uri == *uri
+            && self.authorization_digest == authorization_digest(headers)
+    }
+
+    fn consume(&self) -> bool {
+        self.lifecycle
+            .state
+            .compare_exchange(
+                AUTH_SURFACE_REQUEST_ACTIVE,
+                AUTH_SURFACE_REQUEST_CONSUMED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+struct AuthSurfaceRequestGuard {
+    lifecycle: Arc<AuthSurfaceRequestLifecycle>,
+}
+
+impl Drop for AuthSurfaceRequestGuard {
+    fn drop(&mut self) {
+        self.lifecycle
+            .state
+            .store(AUTH_SURFACE_REQUEST_CLOSED, Ordering::Release);
+    }
+}
+
+/// Auth and route context from the current auth-surface request lifecycle.
+///
+/// A value exists for both authenticated protected requests and explicitly
+/// public or pass-through requests. Protected requests carry authentication and
+/// surface metadata; public requests carry neither.
+///
+/// # Errors
+/// This type does not emit errors directly.
+///
+/// # Security
+/// Instances are issued only by consuming a live, request-bound auth-surface
+/// witness. They must not be cached as authority for another request.
+///
+/// # Panics
+/// None.
+#[derive(Debug, Clone)]
+pub struct VerifiedAuthSurfaceRequest {
+    auth: Option<AuthContext>,
+    surface: Option<AuthSurfaceContext>,
+}
+
+impl VerifiedAuthSurfaceRequest {
+    /// Borrows the current request's authenticated context, when present.
+    ///
+    /// # Security
+    /// `None` is expected for explicitly public and pass-through requests.
+    /// Protected-route authorization must require `Some`.
+    pub fn auth(&self) -> Option<&AuthContext> {
+        self.auth.as_ref()
+    }
+
+    /// Borrows the current request's protected-resource context, when present.
+    ///
+    /// # Security
+    /// The context is copied from the request-bound auth-surface witness rather
+    /// than from independently mutable request extensions.
+    pub fn surface(&self) -> Option<&AuthSurfaceContext> {
+        self.surface.as_ref()
+    }
+}
+
+/// Consumes the auth surface's witness for the current HTTP request.
+///
+/// Returns `Some` exactly once while the request is executing inside
+/// [`AuthSurfaceLayer`]. Protected requests additionally require a
+/// [`VerifiedAuthContext`] issued by `authenticator` and bound to the same
+/// request lifecycle.
+///
+/// # Errors
+/// Returns `None` for an absent, invalid, expired, or already consumed witness.
+///
+/// # Security
+/// The witness is bound to the exact method, URI, and authorization header.
+/// Missing, stale, replayed, rebound, or independently issued state returns
+/// `None`. Call this at the policy-enforcement boundary, not as a general
+/// request-context accessor.
+///
+/// # Panics
+/// None.
+pub fn consume_verified_auth_surface_request(
+    parts: &Parts,
+    authenticator: &Authenticator,
+) -> Option<VerifiedAuthSurfaceRequest> {
+    consume_verified_auth_surface_request_parts(
+        &parts.method,
+        &parts.uri,
+        &parts.headers,
+        &parts.extensions,
+        authenticator,
+    )
+}
+
+/// Consumes the auth surface's witness from the current HTTP request.
+///
+/// This is the request-form equivalent of
+/// [`consume_verified_auth_surface_request`].
+///
+/// # Errors
+/// Returns `None` for an absent, invalid, expired, or already consumed witness.
+///
+/// # Security
+/// Missing, stale, replayed, rebound, or independently issued state returns
+/// `None`.
+///
+/// # Panics
+/// None.
+pub fn consume_verified_auth_surface_request_from_request<B>(
+    request: &Request<B>,
+    authenticator: &Authenticator,
+) -> Option<VerifiedAuthSurfaceRequest> {
+    consume_verified_auth_surface_request_parts(
+        request.method(),
+        request.uri(),
+        request.headers(),
+        request.extensions(),
+        authenticator,
+    )
+}
+
+fn consume_verified_auth_surface_request_parts(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    extensions: &Extensions,
+    authenticator: &Authenticator,
+) -> Option<VerifiedAuthSurfaceRequest> {
+    let binding = extensions.get::<AuthSurfaceRequestBinding>()?;
+    if !binding.matches(method, uri, headers) {
+        return None;
+    }
+
+    match binding.auth_surface_context.as_ref() {
+        Some(surface) => {
+            let context = extensions.get::<VerifiedAuthContext>()?;
+            if !context.is_issued_by(authenticator)
+                || !context.is_bound_to_request(&binding.request_marker)
+            {
+                return None;
+            }
+            let attached_surface = extensions.get::<AuthSurfaceContext>()?;
+            if attached_surface != surface {
+                return None;
+            }
+            if !binding.consume() {
+                return None;
+            }
+            Some(VerifiedAuthSurfaceRequest {
+                auth: Some(context.context().clone()),
+                surface: Some(surface.clone()),
+            })
+        }
+        None => {
+            if extensions.get::<VerifiedAuthContext>().is_some()
+                || extensions.get::<AuthContext>().is_some()
+                || extensions.get::<AuthSurfaceContext>().is_some()
+            {
+                return None;
+            }
+            if !binding.consume() {
+                return None;
+            }
+            Some(VerifiedAuthSurfaceRequest {
+                auth: None,
+                surface: None,
+            })
+        }
+    }
+}
+
+fn authorization_digest(headers: &HeaderMap) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    let values = headers.get_all(http::header::AUTHORIZATION);
+    digest.update((values.iter().count() as u64).to_be_bytes());
+    for value in values.iter() {
+        let bytes = value.as_bytes();
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    digest.finalize().into()
+}
+
+fn clear_auth_surface_request_state<B>(request: &mut Request<B>) {
+    let _ = request.extensions_mut().remove::<AuthContext>();
+    let _ = request.extensions_mut().remove::<VerifiedAuthContext>();
+    let _ = request.extensions_mut().remove::<AuthSurfaceContext>();
+    let _ = request
+        .extensions_mut()
+        .remove::<AuthSurfaceRequestBinding>();
+}
+
+fn begin_public_request<B>(request: &mut Request<B>) -> AuthSurfaceRequestGuard {
+    let request_marker = Arc::new(());
+    let (binding, guard) = AuthSurfaceRequestBinding::begin(request, request_marker, None);
+    request.extensions_mut().insert(binding);
+    guard
 }
 
 /// Sanitized auth failure event emitted by [`AuthSurfaceLayer`].
@@ -1031,6 +1336,7 @@ where
     }
 
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
+        clear_auth_surface_request_state(&mut req);
         let path = normalize_request_path(req.uri().path());
         let registry = self.registry.clone();
         let auth_failure_observer = self.auth_failure_observer.clone();
@@ -1041,8 +1347,13 @@ where
         }
 
         if registry.is_public_path(&path) {
+            let guard = begin_public_request(&mut req);
             let fut = self.inner.call(req);
-            return Box::pin(fut);
+            return Box::pin(async move {
+                let result = fut.await;
+                drop(guard);
+                result
+            });
         }
 
         if let Some(entry) = registry.match_entry(&path) {
@@ -1060,9 +1371,9 @@ where
 
             return Box::pin(async move {
                 match authenticator.authenticate_headers(&headers).await {
-                    Ok(context) => {
+                    Ok(mut context) => {
                         if !allowed_client_ids.is_empty() {
-                            let azp = context.azp.as_deref().unwrap_or_default();
+                            let azp = context.context().azp.as_deref().unwrap_or_default();
                             if azp.is_empty() || !allowed_client_ids.contains(azp) {
                                 let err =
                                     AuthError::new("client_id is not allowed for this service")
@@ -1090,14 +1401,27 @@ where
                                 ));
                             }
                         }
-                        req.extensions_mut().insert::<AuthContext>(context);
+                        let surface_context = AuthSurfaceContext {
+                            resource_path,
+                            resource_url,
+                            issuer,
+                        };
+                        let request_marker = Arc::new(());
+                        context.bind_to_request(request_marker.clone());
+                        let (binding, guard) = AuthSurfaceRequestBinding::begin(
+                            &req,
+                            request_marker,
+                            Some(surface_context.clone()),
+                        );
                         req.extensions_mut()
-                            .insert::<AuthSurfaceContext>(AuthSurfaceContext {
-                                resource_path,
-                                resource_url,
-                                issuer,
-                            });
-                        inner.call(req).await
+                            .insert::<AuthContext>(context.context().clone());
+                        req.extensions_mut().insert(context);
+                        req.extensions_mut()
+                            .insert::<AuthSurfaceContext>(surface_context);
+                        req.extensions_mut().insert(binding);
+                        let result = inner.call(req).await;
+                        drop(guard);
+                        result
                     }
                     Err(err) => {
                         observe_auth_failure(
@@ -1128,8 +1452,13 @@ where
             return Box::pin(async move { Ok(unmatched_route_response()) });
         }
 
+        let guard = begin_public_request(&mut req);
         let fut = self.inner.call(req);
-        Box::pin(fut)
+        Box::pin(async move {
+            let result = fut.await;
+            drop(guard);
+            result
+        })
     }
 }
 
@@ -1237,10 +1566,16 @@ fn error_body(err: &AuthError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-    use http::{Request, Response, StatusCode};
+    use axum::body::{to_bytes, Body};
+    use http::{
+        header::{AUTHORIZATION, WWW_AUTHENTICATE},
+        Request, Response, StatusCode,
+    };
+    use jsonwebtoken::{encode, EncodingKey, Header as JwtHeader};
+    use serde_json::json;
     use std::convert::Infallible;
     use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tower::{service_fn, Service};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1304,6 +1639,26 @@ mod tests {
             authenticator: test_authenticator(),
             resource_url_override: resource_url_override.map(str::to_string),
         }
+    }
+
+    fn confirmation_claim_token(cnf: serde_json::Value) -> String {
+        let expiration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        encode(
+            &JwtHeader::default(),
+            &json!({
+                "exp": expiration,
+                "sub": "test-subject",
+                "aud": "mcp-toolkit",
+                "iss": "mcp-toolkit",
+                "cnf": cnf,
+            }),
+            &EncodingKey::from_secret(b"secret"),
+        )
+        .expect("test token")
     }
 
     #[test]
@@ -1674,6 +2029,57 @@ mod tests {
     }
 
     #[test]
+    fn auth_surface_config_can_be_built_from_metadata_source() {
+        let config = AuthSurfaceConfig::single_issuer_from_metadata_source(
+            "https://example.com",
+            IssuerMetadataConfig {
+                resource_path: "/mcp".to_string(),
+                metadata_source: AuthorizationServerMetadataSource::Explicit(
+                    AuthorizationServerMetadata {
+                        issuer: "https://issuer.test".to_string(),
+                        authorization_endpoint: "https://issuer.test/auth".to_string(),
+                        token_endpoint: "https://issuer.test/token".to_string(),
+                        registration_endpoint: None,
+                        jwks_uri: Some("https://issuer.test/jwks".to_string()),
+                        introspection_endpoint: Some("https://issuer.test/introspect".to_string()),
+                        device_authorization_endpoint: Some(
+                            "https://issuer.test/device".to_string(),
+                        ),
+                        grant_types_supported: Some(vec![
+                            "authorization_code".to_string(),
+                            "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+                        ]),
+                        client_id_metadata_document_supported: None,
+                        token_endpoint_auth_methods_supported: None,
+                        code_challenge_methods_supported: None,
+                    },
+                ),
+                realm: "test".to_string(),
+                scopes_supported: vec!["ops:read".to_string()],
+                allowed_client_ids: HashSet::new(),
+                authenticator: test_authenticator(),
+                resource_url_override: Some("https://example.com/mcp".to_string()),
+            },
+        )
+        .expect("config from metadata source");
+
+        assert_eq!(config.public_base_url, "https://example.com");
+        assert_eq!(config.entries.len(), 1);
+        assert_eq!(config.entries[0].resource_path, "/mcp");
+        assert_eq!(
+            config.entries[0].device_authorization_endpoint.as_deref(),
+            Some("https://issuer.test/device")
+        );
+        assert_eq!(
+            config.entries[0].grant_types_supported,
+            Some(vec![
+                "authorization_code".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_string()
+            ])
+        );
+    }
+
+    #[test]
     fn metadata_source_explicit_accepts_registration_endpoint_from_caller() {
         let entry = IssuerEntry::from_metadata_source(
             "/mcp",
@@ -1929,6 +2335,49 @@ mod tests {
                 has_authorization: false,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn auth_surface_sanitizes_confirmation_claim_bearer_failure() {
+        let registry = IssuerRegistry::new(AuthSurfaceConfig {
+            public_base_url: "https://example.com".to_string(),
+            entries: vec![test_entry("/mcp", Some("https://example.com/mcp"))],
+            root_alias_policy: RootAliasPolicy::Disabled,
+            public_paths: HashSet::new(),
+            public_prefixes: Vec::new(),
+            allow_insecure_http: false,
+        })
+        .expect("registry");
+        let mut service =
+            AuthSurfaceLayer::new(registry).layer(service_fn(|_request: Request<Body>| async {
+                Ok::<_, Infallible>(Response::new(Body::from("unexpected success")))
+            }));
+        let token = confirmation_claim_token(json!({"jkt": "test-thumbprint"}));
+
+        let response = service
+            .call(
+                Request::builder()
+                    .uri("/mcp")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let challenge = response
+            .headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .expect("WWW-Authenticate header");
+        assert!(challenge.contains("error=\"invalid_token\""));
+        assert!(!challenge.contains("sender-constrained"));
+
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("response body");
+        assert_eq!(body.as_ref(), b"Invalid bearer token.");
     }
 
     #[tokio::test]

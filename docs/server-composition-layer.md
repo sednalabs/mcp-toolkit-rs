@@ -110,13 +110,15 @@ assembly crate layered above the existing low-level crates:
 
 Current public pieces:
 
+- `stdio::StdioServerBuilder` for the stdio starter front door;
 - `stdio::serve_stdio` for the common stdio startup and wait loop;
 - `auth::AuthSurfaceBuilder` for auth-surface normalization and layer assembly;
 - `http::HttpBindSafety` for fail-closed non-loopback bind posture checks;
+- `http::LocalMcpHttpServerBuilder` for the common hosted HTTP route bundle;
 - `http::LocalMcpHttpRuntimeBuilder` for bounded Streamable HTTP sessions and
   optional stateless fallback;
 - `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
-  OAuth-not-configured placeholder discovery routes, and host guarding.
+  OAuth-not-configured placeholder discovery routes, and host/origin guarding.
 
 The guiding rule remains: keep the public API small and obviously reusable.
 Service-specific health payloads, attestation payloads, backend clients, tool
@@ -126,8 +128,8 @@ handlers, and product policy stay in service repositories.
 
 The composition layer should support three adoption styles:
 
-1. Full adoption: the server wants the toolkit to assemble most of the HTTP and
-   MCP runtime.
+1. Full adoption: the server wants `StdioServerBuilder` or
+   `LocalMcpHttpServerBuilder` to assemble the standard transport front door.
 2. Partial adoption: the server already has a router or runtime split and wants
    selected helpers.
 3. No adoption: stdio-only or highly specialized services should not be forced
@@ -141,13 +143,14 @@ Maintained starter templates now cover the first adoption path:
   intent tools, explicit inventory metadata, tool-schema snapshots, and a real
   JSON-RPC stdio smoke test.
 - `templates/hosted-http-auth-server` shows hosted Streamable HTTP assembly,
-  host guarding, OAuth Protected Resource Metadata, bearer challenges, device
-  authorization metadata, tool-schema snapshots, and route-level contract tests.
+  host/origin guarding, OAuth Protected Resource Metadata, bearer challenges,
+  device authorization metadata, tool-schema snapshots, and route-level
+  contract tests.
 
 The remaining slices should build on this crate rather than copying old wiring:
 
-1. expand reusable contract tests for auth metadata, host rejection, sessions,
-   tool schema snapshots, and stdio callability;
+1. expand reusable contract tests for auth metadata, host/origin rejection,
+   sessions, tool schema snapshots, and stdio callability;
 2. prove the API in one reference server slice;
 3. keep route-bundle additions driven by repeated adopter code, not speculative
    framework growth.

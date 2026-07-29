@@ -1221,7 +1221,7 @@ mod tests {
     };
     use crate::{
         PolicyAuthority, PolicyHttpAuthContext, PolicyHttpRequestContext, PolicyHttpSurfaceContext,
-        PolicyRequestMapper, PolicyRuntimeMode,
+        PolicyProvenanceRequirement, PolicyRequestMapper, PolicyRuntimeMode,
     };
     use serde_json::json;
 
@@ -1311,6 +1311,14 @@ mod tests {
         );
         assert_eq!(decision.runtime_mode, PolicyRuntimeMode::Rust);
         assert_eq!(decision.required_scopes, Some(vec!["mcp:read".to_string()]));
+        decision
+            .validate_provenance(
+                &PolicyProvenanceRequirement::new()
+                    .decision_source("mcp_toolkit_policy_runtime.auth_control_plane")
+                    .allow_runtime_mode(PolicyRuntimeMode::Rust)
+                    .policy_contract_version(AUTH_CONTROL_PLANE_POLICY_CONTRACT_VERSION),
+            )
+            .expect("auth/control-plane decisions should carry release acceptance metadata");
     }
 
     #[test]

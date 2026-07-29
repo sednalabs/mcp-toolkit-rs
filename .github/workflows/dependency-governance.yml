@@ -2,26 +2,10 @@ name: dependency-governance
 
 on:
   pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
-      - "scripts/dependency_governance_check.sh"
-      - "scripts/rmcp_macro_runtime_pin_check.py"
-      - "docs/dependency-governance.md"
-      - ".github/workflows/dependency-governance.yml"
   push:
     branches:
       - main
       - master
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
-      - "scripts/dependency_governance_check.sh"
-      - "scripts/rmcp_macro_runtime_pin_check.py"
-      - "docs/dependency-governance.md"
-      - ".github/workflows/dependency-governance.yml"
   workflow_dispatch:
 
 permissions:
@@ -32,9 +16,118 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-governance:
+  dependency-governance-changes:
+    name: Dependency governance relevance
     runs-on: ubuntu-24.04
+    outputs:
+      relevant: ${{ steps.relevance.outputs.relevant }}
+    steps:
+      - name: Checkout
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect dependency-governance-relevant changes
+        id: relevance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import PurePosixPath
+
+          def matches(path: str, pattern: str) -> bool:
+              candidate = PurePosixPath(path)
+              if candidate.match(pattern):
+                  return True
+              if pattern.startswith("**/"):
+                  return candidate.match(pattern[3:])
+              return False
+
+          patterns = [
+              "**/Cargo.toml",
+              "**/Cargo.lock",
+              "deny.toml",
+              "scripts/dependency_governance_check.sh",
+              "scripts/rmcp_macro_runtime_pin_check.py",
+              "docs/dependency-governance.md",
+              ".github/workflows/dependency-governance.yml",
+          ]
+          event_name = os.environ["EVENT_NAME"]
+          relevant = event_name == "workflow_dispatch"
+          changed_files: list[str] = []
+
+          if not relevant:
+              if event_name == "pull_request":
+                  base = os.environ["BASE_SHA"]
+              else:
+                  base = os.environ["BEFORE_SHA"]
+              head = os.environ["HEAD_SHA"]
+
+              if base and base != "0" * 40:
+                  changed_files = [
+                      line
+                      for line in subprocess.check_output(
+                          ["git", "diff", "--name-only", base, head],
+                          text=True,
+                      ).splitlines()
+                      if line
+                  ]
+                  relevant = any(
+                      matches(path, pattern)
+                      for path in changed_files
+                      for pattern in patterns
+                  )
+              else:
+                  relevant = True
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as handle:
+              handle.write(f"relevant={'true' if relevant else 'false'}\n")
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as handle:
+              handle.write("### Dependency governance relevance\n\n")
+              handle.write(f"- Event: `{event_name}`\n")
+              handle.write(f"- Relevant: `{'true' if relevant else 'false'}`\n")
+              if changed_files:
+                  handle.write("- Changed files considered:\n")
+                  for path in changed_files:
+                      handle.write(f"  - `{path}`\n")
+          PY
+
+  dependency-governance-lane:
+    name: Dependency governance / ${{ matrix.lane.name }}
+    runs-on: ubuntu-24.04
+    needs: [dependency-governance-changes]
+    if: ${{ needs.dependency-governance-changes.outputs.relevant == 'true' }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: repo-policy
+            tool: ""
+            command: |
+              python3 scripts/auth_dependency_posture_check.py
+              python3 scripts/rmcp_macro_runtime_pin_check.py
+          - name: cargo-deny
+            tool: cargo-deny
+            command: cargo deny check advisories licenses bans sources
+          - name: cargo-audit
+            tool: cargo-audit
+            command: cargo audit --deny warnings
+          - name: cargo-outdated
+            tool: cargo-outdated
+            command: cargo outdated --root-deps-only --depth 1
     steps:
       - name: Checkout
         # actions/checkout v6
@@ -43,20 +136,53 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
+        if: ${{ matrix.lane.tool != '' }}
         # dtolnay/rust-toolchain stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Cache cargo artifacts
+        if: ${{ matrix.lane.tool != '' }}
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: dependency-governance-${{ runner.os }}
+          workspaces: |
+            . -> target
+            templates/curated-stdio-intent-server -> target
+            templates/hosted-http-auth-server -> target
+            templates/single-crate-public-stdio-server -> target
+          cache-on-failure: "true"
+          cache-all-crates: "true"
+          cache-workspace-crates: "true"
 
       - name: Install governance tools
+        if: ${{ matrix.lane.tool != '' }}
         # taiki-e/install-action v2
         uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5
         with:
-          tool: cargo-deny,cargo-audit,cargo-outdated
+          tool: ${{ matrix.lane.tool }}
 
-      - name: Run dependency governance checks
-        env:
-          STRICT_OUTDATED: "0"
-        run: ./scripts/dependency_governance_check.sh
+      - name: Run dependency governance lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ matrix.lane.command }}
+
+  dependency-governance:
+    name: dependency-governance
+    runs-on: ubuntu-24.04
+    needs: [dependency-governance-changes, dependency-governance-lane]
+    if: ${{ always() }}
+    steps:
+      - name: Require every governance lane to pass
+        shell: bash
+        run: |
+          if [[ "${{ needs.dependency-governance-changes.outputs.relevant }}" != "true" ]]; then
+            echo "Dependency governance checks were not relevant for this change."
+            exit 0
+          fi
+          if [[ "${{ needs.dependency-governance-lane.result }}" != "success" ]]; then
+            echo "One or more dependency governance lanes failed." >&2
+            exit 1
+          fi
+          echo "All dependency governance lanes passed."

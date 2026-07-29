@@ -13,7 +13,7 @@
 //! * **Input Validation**: All session identifiers and event IDs are normalized and validated.
 //!
 //! ## References
-//! * **MCP HTTP Transport**: https://modelcontextprotocol.io/docs/concepts/transports#http-sse
+//! * **MCP Streamable HTTP Transport**: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
 //!
 //! ## Notes
 //! * Event stores can be memory-based or persistent (via SQLite).
@@ -1062,16 +1062,19 @@ fn serialize_message(message: &ServerSseMessage) -> Result<Option<String>, Event
 }
 
 fn parse_event_id(event_id: &str) -> Option<ParsedEventId> {
-    if event_id.trim().is_empty() {
+    let event_id = event_id.trim();
+    if event_id.is_empty() {
         return None;
     }
     let (index_raw, request_raw) = match event_id.split_once('/') {
         Some((index, request)) => (index, Some(request)),
         None => (event_id, None),
     };
-    let index = index_raw.parse::<i64>().ok()?;
+    let index = index_raw.parse::<u64>().ok()?;
+    let index = i64::try_from(index).ok()?;
     let http_request_id = match request_raw {
-        Some(raw) if !raw.trim().is_empty() => raw.parse::<u64>().ok(),
+        Some(raw) if !raw.trim().is_empty() => Some(raw.parse::<u64>().ok()?),
+        Some(_) => return None,
         _ => None,
     };
     Some(ParsedEventId {
@@ -1201,5 +1204,26 @@ mod tests {
             err.to_string(),
             "event store error: event store encryption requires session-sqlite feature"
         );
+    }
+
+    #[test]
+    fn parse_event_id_matches_rmcp_non_negative_shape() {
+        let common = parse_event_id("7").expect("common event id");
+        assert_eq!(common.index, 7);
+        assert_eq!(common.http_request_id, None);
+
+        let request_wise = parse_event_id("8/42").expect("request-wise event id");
+        assert_eq!(request_wise.index, 8);
+        assert_eq!(request_wise.http_request_id, Some(42));
+    }
+
+    #[test]
+    fn parse_event_id_rejects_malformed_or_negative_values() {
+        for value in ["", " ", "-1", "1/", "1/not-a-number", "not-a-number"] {
+            assert!(
+                parse_event_id(value).is_none(),
+                "expected {value:?} to be rejected"
+            );
+        }
     }
 }

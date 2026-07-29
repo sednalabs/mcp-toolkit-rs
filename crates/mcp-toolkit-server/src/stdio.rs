@@ -13,7 +13,7 @@
 //!   configured auth posture.
 //!
 //! ## References
-//! * **MCP Transport**: <https://modelcontextprotocol.io/docs/concepts/transports>
+//! * **MCP Transport**: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
 
 use std::fmt;
 
@@ -63,6 +63,46 @@ impl From<tokio::task::JoinError> for StdioServeError {
     }
 }
 
+/// Opinionated builder for serving a process-local stdio MCP server.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StdioServerBuilder {}
+
+impl StdioServerBuilder {
+    /// Builds a stdio server builder.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// Stdio is process-local and does not install HTTP auth surfaces.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Serves an MCP server over stdio and waits until the service exits.
+    ///
+    /// # Errors
+    /// Returns `StdioServeError::Initialize` when the MCP initialize handshake
+    /// fails. Returns `StdioServeError::Wait` when the spawned service task fails.
+    ///
+    /// # Security
+    /// This helper only wires process-local stdio transport. Callers must reject
+    /// stdio when their service policy requires HTTP bearer-auth endpoints.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub async fn serve<S>(self, server: S) -> Result<QuitReason, StdioServeError>
+    where
+        S: Service<RoleServer> + Send + Sync + 'static,
+    {
+        serve_stdio(server).await
+    }
+}
+
 /// Serves an MCP server over stdio and waits until the service exits.
 ///
 /// # Errors
@@ -79,7 +119,10 @@ impl From<tokio::task::JoinError> for StdioServeError {
 /// ```rust,no_run
 /// # async fn example<S>(server: S) -> Result<(), mcp_toolkit_server::stdio::StdioServeError>
 /// # where
-/// #     S: rmcp::Service<rmcp::RoleServer> + Send + Sync + 'static,
+/// #     S: mcp_toolkit_server::rmcp::Service<mcp_toolkit_server::rmcp::RoleServer>
+/// #         + Send
+/// #         + Sync
+/// #         + 'static,
 /// # {
 /// let _quit = mcp_toolkit_server::stdio::serve_stdio(server).await?;
 /// # Ok(())

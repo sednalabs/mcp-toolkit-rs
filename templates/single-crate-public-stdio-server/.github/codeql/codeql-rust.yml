@@ -1,0 +1,10 @@
+name: single-crate-public-stdio-server-codeql-rust
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - src
+  - tests
+
+threat-models: [local]

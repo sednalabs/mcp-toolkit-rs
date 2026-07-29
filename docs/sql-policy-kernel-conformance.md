@@ -65,17 +65,16 @@ uploads `policy-kernel-consumption-<run_id>` with:
 
 - `manifest.json`
 - `sql_policy_core_vs_kernel_report.json`
-- optional downloaded policy-kernel validation artifacts
+- optional downloaded policy-kernel validation artifacts with SHA-256 values
 
 Public policy-kernel repositories can be consumed by passing
 `policy_kernel_repository` to `workflow_dispatch` without an extra secret.
-Private policy-kernel repositories should be supplied through repository
-settings or secrets rather than hard-coded in this public repository. If the
-configured policy-kernel target is private or inaccessible, the workflow
-requires a least-privilege `POLICY_KERNEL_READ_TOKEN` before it can perform
-cross-repository checkout or artifact download. Pull request runs without a
-configured target, or without the required read token for a private target, emit
-a skipped manifest; manual dispatch fails early with a clear setup error.
+Private policy-kernel repositories are intentionally out of scope for this
+public workflow. If the configured policy-kernel target is private or
+inaccessible, the workflow emits a skipped manifest on pull requests and fails
+manual dispatch with a clear setup error. Run private target validation from a
+separate trusted environment rather than adding secret-backed private checkout
+logic to this public repository.
 
 Use `workflow_dispatch` to test against a non-default policy-kernel ref:
 
@@ -88,3 +87,8 @@ gh workflow run policy-kernel-consumption.yml \
 
 To include a policy-kernel validation artifact as provenance, also pass
 `policy_kernel_run_id` and, optionally, `policy_kernel_artifact_name`.
+
+For server adoption claims, combine this hosted manifest with
+`docs/policy-kernel-provenance-acceptance.md`. The manifest proves toolkit
+consumption and artifact identity; the server still owns request mapping,
+runtime placement, and deny-before-mutation evidence.

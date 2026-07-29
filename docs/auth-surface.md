@@ -90,6 +90,15 @@ Servers can configure each issuer entry from either:
 This keeps inline metadata publication generic across public MCP servers while avoiding
 provider-specific assumptions in consumer services.
 
+OIDC issuer identity and metadata transport are separate concerns. The normal
+`discover_oidc_metadata` helper derives metadata URLs from the canonical issuer.
+Deployments that must avoid a public ingress dependency during startup can use
+`discover_oidc_metadata_from_url` with a private HTTPS or loopback HTTP metadata URL.
+The private URL is fetch-only: the returned document must still name the canonical
+issuer, and published authorization endpoints remain the public values from that
+validated document. Do not publish the private transport URL in PRM or authorization-
+server metadata.
+
 ### PRM Endpoints
 PRM metadata is served per RFC 9728 using a canonical resource URL plus `authorization_servers`.
 Root aliases are only served if there is a single resource entry (or the resource itself is `/`).
@@ -228,9 +237,21 @@ The contract test is required for every new HTTP MCP server.
 2. Create one `IssuerEntry` per protected resource path (single issuer by default),
    preferably via the generic authorization-server metadata source model.
 3. Wrap the HTTP service/router with `AuthSurfaceLayer`.
-4. Add `PolicyAuthorityLayer` with `AuthControlPlaneHttpMapper` for reusable
-   post-auth route, tool, resource, session, project, and scope decisions.
+4. Add `PolicyAuthorityLayer` with `AuthControlPlaneHttpMapper` and the same
+   shared `Authenticator` used by `IssuerEntry` inside the auth surface for
+   reusable post-auth route, tool, resource, session, project, and scope
+   decisions. The policy gate rejects reversed or bypassed layer topology at
+   runtime.
 5. Configure any `public_paths` or `public_prefixes` for unauthenticated endpoints.
 6. Keep the default unmatched-route behavior unless unrelated routes should
    intentionally pass through the auth surface.
 7. Add the shared auth-surface contract test to CI.
+
+For every request passed to an inner service, the auth surface removes
+pre-existing auth extensions and issues a fresh lifecycle witness bound to the
+method, URI, and authorization header. The policy gate consumes that witness
+once. Captured context from an earlier request, context rebound to another
+route or bearer, and policy middleware placed outside the auth surface all fail
+closed. Public and pass-through routes receive the same lifecycle witness
+without an authenticated principal so explicitly public read-only policy can
+still be evaluated safely.

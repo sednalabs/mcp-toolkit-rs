@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "google-search-console-mcp",
+    "repository": "https://github.com/sednalabs/google-search-console-mcp",
+    "language": "rust",
+    "role": "reference_server",
+    "notes": "Lean Google REST adapter with read-only defaults, operator tools, and scratchpad ingestion."
+  },
+  "patterns": [
+    "google-provider-read-only",
+    "analytics-scratchpad",
+    "operator-mutation"
+  ],
+  "toolkit_crates": [
+    "mcp-toolkit-auth",
+    "mcp-toolkit-core",
+    "mcp-toolkit-observability",
+    "mcp-toolkit-scratchpad"
+  ],
+  "transports": ["stdio"],
+  "auth_modes": ["google-adc", "google-oauth-client", "service-account"],
+  "tool_surface": {
+    "discovery": [
+      "tool-inventory",
+      "find-tools",
+      "profile-filtered-discovery",
+      "schema_snapshot"
+    ],
+    "mutation_policy": "profile-gated",
+    "schema_snapshot": "present",
+    "notes": "Read-only default profile with separate operator sitemap/site tools."
+  },
+  "scratchpad": {
+    "supported": true,
+    "engine": "duckdb",
+    "profile": "read_only",
+    "notes": "Search analytics rows can be moved into a bounded local session from the default read-only profile."
+  },
+  "profiles": [
+    {
+      "name": "read_only",
+      "default": true,
+      "tool_groups": [
+        "auth",
+        "site-read",
+        "search-analytics",
+        "scratchpad",
+        "discovery"
+      ]
+    },
+    {
+      "name": "operator",
+      "default": false,
+      "tool_groups": ["sitemaps", "site-management"]
+    }
+  ],
+  "conformance": {
+    "schema_snapshot": "present",
+    "transport_contract": "present",
+    "auth_surface_contract": "present",
+    "domain_contracts": "present",
+    "hosted_validation": "present",
+    "release_evidence": "planned",
+    "notes": "Use as evidence for shared Google MCP auth helper/status diagnostics and profile-gated operator tools."
+  },
+  "references": [
+    {
+      "label": "README",
+      "kind": "doc",
+      "path": "README.md"
+    },
+    {
+      "label": "Tool guide",
+      "kind": "doc",
+      "path": "docs/TOOL_GUIDE.md"
+    },
+    {
+      "label": "Tool surface",
+      "kind": "source",
+      "path": "src/tool_surface.rs"
+    }
+  ]
+}

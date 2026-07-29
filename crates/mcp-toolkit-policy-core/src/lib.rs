@@ -19,6 +19,8 @@ pub mod decision;
 pub mod embed;
 pub mod http_headers;
 pub mod http_path;
+pub mod no_mutation_proof;
+pub mod sensitive_read;
 pub mod sql_read_only;
 
 pub use boundary::{
@@ -43,6 +45,8 @@ pub use http_path::{
     contains_encoded_delimiter, contains_matrix_params, contains_path_confusion,
     evaluate_http_path, has_path_segment, validate_http_path,
 };
+pub use no_mutation_proof::no_mutation_proof_policy_decision;
+pub use sensitive_read::sensitive_read_policy_decision;
 pub use sql_read_only::{
     classify_restricted_sql, sql_restricted_policy_decision, validate_restricted_sql,
     RestrictedSqlError, RestrictedSqlErrorCode, SqlRestrictedPolicyInput,

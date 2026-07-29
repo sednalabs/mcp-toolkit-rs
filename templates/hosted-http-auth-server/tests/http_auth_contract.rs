@@ -1,5 +1,5 @@
 use axum::body::{to_bytes, Body};
-use hosted_http_auth_server::{build_router, HostedHttpConfig};
+use hosted_http_auth_server::{build_router, HostedHttpConfig, HostedHttpConfigError};
 use http::{Request, StatusCode};
 use mcp_toolkit_testing::auth_surface_contract::{
     assert_forbidden_without_bearer_challenge, AuthSurfaceContract,
@@ -8,8 +8,103 @@ use mcp_toolkit_testing::auth_surface_contract::{
 use serde_json::Value;
 use tower::ServiceExt;
 
+fn http_url(host: &str) -> String {
+    format!("{}://{host}", "http")
+}
+
+#[test]
+fn local_dev_config_remains_deployable_on_loopback() {
+    HostedHttpConfig::local_dev()
+        .validate_deployable()
+        .expect("loopback dev config");
+}
+
+#[test]
+fn non_loopback_config_rejects_development_delegation_secret() {
+    let mut config = HostedHttpConfig::local_dev();
+    config.bind_addr = "0.0.0.0:9411".parse().expect("non-loopback bind");
+    config.allow_non_loopback = true;
+    config.public_base_url = "https://mcp.example.com".to_string();
+    config.issuer = "https://issuer.example.com".to_string();
+    config.delegation_secret = " development-only-secret ".to_string();
+
+    let error = config
+        .validate_deployable()
+        .expect_err("development secret rejected");
+
+    assert!(matches!(
+        error,
+        HostedHttpConfigError::DevelopmentDelegationSecret
+    ));
+}
+
+#[test]
+fn non_loopback_config_rejects_development_issuer_with_whitespace() {
+    let mut config = HostedHttpConfig::local_dev();
+    config.bind_addr = "0.0.0.0:9411".parse().expect("non-loopback bind");
+    config.allow_non_loopback = true;
+    config.public_base_url = "https://mcp.example.com".to_string();
+    config.delegation_secret = "real-secret".to_string();
+    config.issuer = format!(" {}://issuer.example ", "http");
+
+    let error = config
+        .validate_deployable()
+        .expect_err("development issuer rejected");
+
+    assert!(matches!(error, HostedHttpConfigError::DevelopmentIssuer));
+}
+
+#[test]
+fn non_loopback_config_accepts_https_urls_with_surrounding_whitespace() {
+    let mut config = HostedHttpConfig::local_dev();
+    config.bind_addr = "0.0.0.0:9411".parse().expect("non-loopback bind");
+    config.allow_non_loopback = true;
+    config.public_base_url = " https://mcp.example.com ".to_string();
+    config.issuer = " https://issuer.example.com ".to_string();
+    config.delegation_secret = "real-secret".to_string();
+
+    config
+        .validate_deployable()
+        .expect("trimmed https production-like config");
+}
+
+#[test]
+fn non_loopback_config_rejects_insecure_public_base_url() {
+    let mut config = HostedHttpConfig::local_dev();
+    config.bind_addr = "0.0.0.0:9411".parse().expect("non-loopback bind");
+    config.allow_non_loopback = true;
+    config.public_base_url = http_url("mcp.example.com");
+    config.issuer = "https://issuer.example.com".to_string();
+    config.delegation_secret = "real-secret".to_string();
+
+    let error = config
+        .validate_deployable()
+        .expect_err("insecure public base URL rejected");
+
+    assert!(matches!(
+        error,
+        HostedHttpConfigError::InsecurePublicBaseUrl
+    ));
+}
+
+#[test]
+fn non_loopback_config_rejects_insecure_issuer() {
+    let mut config = HostedHttpConfig::local_dev();
+    config.bind_addr = "0.0.0.0:9411".parse().expect("non-loopback bind");
+    config.allow_non_loopback = true;
+    config.public_base_url = "https://mcp.example.com".to_string();
+    config.issuer = http_url("issuer.example.com");
+    config.delegation_secret = "real-secret".to_string();
+
+    let error = config
+        .validate_deployable()
+        .expect_err("insecure issuer rejected");
+
+    assert!(matches!(error, HostedHttpConfigError::InsecureIssuer));
+}
+
 #[tokio::test]
-async fn health_is_public_and_host_guarded() {
+async fn health_is_public_and_host_origin_guarded() {
     let router = build_router(HostedHttpConfig::local_dev()).expect("router");
 
     let health = router
@@ -26,7 +121,23 @@ async fn health_is_public_and_host_guarded() {
         .expect("health response");
     assert_eq!(health.status(), StatusCode::OK);
 
+    let allowed_origin = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "127.0.0.1")
+                .header("origin", "http://127.0.0.1:9411")
+                .body(Body::empty())
+                .expect("allowed-origin health request"),
+        )
+        .await
+        .expect("allowed-origin health response");
+    assert_eq!(allowed_origin.status(), StatusCode::OK);
+
     let bad_host = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -38,6 +149,20 @@ async fn health_is_public_and_host_guarded() {
         .await
         .expect("bad-host health response");
     assert_eq!(bad_host.status(), StatusCode::FORBIDDEN);
+
+    let bad_origin = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("host", "127.0.0.1")
+                .header("origin", "https://example.com")
+                .body(Body::empty())
+                .expect("bad-origin health request"),
+        )
+        .await
+        .expect("bad-origin health response");
+    assert_eq!(bad_origin.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

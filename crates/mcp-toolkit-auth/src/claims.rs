@@ -33,6 +33,15 @@ use tracing::debug;
 
 use crate::{AuthConfig, AuthError};
 
+/// Reports whether validated claims carry a confirmation claim.
+///
+/// A Bearer-only caller cannot prove possession of a sender-constraining key.
+/// Treat every present `cnf` value as confirmation-bearing so malformed values
+/// are rejected fail-closed by the caller.
+pub(crate) fn has_confirmation_claim(claims: &Value) -> bool {
+    claims.get("cnf").is_some()
+}
+
 /// Validates that the token issuer and audience match the security configuration.
 pub(crate) fn validate_issuer_audience(
     claims: &Value,
@@ -211,6 +220,11 @@ pub(crate) fn merge_claims(primary: &Value, secondary: &Value) -> Value {
             let mut merged = primary_map.clone();
             for (key, value) in secondary_map {
                 merged.insert(key.clone(), value.clone());
+            }
+            // Optional introspection may enrich a verified JWT, but must not erase its
+            // confirmation claim before the caller applies proof-of-possession policy.
+            if let Some(confirmation) = primary_map.get("cnf") {
+                merged.insert("cnf".to_string(), confirmation.clone());
             }
             Value::Object(merged)
         }

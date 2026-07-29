@@ -1,0 +1,29 @@
+{
+  "name": "public stdio starter smoke",
+  "description": "Initializes the generated public stdio MCP server and calls a deterministic read-only starter tool.",
+  "transport": "stdio",
+  "command": "cargo",
+  "args": ["run", "--quiet", "--manifest-path", "Cargo.toml"],
+  "env": {
+    "EXAMPLE_MCP_TOOL_PROFILE": "read_only",
+    "RUST_LOG": "off"
+  },
+  "timeout_ms": 20000,
+  "steps": [
+    {
+      "id": "brief",
+      "tool": "brief_target",
+      "input": {
+        "target": "probe"
+      },
+      "expect": {
+        "content": [
+          {
+            "type": "text",
+            "text": "single-crate-public-stdio-server brief for probe: no backend configured in the starter template"
+          }
+        ]
+      }
+    }
+  ]
+}

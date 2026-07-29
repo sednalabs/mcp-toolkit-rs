@@ -16,19 +16,23 @@ all-features = true
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1.91"
 axum = "0.8.8"
 base64 = "0.22.1"
+dpop-verifier = "4.4.0"
 http = "1.3.1"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 mcp-toolkit-http = { version = "0.1.0", path = "../mcp-toolkit-http" }
 mcp-toolkit-observability = { version = "0.1.0", path = "../mcp-toolkit-observability" }
+oauth2 = { version = "5.0.0", default-features = false }
+oauth2-reqwest = "0.1.0-alpha.3"
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls", "form", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
 thiserror = "2.0.18"
 tracing = "0.1.44"
-tokio = { version = "1.49.0", features = ["sync", "time"] }
+tokio = { version = "1.49.0", features = ["io-util", "net", "sync", "time"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 rand = "0.9.3"
 futures-util = "0.3.31"
@@ -36,4 +40,8 @@ tower = "0.5.2"
 
 [dev-dependencies]
 mcp-toolkit-testing = { version = "0.1.0", path = "../mcp-toolkit-testing" }
+p256 = { version = "0.13.2", features = ["ecdsa"] }
 tokio = { version = "1.49.0", features = ["macros", "rt"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"

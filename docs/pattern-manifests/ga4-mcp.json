@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "ga4-mcp",
+    "repository": "https://github.com/sednalabs/ga4-mcp",
+    "language": "rust",
+    "role": "reference_server",
+    "notes": "Google analytics auth, profile, and scratchpad reference."
+  },
+  "patterns": [
+    "google-provider-read-only",
+    "analytics-scratchpad",
+    "hosted-http-auth"
+  ],
+  "toolkit_crates": [
+    "mcp-toolkit-core",
+    "mcp-toolkit-http",
+    "mcp-toolkit-auth",
+    "mcp-toolkit-testing"
+  ],
+  "transports": ["stdio", "hosted-http"],
+  "auth_modes": [
+    "google-adc",
+    "google-oauth-client",
+    "service-account",
+    "mcp-bearer",
+    "oauth-metadata"
+  ],
+  "tool_surface": {
+    "discovery": [
+      "tool-inventory",
+      "find-tools",
+      "profile-filtered-discovery",
+      "schema_snapshot"
+    ],
+    "mutation_policy": "read-only",
+    "schema_snapshot": "present",
+    "notes": "Read-only analytics tools with scratchpad capability profile."
+  },
+  "scratchpad": {
+    "supported": true,
+    "engine": "duckdb",
+    "profile": "scratchpad",
+    "notes": "Large report outputs can be loaded into bounded DuckDB sessions."
+  },
+  "profiles": [
+    {
+      "name": "read_only",
+      "default": true,
+      "tool_groups": ["auth", "analytics-read", "discovery"]
+    },
+    {
+      "name": "scratchpad",
+      "default": false,
+      "tool_groups": ["scratchpad", "analytics-read"]
+    }
+  ],
+  "conformance": {
+    "schema_snapshot": "present",
+    "transport_contract": "present",
+    "auth_surface_contract": "present",
+    "domain_contracts": "present",
+    "hosted_validation": "present",
+    "release_evidence": "planned",
+    "notes": "Use as scratchpad and auth UX evidence, not as a generic analytics contract."
+  },
+  "references": [
+    {
+      "label": "Getting started",
+      "kind": "doc",
+      "path": "docs/GETTING_STARTED.md"
+    },
+    {
+      "label": "Scratchpad guide",
+      "kind": "doc",
+      "path": "docs/scratchpad-operator-guide.md"
+    },
+    {
+      "label": "Scratchpad integration tests",
+      "kind": "test",
+      "path": "tests/scratchpad_integration_load.rs"
+    }
+  ]
+}
