@@ -20,10 +20,13 @@
 //! * Supplying the exact tool set they intend to expose.
 //! * Writing or comparing the rendered JSON when persistence is needed.
 
-use std::fmt::{Display, Formatter};
+use std::{
+    borrow::Cow,
+    fmt::{self, Display, Formatter, Write},
+};
 
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 
 /// Schema identifier for deterministic MCP tool schema snapshots.
 pub const TOOL_SCHEMA_SNAPSHOT_SCHEMA: &str = "mcp_tool_schema_snapshot";
@@ -356,7 +359,7 @@ fn preflight_json_value(
         Value::Null => charge_input_bytes(4, policy, budget),
         Value::Bool(true) => charge_input_bytes(4, policy, budget),
         Value::Bool(false) => charge_input_bytes(5, policy, budget),
-        Value::Number(number) => charge_input_bytes(number.to_string().len(), policy, budget),
+        Value::Number(number) => charge_json_number_bytes(number, policy, budget),
         Value::String(string) => charge_json_string_bytes(string, policy, budget),
         Value::Array(values) => {
             charge_input_bytes(2, policy, budget)?;
@@ -377,6 +380,28 @@ fn preflight_json_value(
             Ok(())
         }
     }
+}
+
+#[derive(Default)]
+struct JsonNumberByteCounter {
+    bytes: usize,
+}
+
+impl Write for JsonNumberByteCounter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.bytes = self.bytes.checked_add(value.len()).ok_or(fmt::Error)?;
+        Ok(())
+    }
+}
+
+fn charge_json_number_bytes(
+    number: &Number,
+    policy: &SchemaDialectPolicy,
+    budget: &mut SchemaInputBudget,
+) -> Result<(), SchemaDialectError> {
+    let mut counter = JsonNumberByteCounter::default();
+    write!(&mut counter, "{number}").map_err(|_| input_budget_exceeded(policy))?;
+    charge_input_bytes(counter.bytes, policy, budget)
 }
 
 fn charge_json_string_bytes(
@@ -1058,7 +1083,10 @@ fn has_valid_json_pointer_escapes(pointer: &str) -> bool {
     true
 }
 
-fn decode_uri_fragment(input: &str) -> Option<String> {
+fn decode_uri_fragment(input: &str) -> Option<Cow<'_, str>> {
+    if !input.contains('%') {
+        return Some(Cow::Borrowed(input));
+    }
     let bytes = input.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -1073,7 +1101,7 @@ fn decode_uri_fragment(input: &str) -> Option<String> {
         decoded.push((hex_value(high)? << 4) | hex_value(low)?);
         index += 3;
     }
-    String::from_utf8(decoded).ok()
+    String::from_utf8(decoded).ok().map(Cow::Owned)
 }
 
 fn hex_value(value: u8) -> Option<u8> {
@@ -1164,11 +1192,12 @@ fn canonicalize_json(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        charge_json_string_bytes, tool_names, tool_schema_snapshot_value, validate_schema_dialect,
-        SchemaDialectError, SchemaDialectPolicy, SchemaInputBudget,
-        SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
+        charge_json_number_bytes, charge_json_string_bytes, decode_uri_fragment, tool_names,
+        tool_schema_snapshot_value, validate_schema_dialect, SchemaDialectError,
+        SchemaDialectPolicy, SchemaInputBudget, SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
     };
-    use serde_json::{json, Map, Value};
+    use serde_json::{json, Map, Number, Value};
+    use std::borrow::Cow;
 
     #[test]
     fn dialect_validation_accepts_an_object_root_resolved_from_local_defs() {
@@ -1345,6 +1374,29 @@ mod tests {
             })
         );
         assert_eq!(crossing_budget.bytes, usize::MAX - 1);
+    }
+
+    #[test]
+    fn dialect_number_byte_charge_uses_the_exact_serialized_width() {
+        let number = Number::from(-12_345);
+        let policy = SchemaDialectPolicy::new().with_max_input_bytes(6);
+        let mut exact_budget = SchemaInputBudget::default();
+
+        assert_eq!(
+            charge_json_number_bytes(&number, &policy, &mut exact_budget),
+            Ok(())
+        );
+        assert_eq!(exact_budget.bytes, 6);
+
+        let mut crossing_budget = SchemaInputBudget::default();
+        assert_eq!(
+            charge_json_number_bytes(
+                &number,
+                &SchemaDialectPolicy::new().with_max_input_bytes(5),
+                &mut crossing_budget,
+            ),
+            Err(SchemaDialectError::InputBudgetExceeded { max_input_bytes: 5 })
+        );
     }
 
     #[test]
@@ -1564,6 +1616,18 @@ mod tests {
                 reference: "#/$defs/bad%2".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn decode_uri_fragment_borrows_unescaped_paths_and_owns_decoded_paths() {
+        assert!(matches!(
+            decode_uri_fragment("plain"),
+            Some(Cow::Borrowed("plain"))
+        ));
+        assert!(matches!(
+            decode_uri_fragment("with%20space"),
+            Some(Cow::Owned(ref decoded)) if decoded == "with space"
+        ));
     }
 
     #[test]
