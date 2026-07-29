@@ -853,13 +853,24 @@ fn validate_token_exchange(input: &AuthControlPlaneInput) -> Option<Decision> {
     let exchange = input
         .token
         .as_ref()
-        .and_then(|token| token.exchange.as_ref())?;
+        .and_then(|token| token.exchange.as_ref());
     if request_action(input) != Some("token.exchange") {
-        return Some(Decision::deny(
-            DecisionCode::CapabilityMismatch,
-            Some("exchange_not_allowed"),
-        ));
+        if exchange.is_some() {
+            return Some(Decision::deny(
+                DecisionCode::CapabilityMismatch,
+                Some("exchange_not_allowed"),
+            ));
+        }
+        return None;
     }
+
+    let Some(exchange) = exchange else {
+        return Some(Decision::deny(
+            DecisionCode::CapabilityMissing,
+            Some("audit_binding_missing"),
+        ));
+    };
+
     if exchange
         .audit_subject
         .as_deref()
@@ -1389,6 +1400,26 @@ mod tests {
                     "requester_client": "ops-mcp",
                     "requested_audience": "mcp://ops-das"
                 }
+            }),
+        ));
+
+        let decision = authority.evaluate(&request);
+
+        assert!(!decision.allow);
+        assert_eq!(decision.code.as_deref(), Some("CAPABILITY_MISSING"));
+        assert_eq!(decision.reason.as_deref(), Some("audit_binding_missing"));
+    }
+
+    #[test]
+    fn authority_denies_exchange_without_exchange_metadata() {
+        let authority = AuthControlPlanePolicyAuthority::default();
+        let request = AuthControlPlaneHttpMapper::default().map_request(&http_context(
+            "POST",
+            "/mcp/token/exchange",
+            json!({
+                "iss": "https://issuer.example",
+                "aud": "mcp://ops",
+                "sub": "subject-1"
             }),
         ));
 
