@@ -1179,11 +1179,11 @@ where
                 "missing_session_id",
                 StatusCode::BAD_REQUEST,
             );
-            return session_error(
+            session_error(
                 StatusCode::BAD_REQUEST,
                 "Missing session ID.",
                 "Initialize with POST /mcp to obtain a session id.",
-            );
+            )
         }
         McpSessionRoute::InvalidOrExpired => {
             log_route_rejection(
@@ -1192,14 +1192,14 @@ where
                 "invalid_or_expired_session",
                 StatusCode::NOT_FOUND,
             );
-            return session_error(
+            session_error(
                 StatusCode::NOT_FOUND,
                 "Invalid or expired session ID.",
                 "Re-initialize with POST /mcp to obtain a new session id.",
-            );
+            )
         }
         McpSessionRoute::Live(session_id) => {
-            return forward_live_service(state.stateful_service, req, session_id).await;
+            forward_live_service(state.stateful_service, req, session_id).await
         }
     }
 }
