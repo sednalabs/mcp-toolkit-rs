@@ -55,7 +55,8 @@ pub enum McpSessionRoute {
     /// The request omitted the session header and may use an explicitly enabled
     /// stateless route.
     Headerless,
-    /// The request named a session that is currently live.
+    /// The request named a session that is currently live using its exact,
+    /// canonical identifier.
     Live(String),
     /// The request supplied a malformed, unknown, expired, or unverifiable
     /// session identifier.
@@ -84,8 +85,10 @@ impl McpSessionRoute {
 ///
 /// # Security
 /// Only an entirely absent `Mcp-Session-Id` is classified as headerless.
-/// Malformed, blank, duplicate, unknown, expired, and lookup-failed values must
-/// never acquire stateless fallback authority.
+/// Malformed, blank, whitespace-padded, duplicate, unknown, expired, and
+/// lookup-failed values must never acquire stateless fallback authority.
+/// Accepted identifiers are not normalized because the original header is
+/// forwarded to the underlying Streamable HTTP service.
 pub async fn resolve_mcp_session_route<M>(
     headers: &HeaderMap,
     session_manager: &M,
@@ -103,15 +106,12 @@ where
     let Ok(value) = value.to_str() else {
         return McpSessionRoute::InvalidOrExpired;
     };
-    let session_id = value.trim();
-    if session_id.is_empty() {
+    if value.is_empty() || value.trim() != value {
         return McpSessionRoute::InvalidOrExpired;
     }
-    let session_id = session_id.to_string();
-    match session_manager
-        .has_session(&session_id.clone().into())
-        .await
-    {
+    let session_id = value.to_string();
+    let lookup_session_id = session_id.as_str().into();
+    match session_manager.has_session(&lookup_session_id).await {
         Ok(true) => McpSessionRoute::Live(session_id),
         Ok(false) | Err(_) => McpSessionRoute::InvalidOrExpired,
     }
@@ -430,8 +430,10 @@ mod tests {
         handler::server::{router::tool::ToolRouter, wrapper::Parameters},
         model::{ServerCapabilities, ServerInfo},
         schemars, tool, tool_router,
-        transport::common::http_header::HEADER_SESSION_ID,
-        transport::streamable_http_server::SessionManager,
+        transport::{
+            common::http_header::HEADER_SESSION_ID,
+            streamable_http_server::{session::never::NeverSessionManager, SessionManager},
+        },
         ServerHandler,
     };
 
@@ -562,12 +564,16 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1100)).await;
         runtime.session_manager.sweep_expired_sessions().await;
 
-        let exists = runtime
-            .session_manager
-            .has_session(&session_id.into())
-            .await
-            .expect("has_session");
-        assert!(!exists, "expected disconnected session to expire");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_SESSION_ID,
+            HeaderValue::from_str(&session_id).expect("session header"),
+        );
+        assert_eq!(
+            resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
+            McpSessionRoute::InvalidOrExpired,
+            "expected disconnected session to expire"
+        );
 
         let stats = runtime.session_manager.stats().await;
         assert_eq!(stats.active_sessions, 0);
@@ -626,6 +632,13 @@ mod tests {
         );
 
         let mut headers = HeaderMap::new();
+        headers.insert(HEADER_SESSION_ID, HeaderValue::from_static(" \t "));
+        assert_eq!(
+            resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
+            McpSessionRoute::InvalidOrExpired
+        );
+
+        let mut headers = HeaderMap::new();
         headers.append(HEADER_SESSION_ID, HeaderValue::from_static("first"));
         headers.append(HEADER_SESSION_ID, HeaderValue::from_static("second"));
         assert_eq!(
@@ -637,6 +650,16 @@ mod tests {
         headers.insert(
             HEADER_SESSION_ID,
             HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
+        );
+        assert_eq!(
+            resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
+            McpSessionRoute::InvalidOrExpired
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_SESSION_ID,
+            HeaderValue::from_static("unknown-session"),
         );
         assert_eq!(
             resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
@@ -665,7 +688,31 @@ mod tests {
         );
         assert_eq!(
             resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
-            McpSessionRoute::Live(session_id)
+            McpSessionRoute::Live(session_id.clone())
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_SESSION_ID,
+            HeaderValue::from_str(&format!(" {session_id} ")).expect("padded session header"),
+        );
+        assert_eq!(
+            resolve_mcp_session_route(&headers, runtime.session_manager.as_ref()).await,
+            McpSessionRoute::InvalidOrExpired
+        );
+    }
+
+    #[tokio::test]
+    async fn session_route_fails_closed_when_live_session_lookup_fails() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_SESSION_ID,
+            HeaderValue::from_static("candidate-session"),
+        );
+
+        assert_eq!(
+            resolve_mcp_session_route(&headers, &NeverSessionManager::default()).await,
+            McpSessionRoute::InvalidOrExpired
         );
     }
 
@@ -721,6 +768,76 @@ mod tests {
             .to_bytes();
         let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
         assert!(body_text.contains("Missing session ID."));
+    }
+
+    #[tokio::test]
+    async fn handle_stateful_mcp_request_rejects_every_present_unusable_session() {
+        let runtime =
+            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let initialize = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1/mcp")
+            .header(HOST, "127.0.0.1")
+            .header(ACCEPT, ACCEPT_STREAMABLE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(init_body()))
+            .expect("initialize request");
+        let initialize_response = runtime.service.handle(initialize).await;
+        let live_session_id = initialize_response
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|value| value.to_str().ok())
+            .expect("live session id")
+            .to_string();
+
+        let unusable_session_headers = vec![
+            vec![HeaderValue::from_static("unknown-session")],
+            vec![HeaderValue::from_static("")],
+            vec![HeaderValue::from_static(" \t ")],
+            vec![HeaderValue::from_bytes(&[0xff]).expect("opaque header value")],
+            vec![
+                HeaderValue::from_static("first-session"),
+                HeaderValue::from_static("second-session"),
+            ],
+            vec![HeaderValue::from_str(&format!(" {live_session_id} "))
+                .expect("padded live session header")],
+        ];
+
+        for values in unusable_session_headers {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("http://127.0.0.1/mcp")
+                .header(HOST, "127.0.0.1")
+                .header(ACCEPT, ACCEPT_STREAMABLE)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(init_body()))
+                .expect("session-bearing initialize request");
+            for value in values {
+                request.headers_mut().append(HEADER_SESSION_ID, value);
+            }
+
+            let response = handle_stateful_mcp_request(
+                runtime.service.clone(),
+                runtime.session_manager.clone(),
+                request,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("session rejection body")
+                .to_bytes();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).expect("session rejection JSON"),
+                serde_json::json!({
+                    "status": "error",
+                    "error": "Invalid or expired session ID.",
+                    "hint": "Re-initialize with POST /mcp to obtain a new session id.",
+                })
+            );
+        }
     }
 
     #[tokio::test]

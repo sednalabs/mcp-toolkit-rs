@@ -198,14 +198,57 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
         .build(|| Ok(TestMcp::new()));
     let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
 
-    let unusable_session_headers = [
+    let initialize_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .header("accept", ACCEPT_STREAMABLE)
+                .header("content-type", "application/json")
+                .body(Body::from(init_body()))
+                .expect("initialize request"),
+        )
+        .await
+        .expect("initialize response");
+    let live_session_id = initialize_response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("live session id")
+        .to_string();
+
+    let live_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .header("accept", ACCEPT_STREAMABLE)
+                .header("content-type", "application/json")
+                .header("mcp-session-id", &live_session_id)
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+                ))
+                .expect("live session request"),
+        )
+        .await
+        .expect("live session response");
+    assert_eq!(live_response.status(), 200);
+
+    let unusable_session_headers = vec![
         vec![HeaderValue::from_static("unknown-session")],
         vec![HeaderValue::from_static("")],
+        vec![HeaderValue::from_static(" \t ")],
         vec![HeaderValue::from_bytes(&[0xff]).expect("opaque header value")],
         vec![
             HeaderValue::from_static("first-session"),
             HeaderValue::from_static("second-session"),
         ],
+        vec![HeaderValue::from_str(&format!(" {live_session_id} "))
+            .expect("padded live session header")],
     ];
     for values in unusable_session_headers {
         let mut request = Request::builder()
@@ -215,7 +258,7 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
             .header("accept", ACCEPT_STREAMABLE)
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"#,
             ))
             .expect("session-bearing request");
         for value in values {
@@ -228,6 +271,20 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
             .await
             .expect("session rejection response");
         assert_eq!(response.status(), 404);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("session rejection body")
+            .to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("session rejection JSON"),
+            serde_json::json!({
+                "status": "error",
+                "error": "Invalid or expired session ID.",
+                "hint": "Re-initialize with POST /mcp to obtain a new session id.",
+            })
+        );
     }
 
     let headerless_response = router
@@ -239,7 +296,7 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
                 .header("accept", ACCEPT_STREAMABLE)
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"#,
+                    r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}"#,
                 ))
                 .expect("headerless request"),
         )
