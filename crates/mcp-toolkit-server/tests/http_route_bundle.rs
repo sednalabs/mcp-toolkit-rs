@@ -1,6 +1,9 @@
 #![cfg(feature = "http")]
 
-use axum::{body::Body, http::Request};
+use axum::{
+    body::Body,
+    http::{HeaderValue, Request},
+};
 use http_body_util::BodyExt;
 use mcp_toolkit_server::{
     http::{LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder, LocalMcpHttpServerBuilder},
@@ -188,14 +191,46 @@ async fn route_bundle_rejects_oversized_sessionless_post() {
 }
 
 #[tokio::test]
-async fn route_bundle_rejects_unknown_session_before_stateless_fallback() {
+async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallback() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1"])
         .stateless_fallback(true)
         .build(|| Ok(TestMcp::new()));
     let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
 
-    let response = router
+    let unusable_session_headers = [
+        vec![HeaderValue::from_static("unknown-session")],
+        vec![HeaderValue::from_static("")],
+        vec![HeaderValue::from_bytes(&[0xff]).expect("opaque header value")],
+        vec![
+            HeaderValue::from_static("first-session"),
+            HeaderValue::from_static("second-session"),
+        ],
+    ];
+    for values in unusable_session_headers {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("host", "127.0.0.1")
+            .header("accept", ACCEPT_STREAMABLE)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+            ))
+            .expect("session-bearing request");
+        for value in values {
+            request.headers_mut().append("mcp-session-id", value);
+        }
+
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("session rejection response");
+        assert_eq!(response.status(), 404);
+    }
+
+    let headerless_response = router
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -203,16 +238,14 @@ async fn route_bundle_rejects_unknown_session_before_stateless_fallback() {
                 .header("host", "127.0.0.1")
                 .header("accept", ACCEPT_STREAMABLE)
                 .header("content-type", "application/json")
-                .header("mcp-session-id", "unknown-session")
                 .body(Body::from(
-                    r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+                    r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"#,
                 ))
-                .expect("unknown session request"),
+                .expect("headerless request"),
         )
         .await
-        .expect("unknown session response");
-
-    assert_eq!(response.status(), 404);
+        .expect("headerless stateless response");
+    assert_eq!(headerless_response.status(), 200);
 }
 
 #[tokio::test]
