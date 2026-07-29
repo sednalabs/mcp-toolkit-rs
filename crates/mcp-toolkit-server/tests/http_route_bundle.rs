@@ -14,6 +14,7 @@ use mcp_toolkit_server::{
         schemars, tool, tool_router, ServerHandler,
     },
 };
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tower::ServiceExt;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -25,12 +26,23 @@ struct EchoRequest {
 #[allow(dead_code)]
 struct TestMcp {
     tool_router: ToolRouter<Self>,
+    routed_session_observer: Option<UnboundedSender<Option<String>>>,
 }
 
 impl TestMcp {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
+            routed_session_observer: None,
+        }
+    }
+
+    fn with_routed_session_observer(
+        routed_session_observer: UnboundedSender<Option<String>>,
+    ) -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+            routed_session_observer: Some(routed_session_observer),
         }
     }
 }
@@ -44,12 +56,15 @@ impl TestMcp {
 
     #[tool(description = "Report the routed live-session marker")]
     fn routed_session(&self, Extension(parts): Extension<Parts>) -> String {
-        parts
+        let routed_session = parts
             .extensions
             .get::<LiveMcpSessionId>()
             .map(LiveMcpSessionId::as_str)
-            .unwrap_or("absent")
-            .to_string()
+            .map(str::to_string);
+        if let Some(observer) = &self.routed_session_observer {
+            let _ = observer.send(routed_session.clone());
+        }
+        routed_session.unwrap_or_else(|| "absent".to_string())
     }
 }
 
@@ -216,10 +231,15 @@ async fn route_bundle_rejects_oversized_sessionless_post() {
 
 #[tokio::test]
 async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallback() {
+    let (routed_session_sender, mut routed_session_receiver) = mpsc::unbounded_channel();
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1"])
         .stateless_fallback(true)
-        .build(|| Ok(TestMcp::new()));
+        .build(move || {
+            Ok(TestMcp::with_routed_session_observer(
+                routed_session_sender.clone(),
+            ))
+        });
     let router = LocalMcpHttpRouterBuilder::new(runtime.into_state(false)).build();
 
     let initialize_response = router
@@ -259,17 +279,9 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
         .await
         .expect("live session response");
     assert_eq!(live_response.status(), 200);
-    let live_body = live_response
-        .into_body()
-        .collect()
-        .await
-        .expect("live session response body")
-        .to_bytes();
-    let live_payload: serde_json::Value =
-        serde_json::from_slice(&live_body).expect("live session JSON response");
     assert_eq!(
-        live_payload.pointer("/result/content/0/text"),
-        Some(&serde_json::Value::String(live_session_id.clone())),
+        routed_session_receiver.recv().await,
+        Some(Some(live_session_id.clone())),
         "the route bundle must forward the exact store-verified session marker"
     );
 
@@ -336,17 +348,9 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
         .await
         .expect("headerless stateless response");
     assert_eq!(headerless_response.status(), 200);
-    let headerless_body = headerless_response
-        .into_body()
-        .collect()
-        .await
-        .expect("headerless stateless response body")
-        .to_bytes();
-    let headerless_payload: serde_json::Value =
-        serde_json::from_slice(&headerless_body).expect("headerless stateless JSON response");
     assert_eq!(
-        headerless_payload.pointer("/result/content/0/text"),
-        Some(&serde_json::Value::String("absent".to_string())),
+        routed_session_receiver.recv().await,
+        Some(None),
         "headerless stateless routing must not mint live-session authority"
     );
 }

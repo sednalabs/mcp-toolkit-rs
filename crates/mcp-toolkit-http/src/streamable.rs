@@ -328,11 +328,11 @@ where
                     "missing_session_id",
                     StatusCode::BAD_REQUEST,
                 );
-                return session_error(
+                session_error(
                     StatusCode::BAD_REQUEST,
                     "Missing session ID.",
                     "Initialize with POST /mcp to obtain a session id.",
-                );
+                )
             }
             McpSessionRoute::InvalidOrExpired => {
                 log_session_rejection(
@@ -341,14 +341,14 @@ where
                     "invalid_or_expired_session",
                     StatusCode::NOT_FOUND,
                 );
-                return session_error(
+                session_error(
                     StatusCode::NOT_FOUND,
                     "Invalid or expired session ID.",
                     "Re-initialize with POST /mcp to obtain a new session id.",
-                );
+                )
             }
             McpSessionRoute::Live(session_id) => {
-                return forward_live_service(service, req, session_id).await;
+                forward_live_service(service, req, session_id).await
             }
         },
         _ => {
@@ -474,6 +474,7 @@ mod tests {
         },
         ServerHandler,
     };
+    use tokio::sync::mpsc::{self, UnboundedSender};
 
     use super::{
         build_local_streamable_http_service, handle_stateful_mcp_request,
@@ -491,12 +492,23 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Calculator {
         tool_router: ToolRouter<Self>,
+        routed_session_observer: Option<UnboundedSender<Option<String>>>,
     }
 
     impl Calculator {
         fn new() -> Self {
             Self {
                 tool_router: Self::tool_router(),
+                routed_session_observer: None,
+            }
+        }
+
+        fn with_routed_session_observer(
+            routed_session_observer: UnboundedSender<Option<String>>,
+        ) -> Self {
+            Self {
+                tool_router: Self::tool_router(),
+                routed_session_observer: Some(routed_session_observer),
             }
         }
     }
@@ -510,12 +522,15 @@ mod tests {
 
         #[tool(description = "Report the routed live-session marker")]
         fn routed_session(&self, Extension(parts): Extension<Parts>) -> String {
-            parts
+            let routed_session = parts
                 .extensions
                 .get::<LiveMcpSessionId>()
                 .map(LiveMcpSessionId::as_str)
-                .unwrap_or("absent")
-                .to_string()
+                .map(str::to_string);
+            if let Some(observer) = &self.routed_session_observer {
+                let _ = observer.send(routed_session.clone());
+            }
+            routed_session.unwrap_or_else(|| "absent".to_string())
         }
     }
 
@@ -950,8 +965,15 @@ mod tests {
 
     #[tokio::test]
     async fn handle_stateful_mcp_request_forwards_live_session_marker() {
-        let runtime =
-            build_local_streamable_http_service(|| Ok(Calculator::new()), Default::default());
+        let (routed_session_sender, mut routed_session_receiver) = mpsc::unbounded_channel();
+        let runtime = build_local_streamable_http_service(
+            move || {
+                Ok(Calculator::with_routed_session_observer(
+                    routed_session_sender.clone(),
+                ))
+            },
+            Default::default(),
+        );
         let initialize = Request::builder()
             .method("POST")
             .uri("http://127.0.0.1/mcp")
@@ -986,17 +1008,9 @@ mod tests {
             handle_stateful_mcp_request(runtime.service, runtime.session_manager, request).await;
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("live session response body")
-            .to_bytes();
-        let payload: serde_json::Value =
-            serde_json::from_slice(&body).expect("live session JSON response");
         assert_eq!(
-            payload.pointer("/result/content/0/text"),
-            Some(&serde_json::Value::String(session_id)),
+            routed_session_receiver.recv().await,
+            Some(Some(session_id)),
             "the exact store-verified session id must reach downstream request extensions"
         );
     }
