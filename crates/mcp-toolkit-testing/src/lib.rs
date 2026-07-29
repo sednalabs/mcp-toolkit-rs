@@ -32,6 +32,7 @@ pub mod auth_surface_contract;
 pub mod catalog_profile_contract;
 pub mod complete_catalogue_contract;
 pub mod openai_apps_contract;
+pub mod receipt_contract;
 pub mod response_safety_contract;
 pub mod stdio_contract;
 pub use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
@@ -214,7 +215,13 @@ fn write_snapshot(path: &Path, value: &Value) -> std::io::Result<()> {
     std::fs::write(path, format!("{rendered}\n"))
 }
 
-fn canonicalize_json(value: Value) -> Value {
+/// Recursively orders JSON object keys for deterministic contract assertions.
+///
+/// Array order is preserved because it can be meaningful in external
+/// contracts. This helper does not validate the payload or change scalar
+/// values.
+#[must_use]
+pub fn canonicalize_json(value: Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut entries: Vec<(String, Value)> = map.into_iter().collect();
