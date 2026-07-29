@@ -432,7 +432,7 @@ mod tests {
         schemars, tool, tool_router,
         transport::{
             common::http_header::HEADER_SESSION_ID,
-            streamable_http_server::{session::never::NeverSessionManager, SessionManager},
+            streamable_http_server::session::never::NeverSessionManager,
         },
         ServerHandler,
     };
