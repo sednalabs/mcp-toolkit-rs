@@ -345,18 +345,26 @@ fn root_type_includes_object(type_value: Option<&Value>) -> Result<bool, SchemaD
             Ok(type_name == "object")
         }
         Some(Value::Array(type_names)) => {
-            if type_names.is_empty() {
+            if type_names.is_empty() || type_names.len() > VALID_TYPES.len() {
                 return Err(SchemaDialectError::RootMustBeObject);
             }
-            let mut seen = std::collections::HashSet::with_capacity(type_names.len());
+            let mut seen_types = 0_u8;
             let mut includes_object = false;
             for type_name in type_names {
                 let Some(type_name) = type_name.as_str() else {
                     return Err(SchemaDialectError::RootMustBeObject);
                 };
-                if !VALID_TYPES.contains(&type_name) || !seen.insert(type_name) {
+                let Some(type_index) = VALID_TYPES
+                    .iter()
+                    .position(|valid_type| type_name == *valid_type)
+                else {
+                    return Err(SchemaDialectError::RootMustBeObject);
+                };
+                let type_bit = 1_u8 << type_index;
+                if seen_types & type_bit != 0 {
                     return Err(SchemaDialectError::RootMustBeObject);
                 }
+                seen_types |= type_bit;
                 includes_object |= type_name == "object";
             }
             Ok(includes_object)
@@ -1027,6 +1035,9 @@ mod tests {
         let policy = SchemaDialectPolicy::new();
         let relaxed = policy.clone().with_object_root_requirement(false);
         let direct_object_union = json!({"type": ["object", "null"]});
+        let maximal_valid_union = json!({
+            "type": ["null", "boolean", "object", "array", "number", "integer", "string"]
+        });
         let referenced_object_union = json!({
             "$ref": "#/$defs/root",
             "$defs": {"root": {"type": ["object", "null"]}}
@@ -1041,6 +1052,7 @@ mod tests {
             json!({"type": ["object", 1]}),
             json!({"type": ["object", "object"]}),
             json!({"type": "unknown"}),
+            json!({"type": vec!["object"; 4_096]}),
         ];
         let malformed_referenced = json!({
             "$ref": "#/$defs/root",
@@ -1049,6 +1061,10 @@ mod tests {
 
         assert_eq!(
             validate_schema_dialect(&direct_object_union, &policy),
+            Ok(())
+        );
+        assert_eq!(
+            validate_schema_dialect(&maximal_valid_union, &policy),
             Ok(())
         );
         assert_eq!(
