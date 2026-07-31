@@ -482,11 +482,11 @@ pub async fn verify_postgres_identity(
 pub struct PostgresIdentityError {
     code: &'static str,
     reason: &'static str,
-    message: String,
+    message: Box<str>,
     field: Option<&'static str>,
-    expected: Option<String>,
-    observed: Option<String>,
-    sqlstate: Option<String>,
+    expected: Option<Box<str>>,
+    observed: Option<Box<str>>,
+    sqlstate: Option<Box<str>>,
 }
 
 impl PostgresIdentityError {
@@ -494,7 +494,8 @@ impl PostgresIdentityError {
         Self {
             code: "PG_IDENTITY_INVALID",
             reason: "identity_value_invalid",
-            message: format!("invalid PostgreSQL identity field {field}: {requirement}"),
+            message: format!("invalid PostgreSQL identity field {field}: {requirement}")
+                .into_boxed_str(),
             field: Some(field),
             expected: None,
             observed: None,
@@ -506,10 +507,10 @@ impl PostgresIdentityError {
         Self {
             code: "PG_IDENTITY_MISMATCH",
             reason: "identity_mismatch",
-            message: format!("PostgreSQL identity mismatch for {field}"),
+            message: format!("PostgreSQL identity mismatch for {field}").into_boxed_str(),
             field: Some(field),
-            expected: Some(expected.to_string()),
-            observed: Some(observed.to_string()),
+            expected: Some(expected.into()),
+            observed: Some(observed.into()),
             sqlstate: None,
         }
     }
@@ -517,11 +518,11 @@ impl PostgresIdentityError {
     fn query_failed(err: tokio_postgres::Error) -> Self {
         let sqlstate = err
             .as_db_error()
-            .map(|db_err| db_err.code().code().to_string());
+            .map(|db_err| Box::<str>::from(db_err.code().code()));
         Self {
             code: "PG_IDENTITY_QUERY_FAILED",
             reason: "identity_query_failed",
-            message: err.to_string(),
+            message: err.to_string().into_boxed_str(),
             field: None,
             expected: None,
             observed: None,
@@ -533,7 +534,7 @@ impl PostgresIdentityError {
         Self {
             code: "PG_IDENTITY_QUERY_FAILED",
             reason: "identity_row_missing",
-            message: "PostgreSQL identity query returned no row".to_string(),
+            message: "PostgreSQL identity query returned no row".into(),
             field: None,
             expected: None,
             observed: None,
