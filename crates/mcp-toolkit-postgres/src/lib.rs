@@ -429,9 +429,10 @@ impl PgVerifiedIdentity {
 ///
 /// # Required Privileges
 /// The connected role must be permitted to execute
-/// `pg_catalog.pg_control_system()`. PostgreSQL grants this to superusers and
-/// roles with `pg_monitor` privileges by default; operators can instead grant
-/// `EXECUTE` on the function explicitly.
+/// `pg_catalog.pg_control_system()`. PostgreSQL's standard function privilege
+/// permits `PUBLIC` execution, but deployments may revoke it. Operators of
+/// restricted clusters must grant `EXECUTE` directly or through an appropriate
+/// role; a denied query fails closed.
 ///
 /// # Security
 /// Uses a fixed read-only query and does not expose a DSN, credentials, client
