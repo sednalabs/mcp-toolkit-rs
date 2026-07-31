@@ -427,6 +427,12 @@ impl PgVerifiedIdentity {
 /// Returns [`PostgresIdentityError`] when PostgreSQL rejects the fixed identity
 /// query, returns no row, or returns an invalid identity value.
 ///
+/// # Required Privileges
+/// The connected role must be permitted to execute
+/// `pg_catalog.pg_control_system()`. PostgreSQL grants this to superusers and
+/// roles with `pg_monitor` privileges by default; operators can instead grant
+/// `EXECUTE` on the function explicitly.
+///
 /// # Security
 /// Uses a fixed read-only query and does not expose a DSN, credentials, client
 /// address, or server network address. The cluster system identifier is read
