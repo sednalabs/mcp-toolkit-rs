@@ -3,8 +3,8 @@
 //! Shared PostgreSQL connection helpers for Rust MCP services.
 //!
 //! ## Rationale
-//! Centralize DSN normalization and TLS mode handling so servers can enforce
-//! a consistent, explicit transport policy.
+//! Centralize DSN normalization, TLS mode handling, and target identity
+//! verification so servers can enforce explicit connection policy.
 //!
 //! ## Security Boundaries
 //! * `sslmode=require` maps to encrypted transport without certificate
@@ -16,13 +16,15 @@
 //! * Invalid or ambiguous `sslmode` values fail closed.
 //! * `connect()` uses strict policy and rejects insecure modes unless callers
 //!   explicitly opt in with `connect_with_policy(...)`.
+//! * Target verification uses PostgreSQL's cluster `system_identifier` rather
+//!   than treating a database name or network address as sufficient identity.
 //!
 //! ## References
 //! * PostgreSQL Connection Strings: https://www.postgresql.org/docs/current/libpq-connect.html
 //! * `tokio-postgres` documentation: https://docs.rs/tokio-postgres
 //!
 //! ## Notes
-//! * This crate does not execute SQL.
+//! * This crate executes only its fixed, read-only server identity query.
 //! * The caller owns SQL safety and authorization checks.
 
 use std::fmt;
@@ -217,6 +219,419 @@ impl PgConnectionConfig {
             }
         }
     }
+}
+
+/// Expected identity for one PostgreSQL deployment profile.
+///
+/// The environment and deployment labels are operator-controlled identifiers.
+/// The cluster system identifier and database name are compared with values
+/// read from the connected PostgreSQL server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgIdentityExpectation {
+    environment: String,
+    deployment: String,
+    cluster_system_identifier: String,
+    database: String,
+}
+
+impl PgIdentityExpectation {
+    /// Creates a fail-closed PostgreSQL identity expectation.
+    ///
+    /// # Errors
+    /// Returns [`PostgresIdentityError`] when a value is blank, contains
+    /// control characters or surrounding whitespace, exceeds its bound, or
+    /// when `cluster_system_identifier` is not an unsigned decimal integer.
+    ///
+    /// # Security
+    /// Environment and deployment labels do not attest a server by themselves.
+    /// Verification also requires the server-provided cluster system identifier
+    /// and current database to match exactly.
+    pub fn new(
+        environment: impl Into<String>,
+        deployment: impl Into<String>,
+        cluster_system_identifier: impl Into<String>,
+        database: impl Into<String>,
+    ) -> Result<Self, PostgresIdentityError> {
+        Ok(Self {
+            environment: validate_identity_value("environment", environment.into(), 128)?,
+            deployment: validate_identity_value("deployment", deployment.into(), 128)?,
+            cluster_system_identifier: validate_numeric_identity_value(
+                "cluster_system_identifier",
+                cluster_system_identifier.into(),
+                20,
+            )?,
+            database: validate_identity_value("database", database.into(), 63)?,
+        })
+    }
+
+    /// Returns the operator-controlled environment label.
+    pub fn environment(&self) -> &str {
+        &self.environment
+    }
+
+    /// Returns the stable deployment profile label.
+    pub fn deployment(&self) -> &str {
+        &self.deployment
+    }
+
+    /// Returns the expected PostgreSQL cluster system identifier.
+    pub fn cluster_system_identifier(&self) -> &str {
+        &self.cluster_system_identifier
+    }
+
+    /// Returns the expected database name.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// Verifies an observed server identity and binds it to this profile.
+    ///
+    /// # Errors
+    /// Returns [`PostgresIdentityError`] when the cluster system identifier or
+    /// database name differs from the expected profile.
+    ///
+    /// # Security
+    /// Comparison is exact and fail-closed. A matching database name on a
+    /// different PostgreSQL cluster is rejected.
+    ///
+    /// # Examples
+    /// ```
+    /// use mcp_toolkit_postgres::{PgIdentityExpectation, PgServerIdentity};
+    ///
+    /// let expected = PgIdentityExpectation::new(
+    ///     "production",
+    ///     "primary",
+    ///     "7521467493250607290",
+    ///     "application",
+    /// )?;
+    /// let observed = PgServerIdentity::from_values(
+    ///     "7521467493250607290",
+    ///     "application",
+    ///     "170004",
+    /// )?;
+    /// let verified = expected.verify(&observed)?;
+    /// assert_eq!(verified.environment(), "production");
+    /// # Ok::<(), mcp_toolkit_postgres::PostgresIdentityError>(())
+    /// ```
+    pub fn verify(
+        &self,
+        observed: &PgServerIdentity,
+    ) -> Result<PgVerifiedIdentity, PostgresIdentityError> {
+        if observed.cluster_system_identifier != self.cluster_system_identifier {
+            return Err(PostgresIdentityError::mismatch(
+                "cluster_system_identifier",
+                &self.cluster_system_identifier,
+                &observed.cluster_system_identifier,
+            ));
+        }
+        if observed.database != self.database {
+            return Err(PostgresIdentityError::mismatch(
+                "database",
+                &self.database,
+                &observed.database,
+            ));
+        }
+
+        Ok(PgVerifiedIdentity {
+            environment: self.environment.clone(),
+            deployment: self.deployment.clone(),
+            server: observed.clone(),
+        })
+    }
+}
+
+/// Identity observed from a connected PostgreSQL server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgServerIdentity {
+    cluster_system_identifier: String,
+    database: String,
+    server_version_num: String,
+}
+
+impl PgServerIdentity {
+    /// Creates an observed server identity from values read through another
+    /// PostgreSQL client or pool implementation.
+    ///
+    /// # Errors
+    /// Returns [`PostgresIdentityError`] when a value is invalid or when a
+    /// numeric identity field is not an unsigned decimal integer.
+    ///
+    /// # Security
+    /// This constructor validates representation only. The caller owns the
+    /// provenance of supplied values; prefer [`read_postgres_identity`] when
+    /// using a `tokio-postgres` client.
+    pub fn from_values(
+        cluster_system_identifier: impl Into<String>,
+        database: impl Into<String>,
+        server_version_num: impl Into<String>,
+    ) -> Result<Self, PostgresIdentityError> {
+        Ok(Self {
+            cluster_system_identifier: validate_numeric_identity_value(
+                "cluster_system_identifier",
+                cluster_system_identifier.into(),
+                20,
+            )?,
+            database: validate_identity_value("database", database.into(), 63)?,
+            server_version_num: validate_numeric_identity_value(
+                "server_version_num",
+                server_version_num.into(),
+                12,
+            )?,
+        })
+    }
+
+    /// Returns the server-provided PostgreSQL cluster system identifier.
+    pub fn cluster_system_identifier(&self) -> &str {
+        &self.cluster_system_identifier
+    }
+
+    /// Returns the current database name.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// Returns PostgreSQL's numeric server version string.
+    pub fn server_version_num(&self) -> &str {
+        &self.server_version_num
+    }
+}
+
+/// Server identity verified against an operator-controlled deployment profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgVerifiedIdentity {
+    environment: String,
+    deployment: String,
+    server: PgServerIdentity,
+}
+
+impl PgVerifiedIdentity {
+    /// Returns the verified environment label.
+    pub fn environment(&self) -> &str {
+        &self.environment
+    }
+
+    /// Returns the verified deployment profile label.
+    pub fn deployment(&self) -> &str {
+        &self.deployment
+    }
+
+    /// Returns the observed server identity that matched the profile.
+    pub const fn server(&self) -> &PgServerIdentity {
+        &self.server
+    }
+}
+
+/// Reads the stable, non-secret identity of a connected PostgreSQL server.
+///
+/// # Errors
+/// Returns [`PostgresIdentityError`] when PostgreSQL rejects the fixed identity
+/// query, returns no row, or returns an invalid identity value.
+///
+/// # Required Privileges
+/// The connected role must be permitted to execute
+/// `pg_catalog.pg_control_system()`. PostgreSQL's standard function privilege
+/// permits `PUBLIC` execution, but deployments may revoke it. Operators of
+/// restricted clusters must grant `EXECUTE` directly or through an appropriate
+/// role; a denied query fails closed.
+///
+/// # Security
+/// Uses a fixed read-only query and does not expose a DSN, credentials, client
+/// address, or server network address. The cluster system identifier is read
+/// from `pg_control_system()` so database-name equality alone cannot establish
+/// target identity.
+pub async fn read_postgres_identity(
+    client: &Client,
+) -> Result<PgServerIdentity, PostgresIdentityError> {
+    const IDENTITY_QUERY: &str = "SELECT control.system_identifier::text AS cluster_system_identifier, pg_catalog.current_database()::text AS database, pg_catalog.current_setting('server_version_num') AS server_version_num FROM pg_catalog.pg_control_system() AS control";
+
+    let row = client
+        .query_opt(IDENTITY_QUERY, &[])
+        .await
+        .map_err(PostgresIdentityError::query_failed)?
+        .ok_or_else(PostgresIdentityError::missing_identity_row)?;
+    let cluster_system_identifier = row
+        .try_get::<_, String>("cluster_system_identifier")
+        .map_err(PostgresIdentityError::query_failed)?;
+    let database = row
+        .try_get::<_, String>("database")
+        .map_err(PostgresIdentityError::query_failed)?;
+    let server_version_num = row
+        .try_get::<_, String>("server_version_num")
+        .map_err(PostgresIdentityError::query_failed)?;
+
+    PgServerIdentity::from_values(cluster_system_identifier, database, server_version_num)
+}
+
+/// Reads and verifies a connected PostgreSQL server identity.
+///
+/// # Errors
+/// Returns [`PostgresIdentityError`] when the identity query fails or the
+/// observed cluster/database does not match `expected`.
+///
+/// # Security
+/// Fails closed on missing, invalid, or mismatched identity evidence.
+pub async fn verify_postgres_identity(
+    client: &Client,
+    expected: &PgIdentityExpectation,
+) -> Result<PgVerifiedIdentity, PostgresIdentityError> {
+    let observed = read_postgres_identity(client).await?;
+    expected.verify(&observed)
+}
+
+/// Structured error for PostgreSQL target identity handling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresIdentityError {
+    code: &'static str,
+    reason: &'static str,
+    message: Box<str>,
+    field: Option<&'static str>,
+    expected: Option<Box<str>>,
+    observed: Option<Box<str>>,
+    sqlstate: Option<Box<str>>,
+}
+
+impl PostgresIdentityError {
+    fn invalid_value(field: &'static str, requirement: &'static str) -> Self {
+        Self {
+            code: "PG_IDENTITY_INVALID",
+            reason: "identity_value_invalid",
+            message: format!("invalid PostgreSQL identity field {field}: {requirement}")
+                .into_boxed_str(),
+            field: Some(field),
+            expected: None,
+            observed: None,
+            sqlstate: None,
+        }
+    }
+
+    fn mismatch(field: &'static str, expected: &str, observed: &str) -> Self {
+        Self {
+            code: "PG_IDENTITY_MISMATCH",
+            reason: "identity_mismatch",
+            message: format!("PostgreSQL identity mismatch for {field}").into_boxed_str(),
+            field: Some(field),
+            expected: Some(expected.into()),
+            observed: Some(observed.into()),
+            sqlstate: None,
+        }
+    }
+
+    fn query_failed(err: tokio_postgres::Error) -> Self {
+        let sqlstate = err
+            .as_db_error()
+            .map(|db_err| Box::<str>::from(db_err.code().code()));
+        Self {
+            code: "PG_IDENTITY_QUERY_FAILED",
+            reason: "identity_query_failed",
+            message: err.to_string().into_boxed_str(),
+            field: None,
+            expected: None,
+            observed: None,
+            sqlstate,
+        }
+    }
+
+    fn missing_identity_row() -> Self {
+        Self {
+            code: "PG_IDENTITY_QUERY_FAILED",
+            reason: "identity_row_missing",
+            message: "PostgreSQL identity query returned no row".into(),
+            field: None,
+            expected: None,
+            observed: None,
+            sqlstate: None,
+        }
+    }
+
+    /// Returns the stable machine-readable error code.
+    pub const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    /// Returns the stable machine-readable reason.
+    pub const fn reason(&self) -> &'static str {
+        self.reason
+    }
+
+    /// Returns the human-readable error message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the identity field associated with validation or mismatch.
+    pub const fn field(&self) -> Option<&'static str> {
+        self.field
+    }
+
+    /// Returns the expected field value for a mismatch.
+    pub fn expected(&self) -> Option<&str> {
+        self.expected.as_deref()
+    }
+
+    /// Returns the observed field value for a mismatch.
+    pub fn observed(&self) -> Option<&str> {
+        self.observed.as_deref()
+    }
+
+    /// Returns the PostgreSQL SQLSTATE for an identity-query failure.
+    pub fn sqlstate(&self) -> Option<&str> {
+        self.sqlstate.as_deref()
+    }
+}
+
+impl fmt::Display for PostgresIdentityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for PostgresIdentityError {}
+
+fn validate_identity_value(
+    field: &'static str,
+    value: String,
+    max_len: usize,
+) -> Result<String, PostgresIdentityError> {
+    if value.is_empty() {
+        return Err(PostgresIdentityError::invalid_value(
+            field,
+            "must not be blank",
+        ));
+    }
+    if value.trim() != value {
+        return Err(PostgresIdentityError::invalid_value(
+            field,
+            "must not contain surrounding whitespace",
+        ));
+    }
+    if value.len() > max_len {
+        return Err(PostgresIdentityError::invalid_value(
+            field,
+            "exceeds the maximum length",
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(PostgresIdentityError::invalid_value(
+            field,
+            "must not contain control characters",
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_numeric_identity_value(
+    field: &'static str,
+    value: String,
+    max_len: usize,
+) -> Result<String, PostgresIdentityError> {
+    let value = validate_identity_value(field, value, max_len)?;
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(PostgresIdentityError::invalid_value(
+            field,
+            "must be an unsigned decimal integer",
+        ));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -881,9 +1296,105 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_dsn, query_param, tls_mode_for_dsn, PgConnectionConfig, PgInsecureTlsPolicy,
-        PgTlsMode,
+        normalize_dsn, query_param, tls_mode_for_dsn, PgConnectionConfig, PgIdentityExpectation,
+        PgInsecureTlsPolicy, PgServerIdentity, PgTlsMode,
     };
+
+    #[test]
+    fn identity_verification_binds_environment_to_observed_cluster() {
+        let expected = PgIdentityExpectation::new(
+            "production",
+            "primary",
+            "7521467493250607290",
+            "application",
+        )
+        .expect("valid expectation");
+        let observed =
+            PgServerIdentity::from_values("7521467493250607290", "application", "170004")
+                .expect("valid observation");
+
+        let verified = expected.verify(&observed).expect("identity should match");
+
+        assert_eq!(verified.environment(), "production");
+        assert_eq!(verified.deployment(), "primary");
+        assert_eq!(verified.server(), &observed);
+    }
+
+    #[test]
+    fn identity_verification_rejects_same_database_on_different_cluster() {
+        let expected = PgIdentityExpectation::new(
+            "production",
+            "primary",
+            "7521467493250607290",
+            "application",
+        )
+        .expect("valid expectation");
+        let observed =
+            PgServerIdentity::from_values("7521467493250607291", "application", "170004")
+                .expect("valid observation");
+
+        let err = expected
+            .verify(&observed)
+            .expect_err("same database name must not hide cluster mismatch");
+
+        assert_eq!(err.code(), "PG_IDENTITY_MISMATCH");
+        assert_eq!(err.reason(), "identity_mismatch");
+        assert_eq!(err.field(), Some("cluster_system_identifier"));
+        assert_eq!(err.expected(), Some("7521467493250607290"));
+        assert_eq!(err.observed(), Some("7521467493250607291"));
+        assert_eq!(err.sqlstate(), None);
+    }
+
+    #[test]
+    fn identity_verification_rejects_database_mismatch() {
+        let expected = PgIdentityExpectation::new(
+            "production",
+            "primary",
+            "7521467493250607290",
+            "application",
+        )
+        .expect("valid expectation");
+        let observed =
+            PgServerIdentity::from_values("7521467493250607290", "application_shadow", "170004")
+                .expect("valid observation");
+
+        let err = expected
+            .verify(&observed)
+            .expect_err("database mismatch must fail closed");
+
+        assert_eq!(err.code(), "PG_IDENTITY_MISMATCH");
+        assert_eq!(err.reason(), "identity_mismatch");
+        assert_eq!(err.field(), Some("database"));
+        assert_eq!(err.expected(), Some("application"));
+        assert_eq!(err.observed(), Some("application_shadow"));
+    }
+
+    #[test]
+    fn identity_values_reject_missing_ambiguous_or_log_unsafe_input() {
+        let blank_environment =
+            PgIdentityExpectation::new("", "primary", "7521467493250607290", "application")
+                .expect_err("environment must be explicit");
+        let non_numeric_cluster =
+            PgIdentityExpectation::new("production", "primary", "cluster-a", "application")
+                .expect_err("cluster identifier must be canonical");
+        let unsafe_deployment = PgIdentityExpectation::new(
+            "production",
+            "primary\nforged",
+            "7521467493250607290",
+            "application",
+        )
+        .expect_err("control characters must be rejected");
+
+        assert_eq!(blank_environment.code(), "PG_IDENTITY_INVALID");
+        assert_eq!(blank_environment.field(), Some("environment"));
+        assert_eq!(non_numeric_cluster.code(), "PG_IDENTITY_INVALID");
+        assert_eq!(
+            non_numeric_cluster.field(),
+            Some("cluster_system_identifier")
+        );
+        assert_eq!(unsafe_deployment.code(), "PG_IDENTITY_INVALID");
+        assert_eq!(unsafe_deployment.field(), Some("deployment"));
+    }
 
     #[test]
     fn normalize_dsn_converts_psycopg_and_postgres_prefixes() {
