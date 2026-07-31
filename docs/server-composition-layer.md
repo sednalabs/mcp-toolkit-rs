@@ -120,6 +120,15 @@ Current public pieces:
 - `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
   OAuth-not-configured placeholder discovery routes, and host/origin guarding.
 
+Stateful route helpers also attach
+`mcp_toolkit_http::streamable::LiveMcpSessionId` to the forwarded HTTP request
+after the authoritative session manager confirms exact live membership.
+Downstream MCP handlers can recover it from the `http::request::Parts` carried
+by `rmcp`, avoiding a second session-store lookup. The marker is deliberately
+transport-scoped: it does not authenticate an actor or authorize tools.
+Services that need actor-bound sessions must derive a stronger, service-owned
+marker after applying their own authentication and session-binding policy.
+
 The guiding rule remains: keep the public API small and obviously reusable.
 Service-specific health payloads, attestation payloads, backend clients, tool
 handlers, and product policy stay in service repositories.
