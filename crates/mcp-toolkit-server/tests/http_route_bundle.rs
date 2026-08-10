@@ -191,6 +191,53 @@ async fn route_bundle_rejects_oversized_sessionless_post() {
 }
 
 #[tokio::test]
+async fn route_bundle_rejects_oversized_stateful_post() {
+    let router = LocalMcpHttpServerBuilder::new()
+        .allowed_hosts(["127.0.0.1"])
+        .max_request_body_bytes(1024)
+        .build(|| Ok(TestMcp::new()));
+
+    let initialize_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .header("accept", ACCEPT_STREAMABLE)
+                .header("content-type", "application/json")
+                .body(Body::from(init_body()))
+                .expect("initialize request"),
+        )
+        .await
+        .expect("initialize response");
+    assert_eq!(initialize_response.status(), 200);
+    let session_id = initialize_response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("live session id")
+        .to_string();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "127.0.0.1")
+                .header("accept", ACCEPT_STREAMABLE)
+                .header("content-type", "application/json")
+                .header("mcp-session-id", session_id)
+                .body(Body::from(vec![b' '; 1025]))
+                .expect("oversized stateful request"),
+        )
+        .await
+        .expect("oversized stateful response");
+
+    assert_eq!(response.status(), 413);
+}
+
+#[tokio::test]
 async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallback() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1"])
