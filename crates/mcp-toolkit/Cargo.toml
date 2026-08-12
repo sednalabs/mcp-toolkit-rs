@@ -22,7 +22,7 @@ mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", opti
 mcp-toolkit-scratchpad = { version = "0.1.0", path = "../mcp-toolkit-scratchpad", optional = true }
 mcp-toolkit-gemini = { version = "0.1.0", path = "../mcp-toolkit-gemini", optional = true }
 mcp-toolkit-server = { version = "0.1.0", path = "../mcp-toolkit-server", optional = true }
-rmcp = { version = "=2.1.0", default-features = false, optional = true }
+rmcp = { version = "=3.1.2", default-features = false, optional = true }
 serde_json = "1.0.149"
 toml_edit = "0.25.12"
 
