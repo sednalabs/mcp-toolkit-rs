@@ -22,6 +22,7 @@
 
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::io::{self, Write};
 
 /// Schema identifier for deterministic MCP tool schema snapshots.
 pub const TOOL_SCHEMA_SNAPSHOT_SCHEMA: &str = "mcp_tool_schema_snapshot";
@@ -93,13 +94,35 @@ where
     T: Serialize,
 {
     let snapshot = tool_schema_snapshot_value(tools)?;
-    let serialized = serde_json::to_vec(&snapshot)?;
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in serialized {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
+    let mut writer = FnvWriter::default();
+    serde_json::to_writer(&mut writer, &snapshot)?;
+    Ok(writer.hash)
+}
+
+struct FnvWriter {
+    hash: u64,
+}
+
+impl Default for FnvWriter {
+    fn default() -> Self {
+        Self {
+            hash: FNV_OFFSET_BASIS,
+        }
     }
-    Ok(hash)
+}
+
+impl Write for FnvWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        for byte in bytes {
+            self.hash ^= u64::from(*byte);
+            self.hash = self.hash.wrapping_mul(FNV_PRIME);
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn tool_sort_key(value: &Value) -> String {
