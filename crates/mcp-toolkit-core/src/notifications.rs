@@ -104,17 +104,15 @@ impl ToolListTracker {
     /// # Errors
     /// Returns a serialization error when a descriptor cannot be converted to
     /// the canonical JSON fingerprint.
-    pub fn observe_descriptors<I, T>(
+    pub fn observe_descriptors<T>(
         &self,
         session_id: &str,
-        descriptors: I,
+        descriptors: &[T],
     ) -> Result<ToolListUpdate, serde_json::Error>
     where
-        I: IntoIterator<Item = T>,
         T: Serialize,
     {
-        let descriptors: Vec<T> = descriptors.into_iter().collect();
-        let fingerprint = crate::tool_schema::tool_schema_fingerprint(&descriptors)?;
+        let fingerprint = crate::tool_schema::tool_schema_fingerprint(descriptors)?;
         Ok(self.observe_fingerprint(session_id, fingerprint))
     }
 
@@ -209,7 +207,7 @@ mod tests {
         let first = tracker
             .observe_descriptors(
                 "sess-1",
-                [serde_json::json!({
+                &[serde_json::json!({
                     "name": "items.read",
                     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
                 })],
@@ -220,7 +218,7 @@ mod tests {
         let unchanged = tracker
             .observe_descriptors(
                 "sess-1",
-                [serde_json::json!({
+                &[serde_json::json!({
                     "name": "items.read",
                     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
                 })],
@@ -231,7 +229,7 @@ mod tests {
         let changed = tracker
             .observe_descriptors(
                 "sess-1",
-                [serde_json::json!({
+                &[serde_json::json!({
                     "name": "items.read",
                     "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}}
                 })],
@@ -246,7 +244,7 @@ mod tests {
         let first = tracker
             .observe_descriptors(
                 "sess-1",
-                [serde_json::json!({
+                &[serde_json::json!({
                     "name": "items.read",
                     "inputSchema": {"type": "object"},
                     "annotations": {"readOnlyHint": true}
@@ -258,7 +256,7 @@ mod tests {
         let changed = tracker
             .observe_descriptors(
                 "sess-1",
-                [serde_json::json!({
+                &[serde_json::json!({
                     "name": "items.read",
                     "inputSchema": {"type": "object"},
                     "annotations": {"readOnlyHint": false}
