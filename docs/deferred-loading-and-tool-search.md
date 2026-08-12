@@ -192,7 +192,10 @@ another workflow-level review gate applies.
 - `openai_tool_search`
   - use for OpenAI MCP `defer_loading` and `tool_search` config payloads
 - `ToolListTracker`
-  - use for session-aware change detection
+  - use `observe` for name-only change detection when published metadata is
+    immutable
+  - use `observe_descriptors` for the full `tools/list` descriptors so schema,
+    annotation, description, and provider-metadata changes trigger a refresh
 - `rmcp_models`
   - use for protocol wrapper construction at transport boundaries
 - `mcp-toolkit-testing::assert_tool_schema_snapshot`
