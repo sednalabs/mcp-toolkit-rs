@@ -79,6 +79,29 @@ where
     ]))))
 }
 
+/// Computes a stable fingerprint for complete serialized tool descriptors.
+///
+/// Unlike [`crate::notifications::fingerprint_tools`], this fingerprint covers
+/// every serialized descriptor field, including input and output schemas,
+/// annotations, and provider metadata. Callers can use it to detect a
+/// descriptor contract change even when the exported tool names are unchanged.
+///
+/// # Errors
+/// Returns a serialization error if any descriptor cannot be converted to JSON.
+pub fn tool_schema_fingerprint<T>(tools: &[T]) -> Result<u64, serde_json::Error>
+where
+    T: Serialize,
+{
+    let snapshot = tool_schema_snapshot_value(tools)?;
+    let serialized = serde_json::to_vec(&snapshot)?;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in serialized {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    Ok(hash)
+}
+
 fn tool_sort_key(value: &Value) -> String {
     value
         .as_object()
@@ -104,9 +127,12 @@ fn canonicalize_json(value: Value) -> Value {
     }
 }
 
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
 #[cfg(test)]
 mod tests {
-    use super::{tool_names, tool_schema_snapshot_value};
+    use super::{tool_names, tool_schema_fingerprint, tool_schema_snapshot_value};
     use serde_json::json;
 
     #[test]
@@ -156,5 +182,41 @@ mod tests {
         ];
         let names = tool_names(&tools).expect("extract names");
         assert_eq!(names, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn schema_fingerprint_changes_when_descriptor_schema_changes() {
+        let first = vec![json!({
+            "name": "items.read",
+            "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
+        })];
+        let second = vec![json!({
+            "name": "items.read",
+            "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}}
+        })];
+
+        assert_ne!(
+            tool_schema_fingerprint(&first).expect("fingerprint first"),
+            tool_schema_fingerprint(&second).expect("fingerprint second")
+        );
+    }
+
+    #[test]
+    fn schema_fingerprint_is_stable_for_descriptor_key_order() {
+        let first = vec![json!({
+            "name": "items.read",
+            "description": "Read an item",
+            "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
+        })];
+        let second = vec![json!({
+            "inputSchema": {"properties": {"id": {"type": "string"}}, "type": "object"},
+            "description": "Read an item",
+            "name": "items.read"
+        })];
+
+        assert_eq!(
+            tool_schema_fingerprint(&first).expect("fingerprint first"),
+            tool_schema_fingerprint(&second).expect("fingerprint second")
+        );
     }
 }
