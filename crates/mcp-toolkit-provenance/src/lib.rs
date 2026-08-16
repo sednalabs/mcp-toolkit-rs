@@ -19,9 +19,10 @@ pub use admission::{
 pub use provenance::{
     build_attestation_envelope, build_identity, capture_current_runtime_provenance,
     capture_runtime_provenance, source_fingerprint, AttestationEnvelope, AttestationIdentity,
-    AttestationOptions, AttestationPayload, AttestationRuntime, AttestationStatus, BinaryProvenance,
-    BuildMetadata, BuildProvenance, BuildProvenanceInput, ProcessProvenance, RuntimeProvenance,
-    SourceProvenance, UnavailableField, ATTESTATION_SCHEMA_VERSION, UNKNOWN_VALUE,
+    AttestationOptions, AttestationPayload, AttestationRuntime, AttestationStatus,
+    BinaryProvenance, BuildMetadata, BuildProvenance, BuildProvenanceInput, ProcessProvenance,
+    RuntimeProvenance, SourceProvenance, UnavailableField, ATTESTATION_SCHEMA_VERSION,
+    UNKNOWN_VALUE,
 };
 
 /// Build canonical provenance from a consumer crate's compile-time environment.
