@@ -143,10 +143,16 @@ impl fmt::Display for AdmissionPolicyError {
             }
             Self::BypassReasonRequired => write!(f, "startup admission bypass requires a reason"),
             Self::BypassExpiryInvalid => {
-                write!(f, "startup admission bypass requires a valid RFC3339 expires_at")
+                write!(
+                    f,
+                    "startup admission bypass requires a valid RFC3339 expires_at"
+                )
             }
             Self::ProductionBypassNotAllowed => {
-                write!(f, "startup admission bypass is not allowed in production mode")
+                write!(
+                    f,
+                    "startup admission bypass is not allowed in production mode"
+                )
             }
         }
     }
@@ -350,10 +356,7 @@ pub fn evaluate_startup_admission(
         ));
     }
 
-    let gate_modified_ms = gate_meta
-        .modified()
-        .ok()
-        .and_then(system_time_to_unix_ms);
+    let gate_modified_ms = gate_meta.modified().ok().and_then(system_time_to_unix_ms);
     let Some(binary_modified_ms) = runtime.binary.modified_unix_ms else {
         return Ok(warning_or_reject(
             policy,
@@ -463,9 +466,7 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use super::*;
-    use crate::provenance::{
-        capture_runtime_provenance, BuildProvenance, BuildProvenanceInput,
-    };
+    use crate::provenance::{capture_runtime_provenance, BuildProvenance, BuildProvenanceInput};
 
     fn temp_path(prefix: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -506,8 +507,8 @@ mod tests {
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         let gate_path = temp_path("missing-gate");
-        let evaluation = evaluate_startup_admission(&strict_policy(gate_path), &runtime)
-            .expect("valid policy");
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_MISSING));
         let _ = fs::remove_file(executable);
@@ -523,12 +524,8 @@ mod tests {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
-        let artifact = GateArtifactV1::passing(
-            &runtime,
-            TestGateLevel::Fast,
-            "sha256:test",
-            expires_at,
-        );
+        let artifact =
+            GateArtifactV1::passing(&runtime, TestGateLevel::Fast, "sha256:test", expires_at);
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
@@ -548,22 +545,15 @@ mod tests {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
-        let mut artifact = GateArtifactV1::passing(
-            &runtime,
-            TestGateLevel::Fast,
-            "sha256:test",
-            expires_at,
-        );
+        let mut artifact =
+            GateArtifactV1::passing(&runtime, TestGateLevel::Fast, "sha256:test", expires_at);
         artifact.build_identity = "other-mcp@1.0.0+deadbeef".to_string();
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
-        assert_eq!(
-            evaluation.reason_code.as_deref(),
-            Some(CODE_BUILD_MISMATCH)
-        );
+        assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_BUILD_MISMATCH));
         let _ = fs::remove_file(executable);
         let _ = fs::remove_file(gate_path);
     }
