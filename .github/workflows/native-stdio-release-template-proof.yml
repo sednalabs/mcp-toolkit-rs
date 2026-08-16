@@ -109,7 +109,7 @@ jobs:
           cargo cyclonedx \
             --format json \
             --manifest-path "$MANIFEST_PATH" \
-            --override-filename release-sbom.cdx.json \
+            --override-filename release-sbom.cdx \
             --spec-version 1.5 \
             --target "$TARGET"
           test -f templates/single-crate-public-stdio-server/release-sbom.cdx.json

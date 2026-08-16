@@ -100,7 +100,7 @@ jobs:
           cargo cyclonedx \
             --format json \
             --manifest-path Cargo.toml \
-            --override-filename release-sbom.cdx.json \
+            --override-filename release-sbom.cdx \
             --spec-version 1.5 \
             --target "$TARGET"
           test -f release-sbom.cdx.json
