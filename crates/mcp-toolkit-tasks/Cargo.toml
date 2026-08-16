@@ -1,0 +1,19 @@
+[package]
+name = "mcp-toolkit-tasks"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Principal-bound and observable production substrate around RMCP Tasks."
+repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rmcp = { version = "=3.1.2", default-features = false, features = ["server"] }
+serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["macros", "rt", "sync", "time"] }
