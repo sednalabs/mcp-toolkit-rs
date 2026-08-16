@@ -14,8 +14,8 @@
 //!   JSON-RPC `Invalid params`.
 //!
 //! ## References
-//! * **MCP tools**: <https://modelcontextprotocol.io/specification/2025-11-25/server/tools>
-//! * **MCP pagination**: <https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination>
+//! * **MCP tools**: <https://modelcontextprotocol.io/specification/2026-07-28/server/tools>
+//! * **MCP pagination**: <https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/pagination>
 
 use mcp_toolkit_core::{
     pagination::{paginate_list, PaginationError},
@@ -125,11 +125,9 @@ pub fn list_tools_result_with_page_size(
     page_size: usize,
 ) -> Result<ListToolsResult, rmcp::ErrorData> {
     let page = paginate_list(&tools, request, page_size).map_err(pagination_error)?;
-    Ok(ListToolsResult {
-        tools: page.items,
-        meta: None,
-        next_cursor: page.next_cursor,
-    })
+    let mut result = ListToolsResult::with_all_items(page.items);
+    result.next_cursor = page.next_cursor;
+    Ok(result)
 }
 
 /// Renders a deterministic newline-separated list of MCP tool names.
