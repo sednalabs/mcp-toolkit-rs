@@ -185,7 +185,7 @@ service repository adds public release files and workflows.
 The generated public stdio workflow remains manual and artifact-only. Generate
 and commit `Cargo.lock` before dispatching it. Release preflight checks the
 static release contract but does not build, attest, publish, or install a
-binary.
+binary. Its exact path is `.github/workflows/native-release-artifacts.yml`.
 
 ## Client Config
 
