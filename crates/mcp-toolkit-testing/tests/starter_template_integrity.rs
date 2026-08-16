@@ -75,6 +75,7 @@ fn runner_policy_template_names_on_disk() -> Vec<String> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(repo_root().join("templates")).expect("templates directory") {
         let entry = entry.expect("template directory entry");
+        // codeql[rust/path-injection] Read-only inventory of repository-controlled test fixtures.
         if entry
             .path()
             .join("scripts/workflow_runner_policy_check.py")

@@ -2382,7 +2382,8 @@ fn read(path: &Path) -> String {
 fn replace_once(contents: &str, original: &str, replacement: &str, label: &str) -> String {
     assert!(
         contents.contains(original),
-        "fixture is missing mutation anchor for {label}"
+        "{}",
+        ["fixture is missing mutation anchor for ", label].concat()
     );
     contents.replacen(original, replacement, 1)
 }

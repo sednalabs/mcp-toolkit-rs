@@ -417,7 +417,7 @@ fn yaml_get<'a>(mapping: &'a YamlMapping, key: &str) -> Option<&'a YamlValue> {
 fn yaml_mapping<'a>(value: &'a YamlValue, context: &str) -> Result<&'a YamlMapping, String> {
     value
         .as_mapping()
-        .ok_or_else(|| format!("{} must be a mapping", context))
+        .ok_or_else(|| context.to_owned() + " must be a mapping")
 }
 
 fn yaml_string(value: &YamlValue, context: &str) -> Result<String, String> {
@@ -425,7 +425,7 @@ fn yaml_string(value: &YamlValue, context: &str) -> Result<String, String> {
         .as_str()
         .map(str::trim)
         .map(str::to_string)
-        .ok_or_else(|| format!("{} must be a string", context))
+        .ok_or_else(|| context.to_owned() + " must be a string")
 }
 
 fn permission_map_matches(value: Option<&YamlValue>, expected: &[(&str, &str)]) -> bool {
@@ -443,7 +443,7 @@ fn permission_map_matches(value: Option<&YamlValue>, expected: &[(&str, &str)]) 
 fn job_steps<'a>(job: &'a YamlMapping, context: &str) -> Result<&'a Vec<YamlValue>, String> {
     yaml_get(job, "steps")
         .and_then(YamlValue::as_sequence)
-        .ok_or_else(|| format!("{}.steps must be a sequence", context))
+        .ok_or_else(|| context.to_owned() + ".steps must be a sequence")
 }
 
 fn step_mappings<'a>(job: &'a YamlMapping, context: &str) -> Result<Vec<&'a YamlMapping>, String> {
