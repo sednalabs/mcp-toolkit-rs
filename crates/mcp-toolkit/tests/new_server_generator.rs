@@ -2380,9 +2380,7 @@ fn read(path: &Path) -> String {
 }
 
 fn missing_fixture_anchor(kind: &str, label: &str) -> ! {
-    std::panic::panic_any(
-        ["fixture is missing ", kind, " anchor for ", label].concat(),
-    )
+    std::panic::panic_any(["fixture is missing ", kind, " anchor for ", label].concat())
 }
 
 fn replace_once(contents: &str, original: &str, replacement: &str, label: &str) -> String {
