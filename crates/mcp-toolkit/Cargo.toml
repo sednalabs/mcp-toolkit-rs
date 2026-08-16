@@ -20,6 +20,7 @@ mcp-toolkit-policy-core = { version = "0.1.0", path = "../mcp-toolkit-policy-cor
 mcp-toolkit-policy-ffi = { version = "0.1.0", path = "../mcp-toolkit-policy-ffi", optional = true }
 mcp-toolkit-policy-runtime = { version = "0.1.0", path = "../mcp-toolkit-policy-runtime", optional = true }
 mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", optional = true }
+mcp-toolkit-provenance = { version = "0.1.0", path = "../mcp-toolkit-provenance", optional = true }
 mcp-toolkit-scratchpad = { version = "0.1.0", path = "../mcp-toolkit-scratchpad", optional = true }
 mcp-toolkit-server = { version = "0.1.0", path = "../mcp-toolkit-server", optional = true }
 mcp-toolkit-tasks = { version = "0.1.0", path = "../mcp-toolkit-tasks", optional = true }
@@ -36,6 +37,7 @@ full = [
   "policy",
   "policy-ffi",
   "process",
+  "provenance",
   "scratchpad-tokio",
   "server",
   "tasks",
@@ -45,6 +47,7 @@ http = ["mcp-toolkit-http"]
 policy = ["mcp-toolkit-policy-core", "mcp-toolkit-policy-runtime"]
 policy-ffi = ["mcp-toolkit-policy-ffi"]
 process = ["mcp-toolkit-process"]
+provenance = ["mcp-toolkit-provenance"]
 scratchpad = ["mcp-toolkit-scratchpad"]
 scratchpad-tokio = ["scratchpad", "mcp-toolkit-scratchpad/tokio"]
 tasks = ["mcp-toolkit-tasks", "dep:rmcp", "rmcp/server"]
