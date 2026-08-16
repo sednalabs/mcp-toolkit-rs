@@ -2184,11 +2184,11 @@ fn replace_once_after(
 ) -> String {
     let section_start = contents
         .find(section)
-        .unwrap_or_else(|| panic!("fixture is missing section anchor for {label}"));
+        .unwrap_or_else(|| panic!("fixture is missing section anchor for {}", label));
     let search_start = section_start + section.len();
     let relative_start = contents[search_start..]
         .find(original)
-        .unwrap_or_else(|| panic!("fixture is missing mutation anchor for {label}"));
+        .unwrap_or_else(|| panic!("fixture is missing mutation anchor for {}", label));
     let replacement_start = search_start + relative_start;
     let replacement_end = replacement_start + original.len();
     let mut mutated = contents.to_string();
