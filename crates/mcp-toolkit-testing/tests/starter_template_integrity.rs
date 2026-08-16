@@ -71,16 +71,11 @@ fn runner_policy_helpers_match(root_helper: &[u8], template_helper: &[u8]) -> bo
     root_helper == template_helper
 }
 
-fn runner_policy_template_names_on_disk() -> Vec<String> {
+fn template_names_on_disk() -> Vec<String> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(repo_root().join("templates")).expect("templates directory") {
         let entry = entry.expect("template directory entry");
-        // codeql[rust/path-injection] Read-only inventory of repository-controlled test fixtures.
-        let has_runner_policy = entry
-            .path()
-            .join("scripts/workflow_runner_policy_check.py")
-            .is_file();
-        if has_runner_policy {
+        if entry.file_type().expect("template entry type").is_dir() {
             names.push(
                 entry
                     .file_name()
@@ -100,7 +95,7 @@ fn runner_policy_template_inventory_is_complete() {
         .map(|name| (*name).to_string())
         .collect::<Vec<_>>();
     expected.sort();
-    assert_eq!(runner_policy_template_names_on_disk(), expected);
+    assert_eq!(template_names_on_disk(), expected);
 }
 
 #[test]
