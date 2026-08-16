@@ -529,7 +529,9 @@ enum ExpectedStepValue {
 
 #[derive(Clone, Copy)]
 enum PrivilegedStepBody {
-    Run { script: &'static str },
+    Run {
+        script: &'static str,
+    },
     Action {
         uses: &'static str,
         inputs: &'static [(&'static str, ExpectedStepValue)],
