@@ -237,7 +237,10 @@ def safe_extract(archive: Path, destination: Path) -> Path:
                 raise ArtifactError(f"archive contains unsafe member: {member.name}")
         if len(roots) != 1:
             raise ArtifactError("archive must contain exactly one root directory")
-        bundle.extractall(destination, filter="data")
+        if hasattr(tarfile, "data_filter"):
+            bundle.extractall(destination, filter="data")
+        else:
+            bundle.extractall(destination)
     return destination / roots.pop()
 
 

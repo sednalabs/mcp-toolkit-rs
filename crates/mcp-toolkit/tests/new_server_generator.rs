@@ -304,6 +304,42 @@ fn release_preflight_rejects_unpinned_native_release_actions() {
 }
 
 #[test]
+fn release_preflight_accepts_local_native_release_actions() {
+    let root = temp_root("release-preflight-native-local-action");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+    add_lockfile(&output);
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "    steps:\n",
+        "    steps:\n      - uses: ./.github/actions/release-setup\n",
+    );
+    fs::write(&workflow_path, workflow).expect("add local action fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(contract.passed, "{}", contract.detail);
+    assert!(report.ready());
+
+    cleanup(root);
+}
+
+#[test]
 fn release_preflight_rejects_public_project_with_local_toolkit_paths() {
     let root = temp_root("release-preflight-local-paths");
     let output = root.join("public-mcp");

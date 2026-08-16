@@ -459,6 +459,9 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
                 .map(str::trim)
                 .filter_map(|line| line.strip_prefix("uses: "))
                 .filter(|value| {
+                    if value.starts_with("./") {
+                        return false;
+                    }
                     let Some((_action, reference)) = value.rsplit_once('@') else {
                         return true;
                     };
