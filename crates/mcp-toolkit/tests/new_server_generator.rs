@@ -130,7 +130,7 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
                 template.id
             );
             let workflow = read(&output.join(".github/workflows/native-release-artifacts.yml"));
-            assert!(workflow.contains("name: single-crate-public-stdio-generated"));
+            assert!(workflow.contains("BINARY_NAME: single-crate-public-stdio-generated"));
             assert!(!workflow.contains("single-crate-public-stdio-server"));
         }
     }
