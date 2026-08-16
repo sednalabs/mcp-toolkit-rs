@@ -35,7 +35,7 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use rmcp::model::{JsonObject, Meta, Tool, ToolAnnotations};
+use rmcp::model::{JsonObject, MetaObject as Meta, Tool, ToolAnnotations};
 use serde_json::{json, Map, Value};
 
 use crate::mcp_apps::{
