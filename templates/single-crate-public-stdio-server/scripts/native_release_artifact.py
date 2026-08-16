@@ -634,8 +634,14 @@ def compare(
         raise ArtifactError("native artifacts expose different canonical tool inventories")
     if any(report["tool_schema"] != schema for report in reports[1:]):
         raise ArtifactError("native artifacts expose different canonical tool schemas")
-    source_inputs = reports[0]["source_inputs"]
-    if any(report["source_inputs"] != source_inputs for report in reports[1:]):
+    source_inputs = {
+        key: reports[0]["source_inputs"][key]
+        for key in ("manifest_sha256", "lockfile_sha256")
+    }
+    if any(
+        any(report["source_inputs"][key] != value for key, value in source_inputs.items())
+        for report in reports[1:]
+    ):
         raise ArtifactError("native artifacts are bound to different source inputs")
     return {
         "schema": "mcp_native_linux_release_verification",
@@ -652,13 +658,11 @@ def compare(
         "targets": targets,
         "archives": [
             {
-                key: report[key]
-                for key in (
-                    "archive",
-                    "archive_sha256",
-                    "target",
-                    "runtime",
-                )
+                "archive": report["archive"],
+                "archive_sha256": report["archive_sha256"],
+                "binary_sha256": report["source_inputs"]["binary_sha256"],
+                "target": report["target"],
+                "runtime": report["runtime"],
             }
             for report in reports
         ],
@@ -679,7 +683,6 @@ def authorization_receipt(
     source_inputs = verification.get("source_inputs")
     archives = verification.get("archives")
     valid_source_inputs = isinstance(source_inputs, dict) and set(source_inputs) == {
-        "binary_sha256",
         "manifest_sha256",
         "lockfile_sha256",
     } and all(
@@ -919,7 +922,6 @@ class ArtifactTests(unittest.TestCase):
                 },
                 "targets": list(TARGET_MACHINES),
                 "source_inputs": {
-                    "binary_sha256": "c" * 64,
                     "manifest_sha256": "d" * 64,
                     "lockfile_sha256": "e" * 64,
                 },
@@ -935,6 +937,66 @@ class ArtifactTests(unittest.TestCase):
             write_json(path, report)
             with self.assertRaisesRegex(ArtifactError, "not an eligible"):
                 authorization_receipt(path, "123", "1")
+
+    def test_cross_arch_compare_allows_distinct_binaries_but_not_source_inputs(self) -> None:
+        runtime = {
+            "libc": "glibc",
+            "interpreter": TARGET_INTERPRETERS["x86_64-unknown-linux-gnu"],
+            "required_glibc": "2.34",
+            "maximum_supported_glibc": "2.39",
+        }
+        base = {
+            "archive": "archive.tar.gz",
+            "archive_sha256": "a" * 64,
+            "candidate": "b" * 40,
+            "release_source_eligible": True,
+            "source_ref": "refs/heads/main",
+            "runtime": runtime,
+            "tool_inventory": {"tools": ["read"]},
+            "tool_schema": {"tools": [{"name": "read"}]},
+        }
+        x86 = {
+            **base,
+            "target": "x86_64-unknown-linux-gnu",
+            "source_inputs": {
+                "binary_sha256": "c" * 64,
+                "manifest_sha256": "d" * 64,
+                "lockfile_sha256": "e" * 64,
+            },
+        }
+        arm = {
+            **base,
+            "target": "aarch64-unknown-linux-gnu",
+            "runtime": {**runtime, "interpreter": TARGET_INTERPRETERS["aarch64-unknown-linux-gnu"]},
+            "source_inputs": {
+                "binary_sha256": "f" * 64,
+                "manifest_sha256": "d" * 64,
+                "lockfile_sha256": "e" * 64,
+            },
+        }
+        arguments = (
+            [Path("x86.tar.gz"), Path("arm.tar.gz")],
+            "example-server",
+            list(TARGET_MACHINES),
+            "b" * 40,
+            "example/server",
+            "push",
+            "refs/heads/main",
+            "a" * 40,
+            Path("Cargo.toml"),
+            Path("Cargo.lock"),
+        )
+        with mock.patch(__name__ + ".verify", side_effect=[x86, arm]):
+            report = compare(*arguments)
+        self.assertEqual(report["archives"][0]["binary_sha256"], "c" * 64)
+        self.assertEqual(report["archives"][1]["binary_sha256"], "f" * 64)
+        mismatched = {
+            **arm,
+            "source_inputs": {**arm["source_inputs"], "lockfile_sha256": "0" * 64},
+        }
+        with mock.patch(__name__ + ".verify", side_effect=[x86, mismatched]):
+            with self.assertRaisesRegex(ArtifactError, "different source inputs"):
+                compare(*arguments)
 
 
 def parser() -> argparse.ArgumentParser:
