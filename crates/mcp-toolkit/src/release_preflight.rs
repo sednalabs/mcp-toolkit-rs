@@ -836,10 +836,7 @@ fn expected_step_value_matches(actual: Option<&YamlValue>, expected: ExpectedSte
 /// contract. Any additional strategy option, matrix dimension, include row,
 /// or row field can change where unprivileged release code executes, so the
 /// workflow must match the canonical hosted runner/target product exactly.
-fn validate_exact_native_architecture_strategy(
-    job: &YamlMapping,
-    context: &str,
-) -> Vec<String> {
+fn validate_exact_native_architecture_strategy(job: &YamlMapping, context: &str) -> Vec<String> {
     let valid = yaml_get(job, "runs-on").and_then(YamlValue::as_str)
         == Some("${{ matrix.runner }}")
         && yaml_get(job, "strategy")
