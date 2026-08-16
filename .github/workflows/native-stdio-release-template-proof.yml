@@ -113,6 +113,9 @@ jobs:
           cmp \
             scripts/native_release_artifact.py \
             templates/single-crate-public-stdio-server/scripts/native_release_artifact.py
+          cmp \
+            scripts/workflow_runner_policy_check.py \
+            templates/single-crate-public-stdio-server/scripts/workflow_runner_policy_check.py
 
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain stable

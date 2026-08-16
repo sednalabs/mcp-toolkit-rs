@@ -208,8 +208,13 @@ workflow concluded successfully.
 Toolkit changes to that generated lane are exercised before merge by the
 read-only, non-attesting `native-stdio-release-template-proof` workflow; the
 separate trusted template attestation workflow runs only on `main` or version
-tag pushes. GitHub-hosted attestations are provenance evidence; they do not
-publish a release.
+tag pushes. Release preflight structurally validates that optional privileged
+wrapper when it is present, including its exact trigger, job graph, isolated
+OIDC permissions, hosted runner, pinned actions, credential-free full-history
+checkout, and source-bound authorization path. The hosted proof also requires
+the generated template's runner-policy helper to remain byte-identical to the
+canonical root copy. GitHub-hosted attestations are provenance evidence; they
+do not publish a release.
 An unmerged candidate can prove only the read-only lane. Trusted attestation is
 an explicit post-merge acceptance gap until the protected-`main` workflow runs
 successfully and its exact authorization receipt and attestations are verified.

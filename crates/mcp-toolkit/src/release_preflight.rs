@@ -839,6 +839,261 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     Ok(violations)
 }
 
+fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<String>, String> {
+    let document: YamlValue = serde_yaml_ng::from_str(workflow)
+        .map_err(|error| format!("invalid template attestation workflow YAML: {error}"))?;
+    let root = yaml_mapping(&document, "template attestation workflow")?;
+    let triggers = yaml_get(root, "on")
+        .ok_or_else(|| "template attestation workflow.on is required".to_string())
+        .and_then(|value| yaml_mapping(value, "template attestation workflow.on"))?;
+    let mut violations = Vec::new();
+    if triggers.len() != 1 || yaml_get(triggers, "push").is_none() {
+        violations.push(
+            "template attestation workflow must be triggered only by trusted push events"
+                .to_string(),
+        );
+    } else if let Some(push) = yaml_get(triggers, "push") {
+        let push = yaml_mapping(push, "template attestation workflow.on.push")?;
+        let mut push_keys = push
+            .keys()
+            .filter_map(YamlValue::as_str)
+            .collect::<Vec<_>>();
+        push_keys.sort_unstable();
+        if push.len() != 2
+            || push_keys != ["branches", "tags"]
+            || !exact_strings(yaml_get(push, "branches"), &["main"])
+            || !exact_strings(yaml_get(push, "tags"), &["v[0-9]*"])
+        {
+            violations.push(
+                "template attestation push trigger must contain only exact main and version-tag filters"
+                    .to_string(),
+            );
+        }
+    }
+    if !permission_map_matches(yaml_get(root, "permissions"), &[("contents", "read")]) {
+        violations
+            .push("template attestation workflow permissions must be contents: read".to_string());
+    }
+
+    let jobs = yaml_get(root, "jobs")
+        .ok_or_else(|| "template attestation workflow.jobs is required".to_string())
+        .and_then(|value| yaml_mapping(value, "template attestation workflow.jobs"))?;
+    let mut job_names = jobs
+        .keys()
+        .filter_map(YamlValue::as_str)
+        .collect::<Vec<_>>();
+    job_names.sort_unstable();
+    if jobs.len() != 2 || job_names != ["attest-native-template", "prove-native-template"] {
+        violations.push(
+            "template attestation workflow jobs must contain only proof and attestation jobs"
+                .to_string(),
+        );
+    }
+    let prove = yaml_get(jobs, "prove-native-template")
+        .ok_or_else(|| "prove-native-template job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "prove-native-template"))?;
+    let attest = yaml_get(jobs, "attest-native-template")
+        .ok_or_else(|| "attest-native-template job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "attest-native-template"))?;
+
+    let mut prove_keys = prove
+        .keys()
+        .filter_map(YamlValue::as_str)
+        .collect::<Vec<_>>();
+    prove_keys.sort_unstable();
+    let mut attest_keys = attest
+        .keys()
+        .filter_map(YamlValue::as_str)
+        .collect::<Vec<_>>();
+    attest_keys.sort_unstable();
+    if prove.len() != 2 || prove_keys != ["permissions", "uses"] {
+        violations.push(
+            "template proof job must contain only its local reusable call and read permission"
+                .to_string(),
+        );
+    }
+    if attest.len() != 8
+        || attest_keys
+            != [
+                "env",
+                "if",
+                "name",
+                "needs",
+                "permissions",
+                "runs-on",
+                "steps",
+                "timeout-minutes",
+            ]
+    {
+        violations.push(
+            "template attestation job must contain the complete exact privileged job contract"
+                .to_string(),
+        );
+    }
+
+    if !permission_map_matches(yaml_get(prove, "permissions"), &[("contents", "read")])
+        || yaml_get(prove, "uses").and_then(YamlValue::as_str)
+            != Some("./.github/workflows/native-stdio-release-template-proof.yml")
+        || yaml_get(prove, "runs-on").is_some()
+        || yaml_get(prove, "steps").is_some()
+    {
+        violations.push(
+            "template proof job must call only the local read-only reusable proof workflow"
+                .to_string(),
+        );
+    }
+    if job_needs(attest, "attest-native-template")? != ["prove-native-template"] {
+        violations
+            .push("template attestation must depend on successful template proof".to_string());
+    }
+    if yaml_get(attest, "runs-on").and_then(YamlValue::as_str) != Some("ubuntu-24.04") {
+        violations.push(
+            "template attestation job must use the exact GitHub-hosted runner label".to_string(),
+        );
+    }
+    if !permission_map_matches(
+        yaml_get(attest, "permissions"),
+        &[
+            ("attestations", "write"),
+            ("contents", "read"),
+            ("id-token", "write"),
+        ],
+    ) {
+        violations.push(
+            "template attestation job must isolate exact job-scoped OIDC and attestation permissions"
+                .to_string(),
+        );
+    }
+    if yaml_get(attest, "if")
+        .and_then(YamlValue::as_str)
+        .map(str::trim)
+        != Some(
+            "github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))",
+        )
+    {
+        violations.push(
+            "template attestation job must be gated to main or version-tag push events".to_string(),
+        );
+    }
+
+    let mut checkout_count = 0;
+    let mut all_uses = Vec::new();
+    for step in step_mappings(attest, "attest-native-template")? {
+        let Some(uses) = yaml_get(step, "uses").and_then(YamlValue::as_str) else {
+            continue;
+        };
+        if uses.starts_with("actions/checkout@") {
+            checkout_count += 1;
+            let Some(with) = yaml_get(step, "with").and_then(YamlValue::as_mapping) else {
+                violations.push(
+                    "template attestation checkout must define exact candidate settings"
+                        .to_string(),
+                );
+                continue;
+            };
+            if yaml_get(with, "persist-credentials").and_then(YamlValue::as_bool) != Some(false)
+                || yaml_get(with, "ref").and_then(YamlValue::as_str) != Some("${{ github.sha }}")
+                || yaml_get(with, "fetch-depth").and_then(YamlValue::as_i64) != Some(0)
+            {
+                violations.push(
+                    "template attestation checkout must disable credentials, pin github.sha, and fetch complete history"
+                        .to_string(),
+                );
+            }
+        }
+        if !uses.starts_with("./") {
+            let pinned = uses.rsplit_once('@').is_some_and(|(_, reference)| {
+                reference.len() == 40
+                    && reference
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            });
+            if !pinned {
+                violations.push(format!(
+                    "template attestation external action is not pinned to a lowercase SHA: {uses}"
+                ));
+            }
+        }
+        all_uses.push(uses);
+    }
+    if checkout_count != 1 {
+        violations
+            .push("template attestation must contain exactly one pinned checkout step".to_string());
+    }
+    if !all_uses
+        .iter()
+        .any(|uses| uses.starts_with("actions/attest-build-provenance@"))
+    {
+        violations.push("template attestation job is missing provenance attestation".to_string());
+    }
+    let required_action_counts = [
+        ("actions/checkout@", 1),
+        ("actions/download-artifact@", 3),
+        ("actions/attest-build-provenance@", 1),
+        ("actions/upload-artifact@", 1),
+    ];
+    if all_uses.len() != 6
+        || required_action_counts.iter().any(|(prefix, expected)| {
+            all_uses
+                .iter()
+                .filter(|uses| uses.starts_with(prefix))
+                .count()
+                != *expected
+        })
+    {
+        violations.push(
+            "template attestation job must contain the complete exact checkout, download, attestation, and receipt-upload action set"
+                .to_string(),
+        );
+    }
+
+    let attest_run = job_run_text(attest, "attest-native-template")?;
+    for required in [
+        "git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+        "source_main_proven=$(python3 scripts/native_release_artifact.py prove-source",
+        "python3 scripts/native_release_artifact.py compare",
+        "cmp trusted-template-verification.json downloaded/native-template-verification.json",
+        "python3 scripts/native_release_artifact.py authorize",
+    ] {
+        if !has_active_command(&attest_run, required) {
+            violations.push(format!(
+                "template attestation authorization path is missing active command {required}"
+            ));
+        }
+    }
+    if !attest_run.contains("--source-main-proven") {
+        violations.push(
+            "template attestation authorization path must bind protected-main ancestry".to_string(),
+        );
+    }
+    let authorize_command = attest_run
+        .lines()
+        .find(|line| line.starts_with("python3 scripts/native_release_artifact.py authorize"));
+    if match authorize_command {
+        Some(command) => [
+            "--binary-name",
+            "--candidate",
+            "--source-repository",
+            "--source-event",
+            "--source-ref",
+            "--source-tree",
+            "--workflow-run-id",
+            "--workflow-run-attempt",
+            "--output release-authorization.json",
+        ]
+        .iter()
+        .any(|argument| !command.contains(argument)),
+        None => true,
+    } {
+        violations.push(
+            "template authorization receipt must bind exact source and workflow-run identity"
+                .to_string(),
+        );
+    }
+
+    Ok(violations)
+}
+
 fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
     let workflow_path = root.join(".github/workflows/native-release-artifacts.yml");
     let helper_path = root.join("scripts/native_release_artifact.py");
@@ -869,6 +1124,23 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
                         .filter(|needle| !helper.contains(**needle))
                         .map(|needle| format!("release verifier is missing {needle}")),
                 );
+                let template_attestation_path =
+                    root.join(".github/workflows/native-stdio-release-template-attest.yml");
+                if template_attestation_path.exists() {
+                    match fs::read_to_string(&template_attestation_path) {
+                        Ok(template_attestation) => {
+                            match validate_native_template_attestation_workflow(
+                                &template_attestation,
+                            ) {
+                                Ok(template_violations) => violations.extend(template_violations),
+                                Err(error) => violations.push(error),
+                            }
+                        }
+                        Err(error) => violations.push(format!(
+                            "failed to read native template attestation workflow: {error}"
+                        )),
+                    }
+                }
                 if violations.is_empty() {
                     (
                         true,
@@ -894,7 +1166,7 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
     ReleasePreflightCheck {
         label: "Native Linux release contract",
         target:
-            ".github/workflows/native-release-artifacts.yml + scripts/native_release_artifact.py"
+            ".github/workflows/native-release-artifacts.yml + optional native template attestation workflow + scripts/native_release_artifact.py"
                 .to_string(),
         required: true,
         passed,

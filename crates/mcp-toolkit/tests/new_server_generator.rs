@@ -581,6 +581,114 @@ fn release_preflight_rejects_attestation_before_consumer_verification() {
 }
 
 #[test]
+fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
+    let root = temp_root("release-preflight-native-template-attestation");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let wrapper_path = output.join(".github/workflows/native-stdio-release-template-attest.yml");
+    let canonical_wrapper = read(
+        &default_toolkit_root().join(".github/workflows/native-stdio-release-template-attest.yml"),
+    );
+    fs::write(&wrapper_path, &canonical_wrapper).expect("install canonical wrapper fixture");
+
+    let canonical_report = inspect_release_preflight(&output);
+    let canonical_contract = canonical_report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(canonical_contract.passed, "{}", canonical_contract.detail);
+
+    let weakened_cases = [
+        (
+            "trigger",
+            "on:\n  push:\n",
+            "on:\n  workflow_dispatch:\n  push:\n",
+            "triggered only by trusted push events",
+        ),
+        (
+            "job graph",
+            "jobs:\n",
+            "jobs:\n  unexpected-job:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo unexpected\n\n",
+            "must contain only proof and attestation jobs",
+        ),
+        (
+            "dependency",
+            "    needs: prove-native-template\n",
+            "    needs: []\n",
+            "depend on successful template proof",
+        ),
+        (
+            "OIDC isolation",
+            "      id-token: write\n",
+            "      id-token: read\n",
+            "isolate exact job-scoped OIDC",
+        ),
+        (
+            "runner",
+            "    runs-on: ubuntu-24.04\n",
+            "    runs-on: self-hosted\n",
+            "exact GitHub-hosted runner label",
+        ),
+        (
+            "action pin",
+            "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+            "actions/attest-build-provenance@main",
+            "not pinned",
+        ),
+        (
+            "checkout custody",
+            "          persist-credentials: false\n",
+            "          persist-credentials: true\n",
+            "disable credentials",
+        ),
+        (
+            "authorization path",
+            "          python3 scripts/native_release_artifact.py authorize \\\n",
+            "          echo skipped-authorization \\\n",
+            "authorization path is missing active command",
+        ),
+    ];
+
+    for (label, original, replacement, expected_detail) in weakened_cases {
+        assert!(
+            canonical_wrapper.contains(original),
+            "canonical fixture is missing mutation anchor for {label}"
+        );
+        fs::write(
+            &wrapper_path,
+            canonical_wrapper.replacen(original, replacement, 1),
+        )
+        .unwrap_or_else(|error| panic!("write weakened {label} fixture: {error}"));
+        let report = inspect_release_preflight(&output);
+        let contract = report
+            .checks
+            .iter()
+            .find(|check| check.label == "Native Linux release contract")
+            .expect("native release contract check");
+        assert!(!contract.passed, "{label} weakening should fail preflight");
+        assert!(
+            contract.detail.contains(expected_detail),
+            "{label} weakening produced unexpected detail: {}",
+            contract.detail
+        );
+    }
+
+    cleanup(root);
+}
+
+#[test]
 fn release_preflight_accepts_local_native_release_actions() {
     let root = temp_root("release-preflight-native-local-action");
     let output = root.join("public-mcp");

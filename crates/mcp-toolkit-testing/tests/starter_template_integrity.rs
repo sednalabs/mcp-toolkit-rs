@@ -35,6 +35,7 @@ fn standalone_public_template_includes_required_repo_files() {
         "scripts/dependency_governance_check.sh",
         "scripts/rebaseline_tool_schema_snapshot.sh",
         "scripts/native_release_artifact.py",
+        "scripts/workflow_runner_policy_check.py",
         ".github/workflows/rust-baseline.yml",
         ".github/workflows/native-release-artifacts.yml",
         ".github/workflows/code-coverage.yml",
@@ -58,6 +59,35 @@ fn standalone_public_template_uses_the_canonical_native_release_helper() {
     let template_helper = std::fs::read(template_root().join("scripts/native_release_artifact.py"))
         .expect("template native release helper");
     assert_eq!(template_helper, root_helper);
+}
+
+fn runner_policy_helpers_match(root_helper: &[u8], template_helper: &[u8]) -> bool {
+    root_helper == template_helper
+}
+
+#[test]
+fn standalone_public_template_uses_the_canonical_runner_policy_helper() {
+    let root_helper = std::fs::read(repo_root().join("scripts/workflow_runner_policy_check.py"))
+        .expect("root workflow runner policy helper");
+    let template_helper =
+        std::fs::read(template_root().join("scripts/workflow_runner_policy_check.py"))
+            .expect("template workflow runner policy helper");
+    assert!(
+        runner_policy_helpers_match(&root_helper, &template_helper),
+        "template workflow runner policy helper drifted from the canonical root copy"
+    );
+}
+
+#[test]
+fn runner_policy_helper_integrity_rejects_template_drift() {
+    let root_helper = std::fs::read(repo_root().join("scripts/workflow_runner_policy_check.py"))
+        .expect("root workflow runner policy helper");
+    let mut drifted_template = root_helper.clone();
+    drifted_template.extend_from_slice(b"\n# simulated template drift\n");
+    assert!(!runner_policy_helpers_match(
+        &root_helper,
+        &drifted_template
+    ));
 }
 
 #[test]
