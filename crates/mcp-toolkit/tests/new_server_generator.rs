@@ -498,6 +498,210 @@ fn release_preflight_rejects_unexpected_release_runner() {
 }
 
 #[test]
+fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
+    let root = temp_root("release-preflight-native-matrix-shape");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let canonical = read(&workflow_path);
+    let include_rows = concat!(
+        "        include:\n",
+        "          - runner: ubuntu-24.04\n",
+        "            target: x86_64-unknown-linux-gnu\n",
+        "          - runner: ubuntu-24.04-arm\n",
+        "            target: aarch64-unknown-linux-gnu\n",
+    );
+    let cases = vec![
+        (
+            "runs-on expression drift",
+            replace_once(
+                &canonical,
+                "    runs-on: ${{ matrix.runner }}\n",
+                "    runs-on: ${{ matrix.os }}\n",
+                "runs-on expression drift",
+            ),
+        ),
+        (
+            "self-hosted extra runner dimension",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!(
+                    "{include_rows}        runner: [ubuntu-24.04, self-hosted]\n"
+                ),
+                "self-hosted extra runner dimension",
+            ),
+        ),
+        (
+            "extra target dimension",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!(
+                    "{include_rows}        target: [x86_64-unknown-linux-gnu]\n"
+                ),
+                "extra target dimension",
+            ),
+        ),
+        (
+            "extra os dimension",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!("{include_rows}        os: [linux]\n"),
+                "extra os dimension",
+            ),
+        ),
+        (
+            "matrix exclude",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!("{include_rows}        exclude: []\n"),
+                "matrix exclude",
+            ),
+        ),
+        (
+            "unknown matrix key",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!("{include_rows}        unexpected: true\n"),
+                "unknown matrix key",
+            ),
+        ),
+        (
+            "strategy max-parallel",
+            replace_once(
+                &canonical,
+                "      fail-fast: false\n",
+                "      fail-fast: false\n      max-parallel: 1\n",
+                "strategy max-parallel",
+            ),
+        ),
+        (
+            "strategy unknown key",
+            replace_once(
+                &canonical,
+                "      fail-fast: false\n",
+                "      fail-fast: false\n      unexpected: true\n",
+                "strategy unknown key",
+            ),
+        ),
+        (
+            "fail-fast drift",
+            replace_once(
+                &canonical,
+                "      fail-fast: false\n",
+                "      fail-fast: true\n",
+                "fail-fast drift",
+            ),
+        ),
+        (
+            "missing matrix row",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04-arm\n            target: aarch64-unknown-linux-gnu\n",
+                "",
+                "missing matrix row",
+            ),
+        ),
+        (
+            "extra matrix row",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!(
+                    "{include_rows}          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n"
+                ),
+                "extra matrix row",
+            ),
+        ),
+        (
+            "duplicate matrix row",
+            replace_once(
+                &canonical,
+                include_rows,
+                concat!(
+                    "        include:\n",
+                    "          - runner: ubuntu-24.04\n",
+                    "            target: x86_64-unknown-linux-gnu\n",
+                    "          - runner: ubuntu-24.04\n",
+                    "            target: x86_64-unknown-linux-gnu\n",
+                ),
+                "duplicate matrix row",
+            ),
+        ),
+        (
+            "reordered matrix rows",
+            replace_once(
+                &canonical,
+                include_rows,
+                concat!(
+                    "        include:\n",
+                    "          - runner: ubuntu-24.04-arm\n",
+                    "            target: aarch64-unknown-linux-gnu\n",
+                    "          - runner: ubuntu-24.04\n",
+                    "            target: x86_64-unknown-linux-gnu\n",
+                ),
+                "reordered matrix rows",
+            ),
+        ),
+        (
+            "matrix row extra key",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n            unexpected: true\n",
+                "matrix row extra key",
+            ),
+        ),
+        (
+            "matrix row missing key",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n",
+                "matrix row missing key",
+            ),
+        ),
+        (
+            "matrix row target drift",
+            replace_once(
+                &canonical,
+                "            target: x86_64-unknown-linux-gnu\n",
+                "            target: x86_64-unknown-linux-musl\n",
+                "matrix row target drift",
+            ),
+        ),
+    ];
+
+    for (label, mutated) in cases {
+        assert_native_release_contract_rejects(
+            &output,
+            &workflow_path,
+            &canonical,
+            label,
+            mutated,
+            "exact ordered x86_64 and arm64 matrix.include",
+        );
+    }
+
+    cleanup(root);
+}
+
+#[test]
 fn release_preflight_rejects_incomplete_tag_ancestry_proof() {
     let root = temp_root("release-preflight-native-tag-ancestry");
     let output = root.join("public-mcp");

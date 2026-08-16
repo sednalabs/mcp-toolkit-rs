@@ -140,6 +140,11 @@ metadata, GitHub workflows, CodeQL, dependency governance, schema/probe proof,
 dual-native release semantics, and high-confidence secret markers without
 executing this server.
 
+The release policy keeps architecture routing closed: the build strategy is
+exactly `fail-fast: false` plus the ordered x86_64 and arm64 hosted
+`matrix.include` rows. Extra strategy options, matrix dimensions, rows, and row
+fields fail preflight.
+
 The scripted probe scenario exercises the generated binary through a real MCP
 client:
 

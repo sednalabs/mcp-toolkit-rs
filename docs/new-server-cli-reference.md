@@ -172,8 +172,11 @@ metadata, baseline CI, CodeQL, coverage, dependency governance, schema/probe
 proof for the generated transport, governance docs, portable toolkit
 dependencies, no committed Cargo path overrides, a pinned dual-native Linux
 artifact workflow, an exact archive verifier, and no high-confidence secret
-markers in generated text files. The native workflow must use literal x86_64
-and arm64 hosted-runner matrix rows, exact candidate readback, locked builds,
+markers in generated text files. The native workflow must use the exact closed
+architecture strategy: `fail-fast: false`, only `matrix.include`, and the two
+ordered literal x86_64 and arm64 hosted runner/target rows with no additional
+strategy options, matrix dimensions, or row fields. It also requires exact
+candidate readback, locked builds,
 ELF machine plus GNU interpreter/GLIBC checks, source/input/dependency-bound
 CycloneDX SBOMs, complete checksums, canonical tool inventory/schema parity,
 SHA-qualified artifacts, consumer reverification, and trusted-push GitHub

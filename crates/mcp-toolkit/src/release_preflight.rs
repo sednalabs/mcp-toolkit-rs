@@ -832,6 +832,61 @@ fn expected_step_value_matches(actual: Option<&YamlValue>, expected: ExpectedSte
     }
 }
 
+/// Validates the complete native architecture routing boundary as one closed
+/// contract. Any additional strategy option, matrix dimension, include row,
+/// or row field can change where unprivileged release code executes, so the
+/// workflow must match the canonical hosted runner/target product exactly.
+fn validate_exact_native_architecture_strategy(
+    job: &YamlMapping,
+    context: &str,
+) -> Vec<String> {
+    let valid = yaml_get(job, "runs-on").and_then(YamlValue::as_str)
+        == Some("${{ matrix.runner }}")
+        && yaml_get(job, "strategy")
+            .and_then(YamlValue::as_mapping)
+            .is_some_and(|strategy| {
+                mapping_has_exact_keys(strategy, &["fail-fast", "matrix"])
+                    && yaml_get(strategy, "fail-fast").and_then(YamlValue::as_bool) == Some(false)
+                    && yaml_get(strategy, "matrix")
+                        .and_then(YamlValue::as_mapping)
+                        .is_some_and(|matrix| {
+                            mapping_has_exact_keys(matrix, &["include"])
+                                && yaml_get(matrix, "include")
+                                    .and_then(YamlValue::as_sequence)
+                                    .is_some_and(|include| {
+                                        let expected = [
+                                            ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
+                                            ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
+                                        ];
+                                        include.len() == expected.len()
+                                            && include.iter().zip(expected).all(
+                                                |(row, (expected_runner, expected_target))| {
+                                                    row.as_mapping().is_some_and(|row| {
+                                                        mapping_has_exact_keys(
+                                                            row,
+                                                            &["runner", "target"],
+                                                        ) && yaml_get(row, "runner")
+                                                            .and_then(YamlValue::as_str)
+                                                            == Some(expected_runner)
+                                                            && yaml_get(row, "target")
+                                                                .and_then(YamlValue::as_str)
+                                                                == Some(expected_target)
+                                                    })
+                                                },
+                                            )
+                                    })
+                        })
+            });
+
+    if valid {
+        Vec::new()
+    } else {
+        vec![format!(
+            "{context} must use only runs-on: ${{{{ matrix.runner }}}}, fail-fast: false, and the exact ordered x86_64 and arm64 matrix.include hosted runner/target rows with no extra keys or dimensions"
+        )]
+    }
+}
+
 /// Validates only the privileged job's ordered step boundary. Workflow-specific
 /// trigger, job, dependency, permission, and runner semantics remain in their
 /// owning validators. Both generated and toolkit-root workflows use this one
@@ -996,8 +1051,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         violations
             .push("build and verification jobs must inherit read-only permissions".to_string());
     }
-    if yaml_get(build, "runs-on").and_then(YamlValue::as_str) != Some("${{ matrix.runner }}")
-        || yaml_get(verify, "runs-on").and_then(YamlValue::as_str) != Some("ubuntu-24.04")
+    if yaml_get(verify, "runs-on").and_then(YamlValue::as_str) != Some("ubuntu-24.04")
         || yaml_get(attest, "runs-on").and_then(YamlValue::as_str) != Some("ubuntu-24.04")
     {
         violations.push(
@@ -1036,33 +1090,10 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             .push("attestation must depend on successful build and verification jobs".to_string());
     }
 
-    let strategy = yaml_get(build, "strategy")
-        .ok_or_else(|| "build strategy is required".to_string())
-        .and_then(|value| yaml_mapping(value, "build strategy"))?;
-    let matrix = yaml_get(strategy, "matrix")
-        .ok_or_else(|| "build matrix is required".to_string())
-        .and_then(|value| yaml_mapping(value, "build matrix"))?;
-    let include = yaml_get(matrix, "include")
-        .and_then(YamlValue::as_sequence)
-        .ok_or_else(|| "build matrix include must be a sequence".to_string())?;
-    let expected_rows = [
-        ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
-        ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
-    ];
-    let actual_rows = include
-        .iter()
-        .filter_map(YamlValue::as_mapping)
-        .filter_map(|row| {
-            Some((
-                yaml_get(row, "runner")?.as_str()?,
-                yaml_get(row, "target")?.as_str()?,
-            ))
-        })
-        .collect::<Vec<_>>();
-    if actual_rows != expected_rows {
-        violations
-            .push("native matrix must use the exact x86_64 and arm64 hosted runners".to_string());
-    }
+    violations.extend(validate_exact_native_architecture_strategy(
+        build,
+        "native build architecture strategy",
+    ));
 
     let build_run = job_run_text(build, "build-native-linux")?;
     if !has_active_command(&build_run, "git fetch --force --no-tags origin")
