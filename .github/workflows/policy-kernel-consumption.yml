@@ -68,7 +68,7 @@ jobs:
     steps:
       - name: Checkout toolkit
         # actions/checkout v6
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -176,7 +176,7 @@ jobs:
       - name: Checkout policy kernel
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
         # actions/checkout v6
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ env.POLICY_KERNEL_REPOSITORY }}
           ref: ${{ env.POLICY_KERNEL_REF }}
@@ -241,7 +241,7 @@ jobs:
       - name: Cache cargo artifacts
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
         # swatinem/rust-cache v2
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        uses: swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3
         with:
           shared-key: policy-kernel-consumption-${{ runner.os }}
           cache-targets: true
