@@ -21,6 +21,7 @@ mcp-toolkit-policy-runtime = { version = "0.1.0", path = "../mcp-toolkit-policy-
 mcp-toolkit-process = { version = "0.1.0", path = "../mcp-toolkit-process", optional = true }
 mcp-toolkit-scratchpad = { version = "0.1.0", path = "../mcp-toolkit-scratchpad", optional = true }
 mcp-toolkit-gemini = { version = "0.1.0", path = "../mcp-toolkit-gemini", optional = true }
+mcp-toolkit-tasks = { version = "0.1.0", path = "../mcp-toolkit-tasks", optional = true }
 mcp-toolkit-server = { version = "0.1.0", path = "../mcp-toolkit-server", optional = true }
 rmcp = { version = "=3.1.2", default-features = false, optional = true }
 serde_json = "1.0.149"
@@ -36,6 +37,7 @@ full = [
   "process",
   "scratchpad-tokio",
   "gemini",
+  "tasks",
   "server",
 ]
 auth = ["mcp-toolkit-auth"]
@@ -46,6 +48,7 @@ process = ["mcp-toolkit-process"]
 scratchpad = ["mcp-toolkit-scratchpad"]
 scratchpad-tokio = ["scratchpad", "mcp-toolkit-scratchpad/tokio"]
 gemini = ["mcp-toolkit-gemini"]
+tasks = ["mcp-toolkit-tasks"]
 server = [
   "mcp-toolkit-server",
   "mcp-toolkit-server/full",
