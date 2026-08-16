@@ -529,7 +529,7 @@ enum ExpectedStepValue {
 
 #[derive(Clone, Copy)]
 enum PrivilegedStepBody {
-    Run,
+    Run { script: &'static str },
     Action {
         uses: &'static str,
         inputs: &'static [(&'static str, ExpectedStepValue)],
@@ -547,6 +547,97 @@ const DOWNLOAD_ACTION: &str = "actions/download-artifact@3e5f45b2cfb9172054b4087
 const ATTEST_ACTION: &str =
     "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8";
 const UPLOAD_ACTION: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+
+const TRUSTED_SOURCE_PROOF_RUN: &str = r#"set -euo pipefail
+git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main
+source_main_proven=$(python3 scripts/native_release_artifact.py prove-source \
+  --repository . \
+  --candidate "$GITHUB_SHA" \
+  --source-event "$GITHUB_EVENT_NAME" \
+  --source-ref "$GITHUB_REF")
+test "$source_main_proven" = true
+echo "SOURCE_MAIN_PROVEN=$source_main_proven" >> "$GITHUB_ENV"
+"#;
+
+const GENERATED_REVERIFY_RUN: &str = r#"set -euo pipefail
+test "$GITHUB_EVENT_NAME" = push
+case "$GITHUB_REF" in
+  refs/heads/main|refs/tags/v[0-9]*) ;;
+  *) echo "attestation requires a main push or version tag" >&2; exit 1 ;;
+esac
+test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+source_tree=$(git rev-parse HEAD^{tree})
+x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+python3 scripts/native_release_artifact.py compare \
+  --archive "$x86_archive" \
+  --target x86_64-unknown-linux-gnu \
+  --archive "$arm_archive" \
+  --target aarch64-unknown-linux-gnu \
+  --binary-name "$BINARY_NAME" \
+  --candidate "$GITHUB_SHA" \
+  --source-repository "$GITHUB_REPOSITORY" \
+  --source-event "$GITHUB_EVENT_NAME" \
+  --source-ref "$GITHUB_REF" \
+  --source-tree "$source_tree" \
+  --source-main-proven "$SOURCE_MAIN_PROVEN" \
+  --manifest Cargo.toml \
+  --lockfile Cargo.lock \
+  --output trusted-verification.json
+cmp trusted-verification.json downloaded/native-release-verification.json
+test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+python3 scripts/native_release_artifact.py authorize \
+  --verification trusted-verification.json \
+  --binary-name "$BINARY_NAME" \
+  --candidate "$GITHUB_SHA" \
+  --source-repository "$GITHUB_REPOSITORY" \
+  --source-event "$GITHUB_EVENT_NAME" \
+  --source-ref "$GITHUB_REF" \
+  --source-tree "$source_tree" \
+  --workflow-run-id "$GITHUB_RUN_ID" \
+  --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+  --output release-authorization.json
+"#;
+
+const ROOT_REVERIFY_RUN: &str = r#"set -euo pipefail
+test "$GITHUB_EVENT_NAME" = push
+case "$GITHUB_REF" in
+  refs/heads/main|refs/tags/v[0-9]*) ;;
+  *) echo "attestation requires a main push or version tag" >&2; exit 1 ;;
+esac
+test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+source_tree=$(git rev-parse HEAD^{tree})
+x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+python3 scripts/native_release_artifact.py compare \
+  --archive "$x86_archive" \
+  --target x86_64-unknown-linux-gnu \
+  --archive "$arm_archive" \
+  --target aarch64-unknown-linux-gnu \
+  --binary-name "$BINARY_NAME" \
+  --candidate "$GITHUB_SHA" \
+  --source-repository "$GITHUB_REPOSITORY" \
+  --source-event "$GITHUB_EVENT_NAME" \
+  --source-ref "$GITHUB_REF" \
+  --source-tree "$source_tree" \
+  --source-main-proven "$SOURCE_MAIN_PROVEN" \
+  --manifest "$MANIFEST_PATH" \
+  --lockfile templates/single-crate-public-stdio-server/Cargo.lock \
+  --output trusted-template-verification.json
+cmp trusted-template-verification.json downloaded/native-template-verification.json
+test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+python3 scripts/native_release_artifact.py authorize \
+  --verification trusted-template-verification.json \
+  --binary-name "$BINARY_NAME" \
+  --candidate "$GITHUB_SHA" \
+  --source-repository "$GITHUB_REPOSITORY" \
+  --source-event "$GITHUB_EVENT_NAME" \
+  --source-ref "$GITHUB_REF" \
+  --source-tree "$source_tree" \
+  --workflow-run-id "$GITHUB_RUN_ID" \
+  --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+  --output release-authorization.json
+"#;
 
 const CHECKOUT_INPUTS: &[(&str, ExpectedStepValue)] = &[
     ("fetch-depth", ExpectedStepValue::Integer(0)),
@@ -633,7 +724,9 @@ const GENERATED_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
     },
     PrivilegedStepContract {
         name: "Prove protected-main ancestry for trusted source",
-        body: PrivilegedStepBody::Run,
+        body: PrivilegedStepBody::Run {
+            script: TRUSTED_SOURCE_PROOF_RUN,
+        },
     },
     PrivilegedStepContract {
         name: "Download verified artifact set",
@@ -644,7 +737,9 @@ const GENERATED_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
     },
     PrivilegedStepContract {
         name: "Reverify trusted consumer artifact set",
-        body: PrivilegedStepBody::Run,
+        body: PrivilegedStepBody::Run {
+            script: GENERATED_REVERIFY_RUN,
+        },
     },
     PrivilegedStepContract {
         name: "Attest verified native archives, checksums, and report",
@@ -672,7 +767,9 @@ const ROOT_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
     },
     PrivilegedStepContract {
         name: "Prove protected-main ancestry for trusted source",
-        body: PrivilegedStepBody::Run,
+        body: PrivilegedStepBody::Run {
+            script: TRUSTED_SOURCE_PROOF_RUN,
+        },
     },
     PrivilegedStepContract {
         name: "Download immutable template lockfile",
@@ -697,7 +794,9 @@ const ROOT_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
     },
     PrivilegedStepContract {
         name: "Reverify trusted consumer artifact set",
-        body: PrivilegedStepBody::Run,
+        body: PrivilegedStepBody::Run {
+            script: ROOT_REVERIFY_RUN,
+        },
     },
     PrivilegedStepContract {
         name: "Attest verified template archives, checksums, and report",
@@ -732,9 +831,11 @@ fn expected_step_value_matches(actual: Option<&YamlValue>, expected: ExpectedSte
 }
 
 /// Validates only the privileged job's ordered step boundary. Workflow-specific
-/// trigger, job, dependency, permission, runner, and command semantics remain
-/// in their owning validators; both generated and toolkit-root workflows use
-/// this one fail-closed step/key/action/input contract.
+/// trigger, job, dependency, permission, and runner semantics remain in their
+/// owning validators. Both generated and toolkit-root workflows use this one
+/// fail-closed step/key/action/input/run-body contract. YAML scalar parsing
+/// supplies standard YAML line-break normalization; this validator performs no
+/// trimming, continuation folding, or other command-body normalization.
 fn validate_privileged_steps(
     job: &YamlMapping,
     context: &str,
@@ -759,13 +860,18 @@ fn validate_privileged_steps(
     for (index, (step, expected_step)) in steps.iter().zip(expected.iter()).enumerate() {
         let step_context = format!("{context}.steps[{index}] {}", expected_step.name);
         match expected_step.body {
-            PrivilegedStepBody::Run => {
+            PrivilegedStepBody::Run { script } => {
                 if !mapping_has_exact_keys(step, &["name", "run", "shell"])
                     || yaml_get(step, "shell").and_then(YamlValue::as_str) != Some("bash")
                     || yaml_get(step, "run").and_then(YamlValue::as_str).is_none()
                 {
                     violations.push(format!(
                         "{step_context} must contain only exact name, shell, and run keys"
+                    ));
+                }
+                if yaml_get(step, "run").and_then(YamlValue::as_str) != Some(script) {
+                    violations.push(format!(
+                        "{step_context} run body must match the exact canonical command body"
                     ));
                 }
             }

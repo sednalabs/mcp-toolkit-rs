@@ -604,6 +604,7 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
         "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
     let reverify_run =
         "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
+    let privileged_job = "  attest-native-linux:\n";
 
     let cases = vec![
         (
@@ -699,6 +700,83 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
                 "unexpected run with key",
             ),
             "only exact name, shell, and run keys",
+        ),
+        (
+            "prepended privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "        run: |\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "        run: |\n          echo prepended\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "prepended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "appended privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "            --output release-authorization.json\n\n      - name: Attest verified native archives",
+                "            --output release-authorization.json\n          echo appended\n\n      - name: Attest verified native archives",
+                "appended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "injected privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          x86_archive=",
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          echo injected\n          x86_archive=",
+                "injected privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "replaced privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "          cmp trusted-verification.json downloaded/native-release-verification.json\n",
+                "          cp trusted-verification.json downloaded/native-release-verification.json\n",
+                "replaced privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "mutated privileged required argument",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "            --workflow-run-attempt \"$GITHUB_RUN_ATTEMPT\" \\\n",
+                "            --workflow-run-attempt \"$GITHUB_RUN_NUMBER\" \\\n",
+                "mutated privileged required argument",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "reordered privileged shell commands",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "          cmp trusted-verification.json downloaded/native-release-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n          cmp trusted-verification.json downloaded/native-release-verification.json\n",
+                "reordered privileged shell commands",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "privileged continuation whitespace trick",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "            --candidate \"$GITHUB_SHA\" \\\n",
+                "            --candidate \"$GITHUB_SHA\"\\\n",
+                "privileged continuation whitespace trick",
+            ),
+            "run body must match the exact canonical command body",
         ),
         (
             "missing attestation subject",
@@ -877,6 +955,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
     let reverify_run =
         "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
+    let privileged_job = "  attest-native-template:\n";
     let structural_cases = vec![
         (
             "root extra privileged run",
@@ -971,6 +1050,83 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
                 "root unexpected run with key",
             ),
             "only exact name, shell, and run keys",
+        ),
+        (
+            "root prepended privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "        run: |\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "        run: |\n          echo prepended\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "root prepended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root appended privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "            --output release-authorization.json\n\n      - name: Attest verified template archives",
+                "            --output release-authorization.json\n          echo appended\n\n      - name: Attest verified template archives",
+                "root appended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root injected privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          x86_archive=",
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          echo injected\n          x86_archive=",
+                "root injected privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root replaced privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "root replaced privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root mutated privileged required argument",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "            --workflow-run-attempt \"$GITHUB_RUN_ATTEMPT\" \\\n",
+                "            --workflow-run-attempt \"$GITHUB_RUN_NUMBER\" \\\n",
+                "root mutated privileged required argument",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root reordered privileged shell commands",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "root reordered privileged shell commands",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root privileged continuation whitespace trick",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "            --candidate \"$GITHUB_SHA\" \\\n",
+                "            --candidate \"$GITHUB_SHA\"\\\n",
+                "root privileged continuation whitespace trick",
+            ),
+            "run body must match the exact canonical command body",
         ),
         (
             "root missing attestation subject",
@@ -2017,6 +2173,27 @@ fn replace_once(contents: &str, original: &str, replacement: &str, label: &str) 
         "fixture is missing mutation anchor for {label}"
     );
     contents.replacen(original, replacement, 1)
+}
+
+fn replace_once_after(
+    contents: &str,
+    section: &str,
+    original: &str,
+    replacement: &str,
+    label: &str,
+) -> String {
+    let section_start = contents
+        .find(section)
+        .unwrap_or_else(|| panic!("fixture is missing section anchor for {label}"));
+    let search_start = section_start + section.len();
+    let relative_start = contents[search_start..]
+        .find(original)
+        .unwrap_or_else(|| panic!("fixture is missing mutation anchor for {label}"));
+    let replacement_start = search_start + relative_start;
+    let replacement_end = replacement_start + original.len();
+    let mut mutated = contents.to_string();
+    mutated.replace_range(replacement_start..replacement_end, replacement);
+    mutated
 }
 
 fn swap_once(contents: &str, first: &str, second: &str, label: &str) -> String {

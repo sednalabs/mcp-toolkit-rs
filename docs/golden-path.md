@@ -214,9 +214,14 @@ OIDC permissions, hosted runner, pinned actions, credential-free full-history
 checkout, and source-bound authorization path. One shared fail-closed contract
 validates the complete ordered privileged-step sequence for both the generated
 workflow and toolkit-root wrapper: every step permits only its exact keys,
-action pins and inputs cannot drift, and the provenance subject list must be
-the exact ordered archive, checksum-sidecar, verification-report, and
-authorization-receipt set. The hosted proof also requires
+each shell step must equal its complete canonical command body, action pins and
+inputs cannot drift, and the provenance subject list must be the exact ordered
+archive, checksum-sidecar, verification-report, and authorization-receipt set.
+The YAML parser's standard line-break handling is the only normalization for a
+privileged command body; command order, arguments, quoting, continuations, and
+all remaining whitespace must match without extra prefixes or suffixes.
+Prefix and substring checks provide diagnostics only and do not authorize a
+privileged command body. The hosted proof also requires
 the generated template's runner-policy helper to remain byte-identical to the
 canonical root copy. GitHub-hosted attestations are provenance evidence; they
 do not publish a release.
