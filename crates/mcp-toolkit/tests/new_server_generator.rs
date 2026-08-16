@@ -65,9 +65,8 @@ fn generator_creates_curated_stdio_project() {
 #[test]
 fn generator_emits_contract_and_probe_artifacts_for_every_template() {
     let root = temp_root("all-template-contracts");
-    let canonical_runner_policy = read(
-        &default_toolkit_root().join("scripts/workflow_runner_policy_check.py"),
-    );
+    let canonical_runner_policy =
+        read(&default_toolkit_root().join("scripts/workflow_runner_policy_check.py"));
 
     for template in templates() {
         let package_name = format!("{}-generated", template.id);
