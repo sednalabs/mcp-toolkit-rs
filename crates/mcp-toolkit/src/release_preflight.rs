@@ -462,8 +462,7 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
                     let Some((_action, reference)) = value.rsplit_once('@') else {
                         return true;
                     };
-                    reference.len() != 40
-                        || !reference.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    reference.len() != 40 || !reference.bytes().all(|byte| byte.is_ascii_hexdigit())
                 })
                 .collect::<Vec<_>>();
 
@@ -488,14 +487,21 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
                 )
             }
         }
-        (Err(error), _) => (false, format!("failed to read native release workflow: {error}")),
-        (_, Err(error)) => (false, format!("failed to read native release verifier: {error}")),
+        (Err(error), _) => (
+            false,
+            format!("failed to read native release workflow: {error}"),
+        ),
+        (_, Err(error)) => (
+            false,
+            format!("failed to read native release verifier: {error}"),
+        ),
     };
 
     ReleasePreflightCheck {
         label: "Native Linux release contract",
-        target: ".github/workflows/native-release-artifacts.yml + scripts/native_release_artifact.py"
-            .to_string(),
+        target:
+            ".github/workflows/native-release-artifacts.yml + scripts/native_release_artifact.py"
+                .to_string(),
         required: true,
         passed,
         detail,

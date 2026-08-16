@@ -129,9 +129,7 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
                 "{} should include the native release verifier",
                 template.id
             );
-            let workflow = read(&output.join(
-                ".github/workflows/native-release-artifacts.yml",
-            ));
+            let workflow = read(&output.join(".github/workflows/native-release-artifacts.yml"));
             assert!(workflow.contains("name: single-crate-public-stdio-generated"));
             assert!(!workflow.contains("single-crate-public-stdio-server"));
         }
@@ -1269,8 +1267,11 @@ fn add_public_release_files(output: &Path) {
 }
 
 fn add_lockfile(output: &Path) {
-    fs::write(output.join("Cargo.lock"), "# generated for release preflight\nversion = 4\n")
-        .expect("write Cargo.lock fixture");
+    fs::write(
+        output.join("Cargo.lock"),
+        "# generated for release preflight\nversion = 4\n",
+    )
+    .expect("write Cargo.lock fixture");
 }
 
 fn add_manifest_description(output: &Path) {
