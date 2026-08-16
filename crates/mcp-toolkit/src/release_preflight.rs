@@ -542,14 +542,11 @@ struct PrivilegedStepContract {
     body: PrivilegedStepBody,
 }
 
-const CHECKOUT_ACTION: &str =
-    "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
-const DOWNLOAD_ACTION: &str =
-    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const CHECKOUT_ACTION: &str = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const DOWNLOAD_ACTION: &str = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const ATTEST_ACTION: &str =
     "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8";
-const UPLOAD_ACTION: &str =
-    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const UPLOAD_ACTION: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 
 const CHECKOUT_INPUTS: &[(&str, ExpectedStepValue)] = &[
     ("fetch-depth", ExpectedStepValue::Integer(0)),
@@ -595,9 +592,7 @@ const ROOT_LOCKFILE_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
 const ROOT_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
-        ExpectedStepValue::String(
-            "native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}",
-        ),
+        ExpectedStepValue::String("native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}"),
     ),
     ("path", ExpectedStepValue::String("downloaded")),
     ("merge-multiple", ExpectedStepValue::Bool(true)),
@@ -1110,7 +1105,10 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         violations
             .push("only the trusted attestation job may invoke provenance attestation".to_string());
     }
-    for (name, job) in [("build-native-linux", build), ("verify-native-linux", verify)] {
+    for (name, job) in [
+        ("build-native-linux", build),
+        ("verify-native-linux", verify),
+    ] {
         let mut checkout_count = 0;
         for step in step_mappings(job, name)? {
             let Some(uses) = yaml_get(step, "uses").and_then(YamlValue::as_str) else {

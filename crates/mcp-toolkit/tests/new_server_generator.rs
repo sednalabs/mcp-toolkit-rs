@@ -2035,7 +2035,10 @@ fn assert_native_release_contract_rejects(
     mutated: String,
     expected_detail: &str,
 ) {
-    assert_ne!(canonical, mutated, "{label} mutation must change the fixture");
+    assert_ne!(
+        canonical, mutated,
+        "{label} mutation must change the fixture"
+    );
     fs::write(workflow_path, mutated)
         .unwrap_or_else(|error| panic!("write weakened {label} fixture: {error}"));
     let report = inspect_release_preflight(output);
