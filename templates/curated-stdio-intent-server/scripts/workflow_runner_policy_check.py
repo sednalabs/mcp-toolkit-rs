@@ -108,7 +108,12 @@ def validate_matrix_runner(job_ref: str, job_body: object) -> list[str]:
         return [f"{job_ref}: matrix runner routing requires a mapping job body."]
 
     strategy = job_body.get("strategy")
-    if strategy != CANONICAL_ARCHITECTURE_STRATEGY:
+    if (
+        not isinstance(strategy, dict)
+        or type(strategy.get("fail-fast")) is not bool
+        or strategy["fail-fast"] is not False
+        or strategy != CANONICAL_ARCHITECTURE_STRATEGY
+    ):
         return [
             f"{job_ref}: {MATRIX_RUNNER_EXPRESSION!r} requires the exact canonical architecture strategy: only fail-fast: false and matrix.include, with the ordered x86_64 and arm64 hosted runner/target rows and no extra keys or dimensions."
         ]
@@ -387,6 +392,30 @@ class RunnerPolicyTests(unittest.TestCase):
         for label, strategy in cases.items():
             with self.subTest(label=label):
                 job = {**canonical, "strategy": strategy}
+                violations = validate_runs_on(
+                    "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                )
+                self.assertTrue(
+                    any("exact canonical architecture strategy" in item for item in violations),
+                    violations,
+                )
+
+    def test_rejects_fail_fast_type_drift(self) -> None:
+        canonical = self.canonical_matrix_job()
+        canonical_strategy = canonical["strategy"]
+        assert isinstance(canonical_strategy, dict)
+        for label, yaml_value in {
+            "integer zero": "0",
+            "float zero": "0.0",
+            "string false": "'false'",
+            "null": "null",
+        }.items():
+            with self.subTest(label=label):
+                fail_fast = yaml.safe_load(yaml_value)
+                job = {
+                    **canonical,
+                    "strategy": {**canonical_strategy, "fail-fast": fail_fast},
+                }
                 violations = validate_runs_on(
                     "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
                 )
