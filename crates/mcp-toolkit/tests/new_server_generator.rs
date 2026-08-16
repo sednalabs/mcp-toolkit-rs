@@ -297,8 +297,165 @@ fn release_preflight_rejects_unpinned_native_release_actions() {
         .find(|check| check.label == "Native Linux release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
-    assert!(contract.detail.contains("unpinned actions"));
+    assert!(contract.detail.contains("not pinned"));
     assert!(!report.ready());
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_folded_unpinned_native_release_actions() {
+    let root = temp_root("release-preflight-native-folded-action-pin");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+        "uses: >-\n          actions/attest-build-provenance@main",
+    );
+    fs::write(&workflow_path, workflow).expect("fold unpinned action fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("not pinned"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_inert_release_semantics() {
+    let root = temp_root("release-preflight-native-inert-semantics");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "run: cargo build --release --locked --target \"$TARGET\" --bin \"$BINARY_NAME\"",
+        "run: |\n          # cargo build --release --locked\n          echo 'cargo build --release --locked'",
+    );
+    fs::write(&workflow_path, workflow).expect("replace active build with inert comment");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("cargo build --release --locked"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_untrusted_release_authority() {
+    let root = temp_root("release-preflight-native-untrusted-authority");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path)
+        .replace("  push:\n", "  pull_request:\n  push:\n")
+        .replace(
+            "  build-native-linux:\n",
+            "  build-native-linux:\n    permissions:\n      id-token: write\n      contents: read\n",
+        );
+    fs::write(&workflow_path, workflow).expect("grant untrusted release authority");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(contract.detail.contains("trusted push events"));
+    assert!(contract.detail.contains("read-only permissions"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_attestation_before_consumer_verification() {
+    let root = temp_root("release-preflight-native-attestation-order");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "      - verify-native-linux\n",
+        "      - build-native-linux\n",
+    );
+    fs::write(&workflow_path, workflow).expect("remove verification dependency");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract
+            .detail
+            .contains("successful build and verification"),
+        "{}",
+        contract.detail
+    );
 
     cleanup(root);
 }

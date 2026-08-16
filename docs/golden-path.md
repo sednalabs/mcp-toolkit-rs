@@ -192,14 +192,22 @@ The `rust-baseline` workflow runs those checks on pull requests, pushes to the
 primary branch, and manual dispatches. Record the run URL in the PR or work
 item before merging.
 
-For a generated public stdio server, commit `Cargo.lock` and dispatch the
-manual `native-release-artifacts` workflow on the exact candidate. Treat the
-two native build jobs and the cross-architecture verifier as one proof unit:
+For a generated public stdio server, commit `Cargo.lock`, merge the reviewed
+candidate, then use the `native-release-artifacts` run created by a successful
+`main` push or `v...` tag. The workflow has no pull-request or manual release
+entrypoint. Treat the two read-only native build jobs, the cross-architecture
+verifier, and the final trusted attestation job as one proof unit:
 the x86_64 and arm64 archives must both pass ELF, checksum, exact file-set,
-candidate, SBOM, and canonical tool inventory/schema checks. GitHub-hosted
-artifact attestations are provenance evidence; they do not publish a release.
-Toolkit changes to that generated lane are exercised by the repository's
-`native-stdio-release-template-proof` workflow before merge.
+candidate/source/input-bound SBOM, GNU interpreter/GLIBC, and canonical tool
+inventory/schema checks. Attestation occurs only after consumer reverification.
+The final job emits a run-bound `release-authorization.json` receipt and
+attests it with the verified archives; consumers must also confirm that hosted
+workflow concluded successfully.
+Toolkit changes to that generated lane are exercised before merge by the
+read-only, non-attesting `native-stdio-release-template-proof` workflow; the
+separate trusted template attestation workflow runs only on `main` or version
+tag pushes. GitHub-hosted attestations are provenance evidence; they do not
+publish a release.
 
 Snapshot updates are exceptional. To intentionally rebaseline a snapshot:
 

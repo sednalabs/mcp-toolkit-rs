@@ -125,9 +125,11 @@ It demonstrates:
 - vendored CodeQL workflow-security queries for downstream reuse;
 - standalone GitHub workflows for baseline validation, CodeQL, coverage, and
   dependency governance;
-- a manual dual-native Linux artifact workflow for x86_64 and arm64, with
+- a trusted-push dual-native Linux artifact workflow for x86_64 and arm64, with
   locked builds, exact-SHA readback, ELF checks, canonical tool-surface parity,
-  target-specific CycloneDX SBOMs, complete checksums, and GitHub attestations;
+  GNU interpreter/GLIBC compatibility, target-specific CycloneDX SBOMs bound
+  to source/input/dependency evidence, complete checksums, consumer reverification,
+  and GitHub attestations;
 - catalog-profile, schema-snapshot, stdio-smoke, response-safety, and
   `mcp-probe` scenario files carried from the curated stdio starter, including
   binary tests for local tool-surface inspection flags;
@@ -157,10 +159,13 @@ cargo run -- --print-client-config
 mcp-toolkit release-preflight .
 ```
 
-Generate and commit the service `Cargo.lock` before dispatching
-`native-release-artifacts.yml`. The workflow produces SHA-qualified GitHub
-Actions artifacts for native x86_64 and arm64 Linux; it does not publish a
-GitHub Release or install a binary.
+Generate and commit the service `Cargo.lock` before the reviewed change reaches
+`main` or a `v...` tag. `native-release-artifacts.yml` produces SHA-qualified
+GitHub Actions artifacts for native x86_64 and arm64 Linux only from that
+trusted push. Read-only build and parity jobs cannot attest; a final privileged
+job reverifies the complete consumer artifact set before provenance is issued.
+The final provenance set includes a run-bound `release-authorization.json`
+receipt. The workflow does not publish a GitHub Release or install a binary.
 
 ## Hosted HTTP/Auth Server
 

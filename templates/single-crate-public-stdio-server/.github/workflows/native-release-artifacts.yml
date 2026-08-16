@@ -1,7 +1,11 @@
 name: native-release-artifacts
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v[0-9]*"
 
 concurrency:
   group: native-release-artifacts::${{ github.sha }}
@@ -15,10 +19,6 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    permissions:
-      attestations: write
-      contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +32,7 @@ jobs:
       CARGO_CYCLONEDX_VERSION: 0.5.9
       TARGET: ${{ matrix.target }}
     steps:
-      - name: Checkout exact candidate
+      - name: Checkout exact trusted candidate
         # actions/checkout v6
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -40,18 +40,22 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Read back exact candidate
+      - name: Authorize immutable main or version-tag source
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/v[0-9]*) ;;
+            *) echo "release artifacts require a main push or version tag" >&2; exit 1 ;;
+          esac
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$GITHUB_SHA^{tree}")"
+          test -f Cargo.lock
 
       - name: Enforce standard GitHub-hosted runner labels
         shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/workflow_runner_policy_check.py --self-test
+        run: python3 scripts/workflow_runner_policy_check.py --self-test
 
       - name: Verify release helper contracts
         run: python3 scripts/native_release_artifact.py --self-test
@@ -64,7 +68,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustc -vV
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
 
       - name: Cache cargo artifacts
@@ -75,10 +78,7 @@ jobs:
 
       - name: Build locked native binary
         shell: bash
-        run: |
-          set -euo pipefail
-          test -f Cargo.lock
-          cargo build --release --locked --target "$TARGET" --bin "$BINARY_NAME"
+        run: cargo build --release --locked --target "$TARGET" --bin "$BINARY_NAME"
 
       - name: Capture canonical tool surfaces
         shell: bash
@@ -109,12 +109,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_tree=$(git rev-parse HEAD^{tree})
           mkdir -p dist
           archive=$(python3 scripts/native_release_artifact.py package \
             --binary "target/$TARGET/release/$BINARY_NAME" \
             --binary-name "$BINARY_NAME" \
             --target "$TARGET" \
             --candidate "$GITHUB_SHA" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF" \
+            --source-tree "$source_tree" \
+            --manifest Cargo.toml \
+            --lockfile Cargo.lock \
             --inventory release-inputs/tool-inventory.json \
             --schema release-inputs/tool-schema.json \
             --sbom release-sbom.cdx.json \
@@ -123,14 +130,14 @@ jobs:
             --archive "$archive" \
             --binary-name "$BINARY_NAME" \
             --target "$TARGET" \
-            --candidate "$GITHUB_SHA"
+            --candidate "$GITHUB_SHA" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF" \
+            --source-tree "$source_tree" \
+            --manifest Cargo.toml \
+            --lockfile Cargo.lock
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2
-
-      - name: Attest native archive and checksum
-        # actions/attest-build-provenance v4.2.2
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        with:
-          subject-path: dist/*
 
       - name: Upload SHA-qualified native artifact
         # actions/upload-artifact v7
@@ -149,16 +156,13 @@ jobs:
     env:
       BINARY_NAME: single-crate-public-stdio-server
     steps:
-      - name: Checkout exact candidate
+      - name: Checkout exact trusted candidate
         # actions/checkout v6
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 1
           persist-credentials: false
           ref: ${{ github.sha }}
-
-      - name: Read back exact candidate
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Download exact native artifacts
         # actions/download-artifact v8.0.1
@@ -172,7 +176,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/native_release_artifact.py --self-test
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          source_tree=$(git rev-parse HEAD^{tree})
           x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
           arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
           python3 scripts/native_release_artifact.py compare \
@@ -182,6 +187,12 @@ jobs:
             --target aarch64-unknown-linux-gnu \
             --binary-name "$BINARY_NAME" \
             --candidate "$GITHUB_SHA" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF" \
+            --source-tree "$source_tree" \
+            --manifest Cargo.toml \
+            --lockfile Cargo.lock \
             --output native-release-verification.json
           test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 4
 
@@ -191,5 +202,90 @@ jobs:
         with:
           name: native-linux-verification-${{ github.sha }}
           path: native-release-verification.json
+          if-no-files-found: error
+          retention-days: 14
+
+  attest-native-linux:
+    name: Attest verified trusted release artifacts
+    needs:
+      - build-native-linux
+      - verify-native-linux
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      BINARY_NAME: single-crate-public-stdio-server
+    steps:
+      - name: Checkout exact trusted candidate
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Download verified artifact set
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: native-linux-*-${{ github.sha }}
+          path: downloaded
+          merge-multiple: true
+
+      - name: Reverify trusted consumer artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/v[0-9]*) ;;
+            *) echo "attestation requires a main push or version tag" >&2; exit 1 ;;
+          esac
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          source_tree=$(git rev-parse HEAD^{tree})
+          x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+          arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+          python3 scripts/native_release_artifact.py compare \
+            --archive "$x86_archive" \
+            --target x86_64-unknown-linux-gnu \
+            --archive "$arm_archive" \
+            --target aarch64-unknown-linux-gnu \
+            --binary-name "$BINARY_NAME" \
+            --candidate "$GITHUB_SHA" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF" \
+            --source-tree "$source_tree" \
+            --manifest Cargo.toml \
+            --lockfile Cargo.lock \
+            --output trusted-verification.json
+          cmp trusted-verification.json downloaded/native-release-verification.json
+          test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+          python3 scripts/native_release_artifact.py authorize \
+            --verification trusted-verification.json \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output release-authorization.json
+
+      - name: Attest verified native archives, checksums, and report
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            downloaded/*.tar.gz
+            downloaded/*.tar.gz.sha256
+            downloaded/native-release-verification.json
+            release-authorization.json
+
+      - name: Upload attested release authorization receipt
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-linux-authorization-${{ github.sha }}
+          path: release-authorization.json
           if-no-files-found: error
           retention-days: 14

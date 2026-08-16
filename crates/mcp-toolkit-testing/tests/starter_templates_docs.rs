@@ -17,6 +17,10 @@ fn starter_templates_doc_mentions_standalone_public_template() {
         "dependency governance",
         "dual-native Linux artifact workflow",
         "target-specific CycloneDX SBOMs",
+        "trusted-push dual-native Linux artifact workflow",
+        "GNU interpreter/GLIBC compatibility",
+        "consumer reverification",
+        "release-authorization.json",
         "GitHub attestations",
         "native_release_artifact.py",
     ] {

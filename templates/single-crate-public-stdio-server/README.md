@@ -69,11 +69,13 @@ surface for public review and merge.
 
 ## Native Linux Release Artifacts
 
-Before dispatching `.github/workflows/native-release-artifacts.yml`, generate
-and commit `Cargo.lock`. The workflow refuses an absent or stale lockfile and
-builds the exact workflow commit with `cargo build --release --locked`.
+Before pushing to `main` or creating a `v...` tag, generate and commit
+`Cargo.lock`. `.github/workflows/native-release-artifacts.yml` refuses an
+absent or stale lockfile and builds the exact pushed commit with
+`cargo build --release --locked`. It has no manual or pull-request release
+entrypoint.
 
-The manual workflow builds on native GitHub-hosted x86_64 and arm64 Linux
+The trusted push workflow builds on native GitHub-hosted x86_64 and arm64 Linux
 runners. Each SHA-qualified artifact contains an ELF binary, exact candidate
 receipt, canonical tool inventory and schema, target-specific CycloneDX SBOM,
 release metadata, and a complete payload checksum manifest. A sidecar checksum
@@ -81,9 +83,23 @@ covers the archive itself. The final job downloads both architectures, verifies
 the exact archive and file sets, and requires byte-equivalent canonical tool
 inventories and schemas.
 
-GitHub build-provenance attestations bind each archive and checksum to the
-hosted workflow. This workflow uploads review artifacts only; it does not create
-a tag, publish a GitHub Release, or install the binary.
+The SBOM and release metadata bind the repository, event, full ref, commit,
+source tree, binary digest, manifest digest, lockfile digest, target, and
+resolved dependency graph. GNU binaries must use the target's standard dynamic
+interpreter and may require no newer than GLIBC 2.39; the exact required GLIBC
+version is recorded and re-read from each ELF binary.
+
+Build and parity jobs inherit `contents: read`. Only the final job has
+job-scoped OIDC and attestation permission, and it runs after independently
+re-verifying both archives and the verification report on a successful `main`
+or version-tag push. It creates a run-bound `release-authorization.json`
+receipt whose state is `verified_trusted_source`; provenance covers the
+archives, sidecars, verification report, and that receipt.
+The workflow does not create a tag, publish a GitHub Release, or install a
+binary. Consumers should accept release artifacts only from a successful run
+whose event/ref and verification report match the intended `main` push or
+version tag, whose workflow conclusion is successful, and whose authorization
+receipt is covered by GitHub's attestation verification.
 
 Run the verifier's fixture-backed contract tests locally without building Rust:
 

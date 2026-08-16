@@ -104,6 +104,10 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         "target-specific CycloneDX SBOM",
         "GitHub attestation URLs",
         "canonical tool inventory/schema equality",
+        "GNU interpreter/GLIBC verification",
+        "semantically bound",
+        "consumer reverification",
+        "release-authorization.json",
     ] {
         assert!(
             LANE_DOC.contains(surface),

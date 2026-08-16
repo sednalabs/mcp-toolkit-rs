@@ -207,10 +207,15 @@ Required evidence:
 For the single-crate public stdio template's
 `.github/workflows/native-release-artifacts.yml` lane, also record
 both native runner targets, exact candidate readback, archive and sidecar
-digests, ELF verification, target-specific CycloneDX SBOM presence, complete
-archive file-set verification, canonical tool inventory/schema equality, and
-GitHub attestation URLs. The workflow is artifact-only and must not be described
-as a published release.
+digests, ELF machine and GNU interpreter/GLIBC verification, target-specific CycloneDX SBOM
+evidence semantically bound to source, binary, manifest,
+lockfile, and dependency inputs, complete archive
+file-set verification, canonical tool inventory/schema equality, the trusted
+`main` or version-tag push ref, and GitHub attestation URLs. Build and parity
+jobs are read-only; the attestation job must depend on successful consumer reverification.
+The workflow is artifact-only and must not be described as a
+published release. Consumer acceptance additionally requires the successful
+hosted run and its attested, run-bound `release-authorization.json` receipt.
 
 Use the repository's normal workflow when it covers formatting, clippy, tests,
 schema snapshots, and template or server-specific checks. Add a workflow only

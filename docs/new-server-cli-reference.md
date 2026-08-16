@@ -174,18 +174,24 @@ dependencies, no committed Cargo path overrides, a pinned dual-native Linux
 artifact workflow, an exact archive verifier, and no high-confidence secret
 markers in generated text files. The native workflow must use literal x86_64
 and arm64 hosted-runner matrix rows, exact candidate readback, locked builds,
-ELF checks, target-specific CycloneDX SBOMs, complete checksums, canonical tool
-inventory/schema parity, SHA-qualified artifacts, and GitHub attestations.
+ELF machine plus GNU interpreter/GLIBC checks, source/input/dependency-bound
+CycloneDX SBOMs, complete checksums, canonical tool inventory/schema parity,
+SHA-qualified artifacts, consumer reverification, and trusted-push GitHub
+attestations.
 
 The `single-crate-public-stdio` template is designed to pass release preflight
 after generation with `--toolkit-git` and a committed `Cargo.lock`. Smaller
 starter templates may pass `doctor` but fail `release-preflight` until the
 service repository adds public release files and workflows.
 
-The generated public stdio workflow remains manual and artifact-only. Generate
-and commit `Cargo.lock` before dispatching it. Release preflight checks the
-static release contract but does not build, attest, publish, or install a
-binary. Its exact path is `.github/workflows/native-release-artifacts.yml`.
+The generated public stdio workflow is artifact-only and runs only for `main`
+pushes or `v...` tags. Generate and commit `Cargo.lock` before that trusted
+push. Pull-request and arbitrary manual feature-branch code receive no OIDC or
+attestation authority. Release preflight structurally parses the workflow,
+including folded YAML action references, but does not build, attest, publish,
+or install a binary. A trusted successful run produces and attests a run-bound
+`release-authorization.json` receipt only after consumer reverification. Its exact path is
+`.github/workflows/native-release-artifacts.yml`.
 
 ## Client Config
 
