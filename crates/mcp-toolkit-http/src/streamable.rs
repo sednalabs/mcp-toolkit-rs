@@ -33,18 +33,15 @@ use std::{error::Error, sync::Arc};
 use axum::body::{to_bytes, Body};
 use http::{HeaderMap, Method, Request, Response, StatusCode};
 use http_body_util::LengthLimitError;
-use rmcp::{
-    transport::{
-        common::http_header::HEADER_SESSION_ID,
-        streamable_http_server::{
-            session::{
-                local::{LocalSessionManager, SessionConfig},
-                SessionManager,
-            },
-            StreamableHttpServerConfig, StreamableHttpService,
+use rmcp::transport::{
+    common::http_header::HEADER_SESSION_ID,
+    streamable_http_server::{
+        session::{
+            local::{LocalSessionManager, SessionConfig},
+            SessionManager,
         },
+        StreamableHttpServerConfig, StreamableHttpService,
     },
-    RoleServer,
 };
 use serde_json::json;
 use tokio::time::{Duration, MissedTickBehavior};
@@ -174,7 +171,7 @@ pub fn build_local_streamable_http_service<S>(
     config: LocalStreamableHttpServiceConfig,
 ) -> LocalStreamableHttpServiceRuntime<S>
 where
-    S: rmcp::Service<RoleServer> + Send + 'static,
+    S: rmcp::ServerHandler + Send + 'static,
 {
     let disconnected_idle_timeout = config
         .session_config
@@ -240,7 +237,7 @@ pub async fn handle_stateful_mcp_request<S, M>(
     req: Request<Body>,
 ) -> Response<Body>
 where
-    S: rmcp::Service<RoleServer> + Send + 'static,
+    S: rmcp::ServerHandler + Send + 'static,
     M: SessionManager + Send + Sync + 'static,
 {
     let method = req.method().clone();
@@ -373,7 +370,7 @@ async fn forward_live_service<S, M>(
     session_id: LiveMcpSessionId,
 ) -> Response<Body>
 where
-    S: rmcp::Service<RoleServer> + Send + 'static,
+    S: rmcp::ServerHandler + Send + 'static,
     M: SessionManager + Send + Sync + 'static,
 {
     attach_live_session_context(&mut req, session_id);
@@ -390,7 +387,7 @@ async fn forward_service<S, M>(
     phase: &'static str,
 ) -> Response<Body>
 where
-    S: rmcp::Service<RoleServer> + Send + 'static,
+    S: rmcp::ServerHandler + Send + 'static,
     M: SessionManager + Send + Sync + 'static,
 {
     let method = req.method().clone();
