@@ -14,6 +14,7 @@ members = [
   "crates/mcp-toolkit-policy-runtime",
   "crates/mcp-toolkit-postgres",
   "crates/mcp-toolkit-process",
+  "crates/mcp-toolkit-provenance",
   "crates/mcp-toolkit-scratchpad",
   "crates/mcp-toolkit-gemini",
   "crates/mcp-toolkit-testing",
