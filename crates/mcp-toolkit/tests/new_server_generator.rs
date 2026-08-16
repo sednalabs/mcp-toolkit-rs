@@ -581,6 +581,192 @@ fn release_preflight_rejects_attestation_before_consumer_verification() {
 }
 
 #[test]
+fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
+    let root = temp_root("release-preflight-generated-privileged-steps");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let canonical = read(&workflow_path);
+    let attest_step = "      - name: Attest verified native archives, checksums, and report\n";
+    let upload_step = "      - name: Upload attested release authorization receipt\n";
+    let attest_uses =
+        "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
+    let reverify_run =
+        "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
+
+    let cases = vec![
+        (
+            "extra privileged run",
+            replace_once(
+                &canonical,
+                attest_step,
+                &format!(
+                    "      - name: Unexpected privileged run\n        shell: bash\n        run: echo unexpected\n\n{attest_step}"
+                ),
+                "extra privileged run",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "reordered privileged steps",
+            swap_once(
+                &canonical,
+                attest_step,
+                upload_step,
+                "reordered privileged steps",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "duplicated privileged step",
+            replace_once(
+                &canonical,
+                attest_step,
+                &format!(
+                    "      - name: Reverify trusted consumer artifact set\n        shell: bash\n        run: echo duplicate\n\n{attest_step}"
+                ),
+                "duplicated privileged step",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "unexpected action run key",
+            replace_once(
+                &canonical,
+                attest_uses,
+                &format!("{attest_uses}        run: echo unexpected\n"),
+                "unexpected action run key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "unexpected action shell key",
+            replace_once(
+                &canonical,
+                attest_uses,
+                &format!("{attest_uses}        shell: bash\n"),
+                "unexpected action shell key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "privileged action pin drift",
+            replace_once(
+                &canonical,
+                attest_uses,
+                "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd9\n",
+                "privileged action pin drift",
+            ),
+            "not pinned to the exact contract",
+        ),
+        (
+            "unexpected action input key",
+            replace_once(
+                &canonical,
+                "          subject-path: |\n",
+                "          unexpected: true\n          subject-path: |\n",
+                "unexpected action input key",
+            ),
+            "subject-path",
+        ),
+        (
+            "unexpected run env key",
+            replace_once(
+                &canonical,
+                reverify_run,
+                &format!("{reverify_run}        env:\n          UNEXPECTED: true\n"),
+                "unexpected run env key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "unexpected run with key",
+            replace_once(
+                &canonical,
+                reverify_run,
+                &format!("{reverify_run}        with:\n          unexpected: true\n"),
+                "unexpected run with key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "missing attestation subject",
+            replace_once(
+                &canonical,
+                "            downloaded/*.tar.gz.sha256\n",
+                "",
+                "missing attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "substituted attestation subject",
+            replace_once(
+                &canonical,
+                "            downloaded/native-release-verification.json\n",
+                "            downloaded/substituted-verification.json\n",
+                "substituted attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "extra attestation subject",
+            replace_once(
+                &canonical,
+                "            release-authorization.json\n",
+                "            release-authorization.json\n            downloaded/unexpected.json\n",
+                "extra attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "duplicated attestation subject",
+            replace_once(
+                &canonical,
+                "            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz.sha256\n",
+                "duplicated attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "reordered attestation subjects",
+            replace_once(
+                &canonical,
+                "            downloaded/*.tar.gz\n            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz\n",
+                "reordered attestation subjects",
+            ),
+            "subject-path",
+        ),
+    ];
+
+    for (label, mutated, expected_detail) in cases {
+        assert_native_release_contract_rejects(
+            &output,
+            &workflow_path,
+            &canonical,
+            label,
+            mutated,
+            expected_detail,
+        );
+    }
+
+    cleanup(root);
+}
+
+#[test]
 fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
     let root = temp_root("release-preflight-native-template-attestation");
     let output = root.join("public-mcp");
@@ -651,7 +837,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             "checkout custody",
             "          persist-credentials: false\n",
             "          persist-credentials: true\n",
-            "disable credentials",
+            "exact permitted key/value contract",
         ),
         (
             "authorization path",
@@ -685,6 +871,170 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         );
     }
 
+    let attest_step = "      - name: Attest verified template archives, checksums, and report\n";
+    let upload_step = "      - name: Upload attested template authorization receipt\n";
+    let attest_uses =
+        "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
+    let reverify_run =
+        "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
+    let structural_cases = vec![
+        (
+            "root extra privileged run",
+            replace_once(
+                &canonical_wrapper,
+                attest_step,
+                &format!(
+                    "      - name: Unexpected privileged run\n        shell: bash\n        run: echo unexpected\n\n{attest_step}"
+                ),
+                "root extra privileged run",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "root reordered privileged steps",
+            swap_once(
+                &canonical_wrapper,
+                attest_step,
+                upload_step,
+                "root reordered privileged steps",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "root duplicated privileged step",
+            replace_once(
+                &canonical_wrapper,
+                attest_step,
+                &format!(
+                    "      - name: Reverify trusted consumer artifact set\n        shell: bash\n        run: echo duplicate\n\n{attest_step}"
+                ),
+                "root duplicated privileged step",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "root unexpected action run key",
+            replace_once(
+                &canonical_wrapper,
+                attest_uses,
+                &format!("{attest_uses}        run: echo unexpected\n"),
+                "root unexpected action run key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "root unexpected action shell key",
+            replace_once(
+                &canonical_wrapper,
+                attest_uses,
+                &format!("{attest_uses}        shell: bash\n"),
+                "root unexpected action shell key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "root privileged action pin drift",
+            replace_once(
+                &canonical_wrapper,
+                attest_uses,
+                "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd9\n",
+                "root privileged action pin drift",
+            ),
+            "not pinned to the exact contract",
+        ),
+        (
+            "root unexpected action input key",
+            replace_once(
+                &canonical_wrapper,
+                "          subject-path: |\n",
+                "          unexpected: true\n          subject-path: |\n",
+                "root unexpected action input key",
+            ),
+            "subject-path",
+        ),
+        (
+            "root unexpected run env key",
+            replace_once(
+                &canonical_wrapper,
+                reverify_run,
+                &format!("{reverify_run}        env:\n          UNEXPECTED: true\n"),
+                "root unexpected run env key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "root unexpected run with key",
+            replace_once(
+                &canonical_wrapper,
+                reverify_run,
+                &format!("{reverify_run}        with:\n          unexpected: true\n"),
+                "root unexpected run with key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "root missing attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/*.tar.gz.sha256\n",
+                "",
+                "root missing attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root substituted attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/native-template-verification.json\n",
+                "            downloaded/substituted-verification.json\n",
+                "root substituted attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root extra attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            release-authorization.json\n",
+                "            release-authorization.json\n            downloaded/unexpected.json\n",
+                "root extra attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root duplicated attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz.sha256\n",
+                "root duplicated attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root reordered attestation subjects",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/*.tar.gz\n            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz\n",
+                "root reordered attestation subjects",
+            ),
+            "subject-path",
+        ),
+    ];
+
+    for (label, mutated, expected_detail) in structural_cases {
+        assert_native_release_contract_rejects(
+            &output,
+            &wrapper_path,
+            &canonical_wrapper,
+            label,
+            mutated,
+            expected_detail,
+        );
+    }
+
     cleanup(root);
 }
 
@@ -706,9 +1056,10 @@ fn release_preflight_accepts_local_native_release_actions() {
     add_lockfile(&output);
 
     let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
-    let workflow = read(&workflow_path).replace(
+    let workflow = read(&workflow_path).replacen(
         "    steps:\n",
         "    steps:\n      - uses: ./.github/actions/release-setup\n",
+        1,
     );
     fs::write(&workflow_path, workflow).expect("add local action fixture");
 
@@ -1658,6 +2009,47 @@ fn temp_root(label: &str) -> PathBuf {
 
 fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+fn replace_once(contents: &str, original: &str, replacement: &str, label: &str) -> String {
+    assert!(
+        contents.contains(original),
+        "fixture is missing mutation anchor for {label}"
+    );
+    contents.replacen(original, replacement, 1)
+}
+
+fn swap_once(contents: &str, first: &str, second: &str, label: &str) -> String {
+    let marker = "__MCP_TOOLKIT_PRIVILEGED_STEP_SWAP_MARKER__";
+    assert!(!contents.contains(marker));
+    let swapped = replace_once(contents, first, marker, label);
+    let swapped = replace_once(&swapped, second, first, label);
+    replace_once(&swapped, marker, second, label)
+}
+
+fn assert_native_release_contract_rejects(
+    output: &Path,
+    workflow_path: &Path,
+    canonical: &str,
+    label: &str,
+    mutated: String,
+    expected_detail: &str,
+) {
+    assert_ne!(canonical, mutated, "{label} mutation must change the fixture");
+    fs::write(workflow_path, mutated)
+        .unwrap_or_else(|error| panic!("write weakened {label} fixture: {error}"));
+    let report = inspect_release_preflight(output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed, "{label} weakening should fail preflight");
+    assert!(
+        contract.detail.contains(expected_detail),
+        "{label} weakening produced unexpected detail: {}",
+        contract.detail
+    );
 }
 
 fn cleanup(path: PathBuf) {

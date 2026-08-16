@@ -520,6 +520,296 @@ fn exact_strings(value: Option<&YamlValue>, expected: &[&str]) -> bool {
     actual == expected
 }
 
+#[derive(Clone, Copy)]
+enum ExpectedStepValue {
+    String(&'static str),
+    Bool(bool),
+    Integer(i64),
+}
+
+#[derive(Clone, Copy)]
+enum PrivilegedStepBody {
+    Run,
+    Action {
+        uses: &'static str,
+        inputs: &'static [(&'static str, ExpectedStepValue)],
+    },
+}
+
+#[derive(Clone, Copy)]
+struct PrivilegedStepContract {
+    name: &'static str,
+    body: PrivilegedStepBody,
+}
+
+const CHECKOUT_ACTION: &str =
+    "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const DOWNLOAD_ACTION: &str =
+    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const ATTEST_ACTION: &str =
+    "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8";
+const UPLOAD_ACTION: &str =
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+
+const CHECKOUT_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    ("fetch-depth", ExpectedStepValue::Integer(0)),
+    ("persist-credentials", ExpectedStepValue::Bool(false)),
+    ("ref", ExpectedStepValue::String("${{ github.sha }}")),
+];
+const GENERATED_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "pattern",
+        ExpectedStepValue::String("native-linux-*-${{ github.sha }}"),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+    ("merge-multiple", ExpectedStepValue::Bool(true)),
+];
+const GENERATED_ATTEST_INPUTS: &[(&str, ExpectedStepValue)] = &[(
+    "subject-path",
+    ExpectedStepValue::String(
+        "downloaded/*.tar.gz\ndownloaded/*.tar.gz.sha256\ndownloaded/native-release-verification.json\nrelease-authorization.json",
+    ),
+)];
+const GENERATED_UPLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "name",
+        ExpectedStepValue::String("native-linux-authorization-${{ github.sha }}"),
+    ),
+    (
+        "path",
+        ExpectedStepValue::String("release-authorization.json"),
+    ),
+    ("if-no-files-found", ExpectedStepValue::String("error")),
+    ("retention-days", ExpectedStepValue::Integer(14)),
+];
+const ROOT_LOCKFILE_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "name",
+        ExpectedStepValue::String("native-stdio-template-source-inputs-${{ github.sha }}"),
+    ),
+    (
+        "path",
+        ExpectedStepValue::String("templates/single-crate-public-stdio-server"),
+    ),
+];
+const ROOT_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "pattern",
+        ExpectedStepValue::String(
+            "native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}",
+        ),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+    ("merge-multiple", ExpectedStepValue::Bool(true)),
+];
+const ROOT_REPORT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "name",
+        ExpectedStepValue::String("native-stdio-template-verification-${{ github.sha }}"),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+];
+const ROOT_ATTEST_INPUTS: &[(&str, ExpectedStepValue)] = &[(
+    "subject-path",
+    ExpectedStepValue::String(
+        "downloaded/*.tar.gz\ndownloaded/*.tar.gz.sha256\ndownloaded/native-template-verification.json\nrelease-authorization.json",
+    ),
+)];
+const ROOT_UPLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "name",
+        ExpectedStepValue::String("native-stdio-template-authorization-${{ github.sha }}"),
+    ),
+    (
+        "path",
+        ExpectedStepValue::String("release-authorization.json"),
+    ),
+    ("if-no-files-found", ExpectedStepValue::String("error")),
+    ("retention-days", ExpectedStepValue::Integer(14)),
+];
+
+const GENERATED_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
+    PrivilegedStepContract {
+        name: "Checkout exact trusted candidate",
+        body: PrivilegedStepBody::Action {
+            uses: CHECKOUT_ACTION,
+            inputs: CHECKOUT_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Prove protected-main ancestry for trusted source",
+        body: PrivilegedStepBody::Run,
+    },
+    PrivilegedStepContract {
+        name: "Download verified artifact set",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: GENERATED_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Reverify trusted consumer artifact set",
+        body: PrivilegedStepBody::Run,
+    },
+    PrivilegedStepContract {
+        name: "Attest verified native archives, checksums, and report",
+        body: PrivilegedStepBody::Action {
+            uses: ATTEST_ACTION,
+            inputs: GENERATED_ATTEST_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Upload attested release authorization receipt",
+        body: PrivilegedStepBody::Action {
+            uses: UPLOAD_ACTION,
+            inputs: GENERATED_UPLOAD_INPUTS,
+        },
+    },
+];
+
+const ROOT_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
+    PrivilegedStepContract {
+        name: "Checkout exact trusted candidate",
+        body: PrivilegedStepBody::Action {
+            uses: CHECKOUT_ACTION,
+            inputs: CHECKOUT_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Prove protected-main ancestry for trusted source",
+        body: PrivilegedStepBody::Run,
+    },
+    PrivilegedStepContract {
+        name: "Download immutable template lockfile",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_LOCKFILE_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Download verified template artifact set",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_ARTIFACT_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Download verified template report",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_REPORT_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Reverify trusted consumer artifact set",
+        body: PrivilegedStepBody::Run,
+    },
+    PrivilegedStepContract {
+        name: "Attest verified template archives, checksums, and report",
+        body: PrivilegedStepBody::Action {
+            uses: ATTEST_ACTION,
+            inputs: ROOT_ATTEST_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Upload attested template authorization receipt",
+        body: PrivilegedStepBody::Action {
+            uses: UPLOAD_ACTION,
+            inputs: ROOT_UPLOAD_INPUTS,
+        },
+    },
+];
+
+fn mapping_has_exact_keys(mapping: &YamlMapping, expected: &[&str]) -> bool {
+    mapping.len() == expected.len() && expected.iter().all(|key| yaml_get(mapping, key).is_some())
+}
+
+fn expected_step_value_matches(actual: Option<&YamlValue>, expected: ExpectedStepValue) -> bool {
+    match expected {
+        ExpectedStepValue::String(expected) => actual
+            .and_then(YamlValue::as_str)
+            .is_some_and(|actual| actual.trim() == expected),
+        ExpectedStepValue::Bool(expected) => actual.and_then(YamlValue::as_bool) == Some(expected),
+        ExpectedStepValue::Integer(expected) => {
+            actual.and_then(YamlValue::as_i64) == Some(expected)
+        }
+    }
+}
+
+/// Validates only the privileged job's ordered step boundary. Workflow-specific
+/// trigger, job, dependency, permission, runner, and command semantics remain
+/// in their owning validators; both generated and toolkit-root workflows use
+/// this one fail-closed step/key/action/input contract.
+fn validate_privileged_steps(
+    job: &YamlMapping,
+    context: &str,
+    expected: &[PrivilegedStepContract],
+) -> Result<Vec<String>, String> {
+    let steps = step_mappings(job, context)?;
+    let mut violations = Vec::new();
+    let actual_names = steps
+        .iter()
+        .map(|step| yaml_get(step, "name").and_then(YamlValue::as_str))
+        .collect::<Vec<_>>();
+    let expected_names = expected
+        .iter()
+        .map(|step| Some(step.name))
+        .collect::<Vec<_>>();
+    if steps.len() != expected.len() || actual_names != expected_names {
+        violations.push(format!(
+            "{context} privileged step sequence must match the exact ordered contract"
+        ));
+    }
+
+    for (index, (step, expected_step)) in steps.iter().zip(expected.iter()).enumerate() {
+        let step_context = format!("{context}.steps[{index}] {}", expected_step.name);
+        match expected_step.body {
+            PrivilegedStepBody::Run => {
+                if !mapping_has_exact_keys(step, &["name", "run", "shell"])
+                    || yaml_get(step, "shell").and_then(YamlValue::as_str) != Some("bash")
+                    || yaml_get(step, "run").and_then(YamlValue::as_str).is_none()
+                {
+                    violations.push(format!(
+                        "{step_context} must contain only exact name, shell, and run keys"
+                    ));
+                }
+            }
+            PrivilegedStepBody::Action { uses, inputs } => {
+                if !mapping_has_exact_keys(step, &["name", "uses", "with"])
+                    || yaml_get(step, "uses").and_then(YamlValue::as_str) != Some(uses)
+                {
+                    violations.push(format!(
+                        "{step_context} action is not pinned to the exact contract or contains unexpected keys"
+                    ));
+                }
+                let Some(with) = yaml_get(step, "with").and_then(YamlValue::as_mapping) else {
+                    violations.push(format!("{step_context}.with must be an exact mapping"));
+                    continue;
+                };
+                let inputs_match = mapping_has_exact_keys(
+                    with,
+                    &inputs.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+                ) && inputs
+                    .iter()
+                    .all(|(key, value)| expected_step_value_matches(yaml_get(with, key), *value));
+                if !inputs_match {
+                    if inputs.iter().any(|(key, _)| *key == "subject-path") {
+                        violations.push(format!(
+                            "{step_context} subject-path must match the exact complete ordered subject set"
+                        ));
+                    } else {
+                        violations.push(format!(
+                            "{step_context}.with must match the exact permitted key/value contract"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(violations)
+}
+
 fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, String> {
     let document: YamlValue = serde_yaml_ng::from_str(workflow)
         .map_err(|error| format!("invalid workflow YAML: {error}"))?;
@@ -581,6 +871,24 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         .ok_or_else(|| "attest-native-linux job is required".to_string())
         .and_then(|value| yaml_mapping(value, "attest-native-linux"))?;
 
+    if !mapping_has_exact_keys(
+        attest,
+        &[
+            "env",
+            "if",
+            "name",
+            "needs",
+            "permissions",
+            "runs-on",
+            "steps",
+            "timeout-minutes",
+        ],
+    ) {
+        violations.push(
+            "attestation job must contain the complete exact privileged job contract".to_string(),
+        );
+    }
+
     if yaml_get(build, "permissions").is_some() || yaml_get(verify, "permissions").is_some() {
         violations
             .push("build and verification jobs must inherit read-only permissions".to_string());
@@ -620,10 +928,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         violations.push("verification must depend on native builds".to_string());
     }
     let attest_needs = job_needs(attest, "attest-native-linux")?;
-    if !["build-native-linux", "verify-native-linux"]
-        .iter()
-        .all(|job| attest_needs.iter().any(|need| need == job))
-    {
+    if attest_needs != ["build-native-linux", "verify-native-linux"] {
         violations
             .push("attestation must depend on successful build and verification jobs".to_string());
     }
@@ -765,6 +1070,12 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         violations.push("authorization receipt must bind every exact source identity".to_string());
     }
 
+    violations.extend(validate_privileged_steps(
+        attest,
+        "attest-native-linux",
+        GENERATED_PRIVILEGED_STEPS,
+    )?);
+
     let mut all_uses = Vec::new();
     for (name, value) in jobs {
         let Some(name) = name.as_str() else {
@@ -772,6 +1083,9 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             continue;
         };
         let job = yaml_mapping(value, &format!("workflow.jobs.{name}"))?;
+        if name == "attest-native-linux" {
+            continue;
+        }
         for value in job_uses(job, name)? {
             if !value.starts_with("./") {
                 let pinned = value.rsplit_once('@').is_some_and(|(_, reference)| {
@@ -789,22 +1103,14 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             all_uses.push((name, value));
         }
     }
-    if all_uses.iter().any(|(job, value)| {
-        *job != "attest-native-linux" && value.starts_with("actions/attest-build-provenance@")
-    }) {
+    if all_uses
+        .iter()
+        .any(|(_, value)| value.starts_with("actions/attest-build-provenance@"))
+    {
         violations
             .push("only the trusted attestation job may invoke provenance attestation".to_string());
     }
-    if !all_uses.iter().any(|(job, value)| {
-        *job == "attest-native-linux" && value.starts_with("actions/attest-build-provenance@")
-    }) {
-        violations.push("trusted attestation job is missing provenance attestation".to_string());
-    }
-    for (name, job) in [
-        ("build-native-linux", build),
-        ("verify-native-linux", verify),
-        ("attest-native-linux", attest),
-    ] {
+    for (name, job) in [("build-native-linux", build), ("verify-native-linux", verify)] {
         let mut checkout_count = 0;
         for step in step_mappings(job, name)? {
             let Some(uses) = yaml_get(step, "uses").and_then(YamlValue::as_str) else {
@@ -976,76 +1282,11 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
         );
     }
 
-    let mut checkout_count = 0;
-    let mut all_uses = Vec::new();
-    for step in step_mappings(attest, "attest-native-template")? {
-        let Some(uses) = yaml_get(step, "uses").and_then(YamlValue::as_str) else {
-            continue;
-        };
-        if uses.starts_with("actions/checkout@") {
-            checkout_count += 1;
-            let Some(with) = yaml_get(step, "with").and_then(YamlValue::as_mapping) else {
-                violations.push(
-                    "template attestation checkout must define exact candidate settings"
-                        .to_string(),
-                );
-                continue;
-            };
-            if yaml_get(with, "persist-credentials").and_then(YamlValue::as_bool) != Some(false)
-                || yaml_get(with, "ref").and_then(YamlValue::as_str) != Some("${{ github.sha }}")
-                || yaml_get(with, "fetch-depth").and_then(YamlValue::as_i64) != Some(0)
-            {
-                violations.push(
-                    "template attestation checkout must disable credentials, pin github.sha, and fetch complete history"
-                        .to_string(),
-                );
-            }
-        }
-        if !uses.starts_with("./") {
-            let pinned = uses.rsplit_once('@').is_some_and(|(_, reference)| {
-                reference.len() == 40
-                    && reference
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            });
-            if !pinned {
-                violations.push(format!(
-                    "template attestation external action is not pinned to a lowercase SHA: {uses}"
-                ));
-            }
-        }
-        all_uses.push(uses);
-    }
-    if checkout_count != 1 {
-        violations
-            .push("template attestation must contain exactly one pinned checkout step".to_string());
-    }
-    if !all_uses
-        .iter()
-        .any(|uses| uses.starts_with("actions/attest-build-provenance@"))
-    {
-        violations.push("template attestation job is missing provenance attestation".to_string());
-    }
-    let required_action_counts = [
-        ("actions/checkout@", 1),
-        ("actions/download-artifact@", 3),
-        ("actions/attest-build-provenance@", 1),
-        ("actions/upload-artifact@", 1),
-    ];
-    if all_uses.len() != 6
-        || required_action_counts.iter().any(|(prefix, expected)| {
-            all_uses
-                .iter()
-                .filter(|uses| uses.starts_with(prefix))
-                .count()
-                != *expected
-        })
-    {
-        violations.push(
-            "template attestation job must contain the complete exact checkout, download, attestation, and receipt-upload action set"
-                .to_string(),
-        );
-    }
+    violations.extend(validate_privileged_steps(
+        attest,
+        "attest-native-template",
+        ROOT_PRIVILEGED_STEPS,
+    )?);
 
     let attest_run = job_run_text(attest, "attest-native-template")?;
     for required in [

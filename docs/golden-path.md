@@ -211,7 +211,12 @@ separate trusted template attestation workflow runs only on `main` or version
 tag pushes. Release preflight structurally validates that optional privileged
 wrapper when it is present, including its exact trigger, job graph, isolated
 OIDC permissions, hosted runner, pinned actions, credential-free full-history
-checkout, and source-bound authorization path. The hosted proof also requires
+checkout, and source-bound authorization path. One shared fail-closed contract
+validates the complete ordered privileged-step sequence for both the generated
+workflow and toolkit-root wrapper: every step permits only its exact keys,
+action pins and inputs cannot drift, and the provenance subject list must be
+the exact ordered archive, checksum-sidecar, verification-report, and
+authorization-receipt set. The hosted proof also requires
 the generated template's runner-policy helper to remain byte-identical to the
 canonical root copy. GitHub-hosted attestations are provenance evidence; they
 do not publish a release.
