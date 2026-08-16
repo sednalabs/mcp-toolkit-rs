@@ -67,6 +67,30 @@ cargo test --all-targets --all-features
 The hosted GitHub workflows in `.github/workflows/` should be the shared proof
 surface for public review and merge.
 
+## Native Linux Release Artifacts
+
+Before dispatching `.github/workflows/native-release-artifacts.yml`, generate
+and commit `Cargo.lock`. The workflow refuses an absent or stale lockfile and
+builds the exact workflow commit with `cargo build --release --locked`.
+
+The manual workflow builds on native GitHub-hosted x86_64 and arm64 Linux
+runners. Each SHA-qualified artifact contains an ELF binary, exact candidate
+receipt, canonical tool inventory and schema, target-specific CycloneDX SBOM,
+release metadata, and a complete payload checksum manifest. A sidecar checksum
+covers the archive itself. The final job downloads both architectures, verifies
+the exact archive and file sets, and requires byte-equivalent canonical tool
+inventories and schemas.
+
+GitHub build-provenance attestations bind each archive and checksum to the
+hosted workflow. This workflow uploads review artifacts only; it does not create
+a tag, publish a GitHub Release, or install the binary.
+
+Run the verifier's fixture-backed contract tests locally without building Rust:
+
+```bash
+python3 scripts/native_release_artifact.py --self-test
+```
+
 Inspect the active profile's tool surface without starting a client:
 
 ```bash
@@ -91,7 +115,8 @@ mcp-toolkit release-preflight .
 
 The preflight is static and secret-safe. It checks the README, license, Cargo
 metadata, GitHub workflows, CodeQL, dependency governance, schema/probe proof,
-and high-confidence secret markers without executing this server.
+dual-native release semantics, and high-confidence secret markers without
+executing this server.
 
 The scripted probe scenario exercises the generated binary through a real MCP
 client:

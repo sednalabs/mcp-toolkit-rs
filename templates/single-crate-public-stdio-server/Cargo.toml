@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Standalone public Rust MCP server starter with hosted CI, CodeQL, coverage, and dependency governance."
+description = "Standalone public Rust MCP server starter with hosted CI, governance, and dual-native Linux release artifacts."
 
 [dependencies]
 mcp-toolkit = { path = "../../crates/mcp-toolkit", features = ["server-stdio"] }

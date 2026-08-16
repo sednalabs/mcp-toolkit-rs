@@ -34,7 +34,9 @@ fn standalone_public_template_includes_required_repo_files() {
         "docs/dependency-governance.md",
         "scripts/dependency_governance_check.sh",
         "scripts/rebaseline_tool_schema_snapshot.sh",
+        "scripts/native_release_artifact.py",
         ".github/workflows/rust-baseline.yml",
+        ".github/workflows/native-release-artifacts.yml",
         ".github/workflows/code-coverage.yml",
         ".github/workflows/codeql.yml",
         ".github/workflows/codeql-query-tests.yml",
@@ -47,6 +49,15 @@ fn standalone_public_template_includes_required_repo_files() {
     ] {
         assert_relative_path_exists(&root, relative);
     }
+}
+
+#[test]
+fn standalone_public_template_uses_the_canonical_native_release_helper() {
+    let root_helper = std::fs::read(repo_root().join("scripts/native_release_artifact.py"))
+        .expect("root native release helper");
+    let template_helper = std::fs::read(template_root().join("scripts/native_release_artifact.py"))
+        .expect("template native release helper");
+    assert_eq!(template_helper, root_helper);
 }
 
 #[test]
