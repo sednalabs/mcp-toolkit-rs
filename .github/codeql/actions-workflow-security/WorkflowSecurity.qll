@@ -193,9 +193,9 @@ predicate jobHasMetadataMarker(Job job) {
 }
 
 predicate jobHasNativeAttestationMarker(Job job) {
-  jobUsesActionMatching(job, "(?i)^actions/attest(-build-provenance)?@.*", _)
+  jobUsesActionMatching(job, "(?i)^actions/attest(-build-provenance)?(@.*)?$", _)
   or
-  jobUsesActionMatching(job, "(?i)^github/actions/attest-build-provenance@.*", _)
+  jobUsesActionMatching(job, "(?i)^github/actions/attest-build-provenance(@.*)?$", _)
 }
 
 predicate jobHasRepoApprovedProvenance(Job job) {

@@ -34,6 +34,13 @@ the exact template id. Use
 dependencies, `--pattern <id>` to let the generator choose the recommended
 template, and `--force` only when replacing generated files intentionally.
 
+Every maintained starter ships `scripts/workflow_runner_policy_check.py` as a
+byte-identical copy of the canonical root helper. Template-integrity tests and
+hosted workflow proof enumerate the curated stdio, hosted HTTP/auth, and
+standalone public stdio copies, run each copy's embedded negative tests, and
+fail if any copy drifts. This keeps exact matrix-shape and self-hosted-dimension
+rejection intact in every generated repository.
+
 Run `mcp-toolkit doctor <generated-server-dir>` after generation to check the
 starter source, tool-schema snapshot, profile contract test, transport test,
 probe scenario, and baseline GitHub workflow before building or configuring an
@@ -50,8 +57,9 @@ the inferred transport, with `--transport`, `--name`, `--command`, `--url`, and
 
 Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
 installing a generated repository. It is stricter than doctor: the standalone
-public template is expected to pass when generated with `--toolkit-git` or
-after local toolkit path dependencies are replaced, while smaller starters
+public template is expected to pass after generation with `--toolkit-git` and
+committing the generated `Cargo.lock`, or after local toolkit path dependencies
+are replaced and locked, while smaller starters
 should fail until they add a license file, CodeQL or equivalent static analysis,
 dependency governance, coverage, release metadata, and public-ready docs. The
 checked-in templates use local path dependencies for toolkit development and
@@ -124,11 +132,18 @@ It demonstrates:
 - vendored CodeQL workflow-security queries for downstream reuse;
 - standalone GitHub workflows for baseline validation, CodeQL, coverage, and
   dependency governance;
+- a trusted-push dual-native Linux artifact workflow for x86_64 and arm64, with
+  locked builds, exact-SHA readback, ELF checks, canonical tool-surface parity,
+  GNU interpreter/GLIBC compatibility, target-specific CycloneDX SBOMs bound
+  to source/input/dependency evidence, complete checksums, consumer reverification,
+  and GitHub attestations;
 - catalog-profile, schema-snapshot, stdio-smoke, response-safety, and
   `mcp-probe` scenario files carried from the curated stdio starter, including
   binary tests for local tool-surface inspection flags;
 - a public-safe `.gitignore`, `LICENSE`, and starter `deny.toml`;
 - repo-local governance and snapshot-rebaseline helper scripts.
+- a generic stdlib-only `scripts/native_release_artifact.py` archive builder
+  and verifier kept outside policy-core.
 
 Validate it with:
 
@@ -150,6 +165,16 @@ cargo run -- --print-tool-schema
 cargo run -- --print-client-config
 mcp-toolkit release-preflight .
 ```
+
+Generate and commit the service `Cargo.lock` before the reviewed change reaches
+`main` or a `v...` tag. `native-release-artifacts.yml` produces SHA-qualified
+GitHub Actions artifacts for native x86_64 and arm64 Linux only from that
+trusted push. Read-only build and parity jobs cannot attest; a final privileged
+job reverifies the complete consumer artifact set before provenance is issued.
+A version tag must identify a commit proven from complete Git history to be
+identical to or an ancestor of protected `main`.
+The final provenance set includes a run-bound `release-authorization.json`
+receipt. The workflow does not publish a GitHub Release or install a binary.
 
 ## Hosted HTTP/Auth Server
 

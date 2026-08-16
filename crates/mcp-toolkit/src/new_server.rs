@@ -191,7 +191,7 @@ pub fn templates() -> &'static [TemplateSpec] {
             id: "single-crate-public-stdio",
             source_dir: "single-crate-public-stdio-server",
             source_package: "single-crate-public-stdio-server",
-            description: "Standalone public stdio repository with CI, CodeQL, coverage, and dependency governance.",
+            description: "Standalone public stdio repository with CI, governance, and dual-native Linux release artifacts.",
             aliases: &[
                 "single-crate-public-stdio-server",
                 "public-stdio",
