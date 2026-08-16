@@ -65,6 +65,9 @@ fn generator_creates_curated_stdio_project() {
 #[test]
 fn generator_emits_contract_and_probe_artifacts_for_every_template() {
     let root = temp_root("all-template-contracts");
+    let canonical_runner_policy = read(
+        &default_toolkit_root().join("scripts/workflow_runner_policy_check.py"),
+    );
 
     for template in templates() {
         let package_name = format!("{}-generated", template.id);
@@ -87,6 +90,12 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
         assert!(
             output.join("tests/tool_schema_snapshot.rs").exists(),
             "{} should include tool schema snapshot tests",
+            template.id
+        );
+        assert_eq!(
+            read(&output.join("scripts/workflow_runner_policy_check.py")),
+            canonical_runner_policy,
+            "{} should emit the canonical workflow runner policy helper",
             template.id
         );
 

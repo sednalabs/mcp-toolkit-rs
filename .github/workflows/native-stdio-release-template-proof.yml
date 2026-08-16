@@ -7,6 +7,8 @@ on:
       - ".github/workflows/native-stdio-release-template-attest.yml"
       - "scripts/native_release_artifact.py"
       - "scripts/workflow_runner_policy_check.py"
+      - "templates/curated-stdio-intent-server/scripts/workflow_runner_policy_check.py"
+      - "templates/hosted-http-auth-server/scripts/workflow_runner_policy_check.py"
       - "templates/single-crate-public-stdio-server/**"
   workflow_call:
   workflow_dispatch:
@@ -108,14 +110,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/workflow_runner_policy_check.py --self-test
+          python3 scripts/workflow_runner_policy_check.py \
+            --self-test \
+            --root . \
+            --root templates/curated-stdio-intent-server \
+            --root templates/hosted-http-auth-server \
+            --root templates/single-crate-public-stdio-server
           python3 scripts/native_release_artifact.py --self-test
           cmp \
             scripts/native_release_artifact.py \
             templates/single-crate-public-stdio-server/scripts/native_release_artifact.py
-          cmp \
-            scripts/workflow_runner_policy_check.py \
-            templates/single-crate-public-stdio-server/scripts/workflow_runner_policy_check.py
+          for template in \
+            curated-stdio-intent-server \
+            hosted-http-auth-server \
+            single-crate-public-stdio-server
+          do
+            helper="templates/$template/scripts/workflow_runner_policy_check.py"
+            cmp scripts/workflow_runner_policy_check.py "$helper"
+            python3 "$helper" --self-test --root "templates/$template"
+          done
 
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain stable

@@ -34,6 +34,13 @@ the exact template id. Use
 dependencies, `--pattern <id>` to let the generator choose the recommended
 template, and `--force` only when replacing generated files intentionally.
 
+Every maintained starter ships `scripts/workflow_runner_policy_check.py` as a
+byte-identical copy of the canonical root helper. Template-integrity tests and
+hosted workflow proof enumerate the curated stdio, hosted HTTP/auth, and
+standalone public stdio copies, run each copy's embedded negative tests, and
+fail if any copy drifts. This keeps exact matrix-shape and self-hosted-dimension
+rejection intact in every generated repository.
+
 Run `mcp-toolkit doctor <generated-server-dir>` after generation to check the
 starter source, tool-schema snapshot, profile contract test, transport test,
 probe scenario, and baseline GitHub workflow before building or configuring an

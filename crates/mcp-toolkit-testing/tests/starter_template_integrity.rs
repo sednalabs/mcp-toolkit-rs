@@ -1,5 +1,11 @@
 use std::path::{Path, PathBuf};
 
+const RUNNER_POLICY_TEMPLATE_NAMES: &[&str] = &[
+    "single-crate-public-stdio-server",
+    "curated-stdio-intent-server",
+    "hosted-http-auth-server",
+];
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -65,17 +71,51 @@ fn runner_policy_helpers_match(root_helper: &[u8], template_helper: &[u8]) -> bo
     root_helper == template_helper
 }
 
+fn runner_policy_template_names_on_disk() -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(repo_root().join("templates")).expect("templates directory") {
+        let entry = entry.expect("template directory entry");
+        if entry
+            .path()
+            .join("scripts/workflow_runner_policy_check.py")
+            .is_file()
+        {
+            names.push(
+                entry
+                    .file_name()
+                    .into_string()
+                    .expect("template directory name must be UTF-8"),
+            );
+        }
+    }
+    names.sort();
+    names
+}
+
 #[test]
-fn standalone_public_template_uses_the_canonical_runner_policy_helper() {
+fn runner_policy_template_inventory_is_complete() {
+    let mut expected = RUNNER_POLICY_TEMPLATE_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(runner_policy_template_names_on_disk(), expected);
+}
+
+#[test]
+fn every_starter_template_uses_the_canonical_runner_policy_helper() {
     let root_helper = std::fs::read(repo_root().join("scripts/workflow_runner_policy_check.py"))
         .expect("root workflow runner policy helper");
-    let template_helper =
-        std::fs::read(template_root().join("scripts/workflow_runner_policy_check.py"))
-            .expect("template workflow runner policy helper");
-    assert!(
-        runner_policy_helpers_match(&root_helper, &template_helper),
-        "template workflow runner policy helper drifted from the canonical root copy"
-    );
+    for template in RUNNER_POLICY_TEMPLATE_NAMES {
+        let template_helper = std::fs::read(
+            named_template_root(template).join("scripts/workflow_runner_policy_check.py"),
+        )
+        .unwrap_or_else(|error| panic!("read {template} workflow runner policy helper: {error}"));
+        assert!(
+            runner_policy_helpers_match(&root_helper, &template_helper),
+            "{template} workflow runner policy helper drifted from the canonical root copy"
+        );
+    }
 }
 
 #[test]
