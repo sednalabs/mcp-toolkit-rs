@@ -149,13 +149,14 @@ impl BuildProvenance {
     pub fn from_input(input: BuildProvenanceInput<'_>) -> Self {
         let component = normalized_or(input.component, UNKNOWN_VALUE);
         let server_version = normalized_or(input.server_version, UNKNOWN_VALUE);
-        let revision = normalized_option(input.revision).unwrap_or_else(|| UNKNOWN_VALUE.to_string());
-        let reference = normalized_option(input.reference).unwrap_or_else(|| UNKNOWN_VALUE.to_string());
+        let revision =
+            normalized_option(input.revision).unwrap_or_else(|| UNKNOWN_VALUE.to_string());
+        let reference =
+            normalized_option(input.reference).unwrap_or_else(|| UNKNOWN_VALUE.to_string());
         let source_date_epoch = normalized_option(input.source_date_epoch);
         let source_fingerprint = source_fingerprint(&revision, input.dirty);
-        let build_identity = normalized_option(input.build_identity_override).unwrap_or_else(|| {
-            build_identity(&component, &server_version, &revision, input.dirty)
-        });
+        let build_identity = normalized_option(input.build_identity_override)
+            .unwrap_or_else(|| build_identity(&component, &server_version, &revision, input.dirty));
 
         Self {
             component,
