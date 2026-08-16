@@ -42,6 +42,8 @@ STANDARD_PUBLIC_RUNNER_LABELS = frozenset(
     }
 )
 
+MATRIX_RUNNER_EXPRESSION = "${{ matrix.runner }}"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -92,10 +94,51 @@ def validate_label(job_ref: str, label: str) -> list[str]:
     return violations
 
 
-def validate_runs_on(job_ref: str, runs_on: object) -> list[str]:
+def validate_matrix_runner(job_ref: str, job_body: object) -> list[str]:
+    if not isinstance(job_body, dict):
+        return [f"{job_ref}: matrix runner routing requires a mapping job body."]
+
+    strategy = job_body.get("strategy")
+    if not isinstance(strategy, dict):
+        return [
+            f"{job_ref}: {MATRIX_RUNNER_EXPRESSION!r} requires a literal strategy.matrix.include list."
+        ]
+    matrix = strategy.get("matrix")
+    if not isinstance(matrix, dict):
+        return [
+            f"{job_ref}: {MATRIX_RUNNER_EXPRESSION!r} requires a literal strategy.matrix.include list."
+        ]
+    include = matrix.get("include")
+    if not isinstance(include, list) or not include:
+        return [
+            f"{job_ref}: {MATRIX_RUNNER_EXPRESSION!r} requires a non-empty literal strategy.matrix.include list."
+        ]
+
+    violations: list[str] = []
+    for index, row in enumerate(include):
+        row_ref = f"{job_ref}: strategy.matrix.include[{index}]"
+        if not isinstance(row, dict):
+            violations.append(f"{row_ref} must be a literal mapping with a runner key.")
+            continue
+        if "runner" not in row:
+            violations.append(f"{row_ref} is missing the required runner key.")
+            continue
+        runner = row["runner"]
+        if not isinstance(runner, str):
+            violations.append(f"{row_ref}.runner must be a literal string label.")
+            continue
+        violations.extend(validate_label(f"{row_ref}.runner", runner))
+    return violations
+
+
+def validate_runs_on(
+    job_ref: str, runs_on: object, job_body: object | None = None
+) -> list[str]:
     violations: list[str] = []
     labels: list[str] = []
 
+    if runs_on == MATRIX_RUNNER_EXPRESSION:
+        return validate_matrix_runner(job_ref, job_body)
     if isinstance(runs_on, str):
         labels = [runs_on]
     elif isinstance(runs_on, list):
@@ -180,7 +223,11 @@ def validate_workflow_file(path: Path) -> list[str]:
             continue
         if "runs-on" not in job_body:
             continue
-        violations.extend(validate_runs_on(f"{path}::{job_id}", job_body["runs-on"]))
+        violations.extend(
+            validate_runs_on(
+                f"{path}::{job_id}", job_body["runs-on"], job_body=job_body
+            )
+        )
     return violations
 
 
@@ -223,6 +270,89 @@ class RunnerPolicyTests(unittest.TestCase):
     def test_rejects_dynamic_expression(self) -> None:
         violations = validate_runs_on("workflow.yml::build", "${{ inputs.runner }}")
         self.assertTrue(any("dynamic runs-on expression" in item for item in violations))
+
+    def test_allows_exact_matrix_runner_with_literal_include_values(self) -> None:
+        job = {
+            "runs-on": MATRIX_RUNNER_EXPRESSION,
+            "strategy": {
+                "matrix": {
+                    "include": [
+                        {"runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu"},
+                        {"runner": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+                    ]
+                }
+            },
+        }
+        self.assertEqual(
+            validate_runs_on("workflow.yml::build", job["runs-on"], job), []
+        )
+
+    def test_rejects_matrix_include_row_missing_runner(self) -> None:
+        job = {
+            "strategy": {"matrix": {"include": [{"target": "x86_64"}]}},
+        }
+        violations = validate_runs_on(
+            "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+        )
+        self.assertTrue(any("missing the required runner key" in item for item in violations))
+
+    def test_rejects_missing_matrix_structure_keys(self) -> None:
+        jobs = [
+            {},
+            {"strategy": {}},
+            {"strategy": {"matrix": {}}},
+        ]
+        for job in jobs:
+            with self.subTest(job=job):
+                self.assertNotEqual(
+                    validate_runs_on(
+                        "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                    ),
+                    [],
+                )
+
+    def test_rejects_matrix_custom_and_self_hosted_labels(self) -> None:
+        for label in ("linux-x64", "self-hosted"):
+            with self.subTest(label=label):
+                job = {
+                    "strategy": {"matrix": {"include": [{"runner": label}]}},
+                }
+                self.assertNotEqual(
+                    validate_runs_on(
+                        "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                    ),
+                    [],
+                )
+
+    def test_rejects_nested_matrix_runner_expression(self) -> None:
+        violations = validate_runs_on(
+            "workflow.yml::build", "${{ matrix.release.runner }}"
+        )
+        self.assertTrue(any("dynamic runs-on expression" in item for item in violations))
+
+    def test_rejects_from_json_runner_expression(self) -> None:
+        violations = validate_runs_on(
+            "workflow.yml::build", "${{ fromJSON(inputs.runners) }}"
+        )
+        self.assertTrue(any("dynamic runs-on expression" in item for item in violations))
+
+    def test_rejects_matrix_runner_group(self) -> None:
+        violations = validate_runs_on(
+            "workflow.yml::build",
+            {"group": "release-runners", "labels": MATRIX_RUNNER_EXPRESSION},
+        )
+        self.assertTrue(any("runner groups are forbidden" in item for item in violations))
+
+    def test_rejects_non_string_matrix_include_rows_and_runner_values(self) -> None:
+        for include in (["ubuntu-24.04"], [{"runner": ["ubuntu-24.04"]}]):
+            with self.subTest(include=include):
+                job = {"strategy": {"matrix": {"include": include}}}
+                self.assertNotEqual(
+                    validate_runs_on(
+                        "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                    ),
+                    [],
+                )
 
     def test_rejects_multi_label_array(self) -> None:
         violations = validate_runs_on(
