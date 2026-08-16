@@ -24,7 +24,7 @@
 //! * Keeping host-facing descriptor metadata aligned with the app descriptor
 //!   contract they target.
 
-use rmcp::model::{Meta, Tool};
+use rmcp::model::{MetaObject as Meta, Tool};
 use serde::ser::Error as _;
 use serde_json::{json, Map, Value};
 
@@ -158,7 +158,7 @@ impl McpAppsOAuthSecurityScheme {
 /// replaced with a single OAuth 2 security scheme using the provided scopes.
 ///
 /// ```
-/// use rmcp::model::Meta;
+/// use rmcp::model::MetaObject as Meta;
 /// use serde_json::json;
 /// use mcp_toolkit_core::mcp_apps::with_mcp_apps_oauth_security_scheme;
 ///
@@ -190,7 +190,7 @@ where
 /// replaced with the supplied scheme array.
 ///
 /// ```
-/// use rmcp::model::Meta;
+/// use rmcp::model::MetaObject as Meta;
 /// use serde_json::json;
 /// use mcp_toolkit_core::mcp_apps::{
 ///     with_mcp_apps_security_schemes, McpAppsSecurityScheme,
@@ -470,7 +470,7 @@ mod tests {
         MCP_APPS_SECURITY_SCHEMES_META_KEY, MCP_APPS_SENSITIVITY_META_KEY,
         MCP_APPS_WIDGET_ACCESSIBLE_META_KEY,
     };
-    use rmcp::model::{JsonObject, Meta, Tool};
+    use rmcp::model::{JsonObject, MetaObject as Meta, Tool};
     use serde_json::json;
     use std::sync::Arc;
 
