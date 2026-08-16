@@ -192,6 +192,13 @@ The `rust-baseline` workflow runs those checks on pull requests, pushes to the
 primary branch, and manual dispatches. Record the run URL in the PR or work
 item before merging.
 
+For a generated public stdio server, commit `Cargo.lock` and dispatch the
+manual `native-release-artifacts` workflow on the exact candidate. Treat the
+two native build jobs and the cross-architecture verifier as one proof unit:
+the x86_64 and arm64 archives must both pass ELF, checksum, exact file-set,
+candidate, SBOM, and canonical tool inventory/schema checks. GitHub-hosted
+artifact attestations are provenance evidence; they do not publish a release.
+
 Snapshot updates are exceptional. To intentionally rebaseline a snapshot:
 
 ```bash
@@ -238,7 +245,8 @@ Before publishing or promoting a toolkit-built server:
 2. Tool schema snapshots and runtime contract tests are committed.
 3. GitHub-hosted validation passed on the exact commit being promoted.
 4. The PR or work item records the validation run URL.
-5. Any release artifact has a stable name and SHA256 digest.
+5. Any native release artifact has a SHA-qualified name, complete checksum
+   coverage, target-specific CycloneDX SBOM, and GitHub-hosted attestation.
 6. Fresh runtime smoke proof was captured after the final build.
 7. Existing long-lived MCP client sessions are restarted or explicitly called
    out as stale until restart.
@@ -250,6 +258,8 @@ Before publishing or promoting a toolkit-built server:
     when the server is expected to be publicly maintained.
 12. Public wording has been scrubbed for secrets, hostnames, and internal-only
     terminology.
+13. Multi-architecture artifacts expose equal canonical tool inventories and
+    schemas, and the recorded candidate equals the workflow commit.
 
 For service repositories, also verify that service-specific policy, secrets,
 hostnames, backend schemas, and deployment-specific wording remain out of this

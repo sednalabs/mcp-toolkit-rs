@@ -28,6 +28,7 @@ const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
     ("README", "README.md"),
     ("License file", "LICENSE"),
     ("Cargo manifest", "Cargo.toml"),
+    ("Cargo lockfile", "Cargo.lock"),
     (
         "Rust baseline workflow",
         ".github/workflows/rust-baseline.yml",
@@ -58,6 +59,14 @@ const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
     (
         "Dependency governance docs",
         "docs/dependency-governance.md",
+    ),
+    (
+        "Native Linux release workflow",
+        ".github/workflows/native-release-artifacts.yml",
+    ),
+    (
+        "Native release artifact verifier",
+        "scripts/native_release_artifact.py",
     ),
     ("Dependency audit config", "deny.toml"),
 ];
@@ -192,6 +201,7 @@ pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightRepo
     checks.push(portable_toolkit_dependencies_check(&root));
     checks.push(cargo_local_path_overrides_check(&root));
     checks.push(readme_guidance_check(&root));
+    checks.push(native_release_contract_check(&root));
     checks.push(secret_marker_check(&root));
 
     ReleasePreflightReport {
@@ -393,6 +403,99 @@ fn readme_guidance_check(root: &Path) -> ReleasePreflightCheck {
     ReleasePreflightCheck {
         label: "README first-run guidance",
         target: "README.md".to_string(),
+        required: true,
+        passed,
+        detail,
+    }
+}
+
+fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
+    let workflow_path = root.join(".github/workflows/native-release-artifacts.yml");
+    let helper_path = root.join("scripts/native_release_artifact.py");
+    let workflow = fs::read_to_string(&workflow_path);
+    let helper = fs::read_to_string(&helper_path);
+    let (passed, detail) = match (workflow, helper) {
+        (Ok(workflow), Ok(helper)) => {
+            let required_workflow = [
+                "runs-on: ${{ matrix.runner }}",
+                "runner: ubuntu-24.04",
+                "target: x86_64-unknown-linux-gnu",
+                "runner: ubuntu-24.04-arm",
+                "target: aarch64-unknown-linux-gnu",
+                "persist-credentials: false",
+                "ref: ${{ github.sha }}",
+                "cargo build --release --locked",
+                "cargo cyclonedx",
+                "--target \"$TARGET\"",
+                "scripts/native_release_artifact.py capture",
+                "scripts/native_release_artifact.py package",
+                "scripts/native_release_artifact.py verify",
+                "scripts/native_release_artifact.py compare",
+                "actions/attest-build-provenance@",
+                "native-linux-${{ matrix.target }}-${{ github.sha }}",
+                "native-linux-verification-${{ github.sha }}",
+            ];
+            let mut missing = required_workflow
+                .iter()
+                .copied()
+                .filter(|needle| !workflow.contains(needle))
+                .collect::<Vec<_>>();
+            let required_helper = [
+                "BUILD-CANDIDATE",
+                "MANIFEST.sha256",
+                "CycloneDX",
+                "tool-inventory.json",
+                "tool-schema.json",
+                "verify_elf",
+            ];
+            missing.extend(
+                required_helper
+                    .iter()
+                    .copied()
+                    .filter(|needle| !helper.contains(needle)),
+            );
+            let unpinned_actions = workflow
+                .lines()
+                .map(str::trim)
+                .filter_map(|line| line.strip_prefix("uses: "))
+                .filter(|value| {
+                    let Some((_action, reference)) = value.rsplit_once('@') else {
+                        return true;
+                    };
+                    reference.len() != 40
+                        || !reference.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+                .collect::<Vec<_>>();
+
+            if !missing.is_empty() {
+                (
+                    false,
+                    format!("native release contract is missing {}", missing.join(", ")),
+                )
+            } else if !unpinned_actions.is_empty() {
+                (
+                    false,
+                    format!(
+                        "native release workflow has unpinned actions: {}",
+                        unpinned_actions.join(", ")
+                    ),
+                )
+            } else {
+                (
+                    true,
+                    "dual-native locked artifacts, exact candidate proof, SBOMs, checksums, schemas, attestations, and parity verification are present"
+                        .to_string(),
+                )
+            }
+        }
+        (Err(error), _) => (false, format!("failed to read native release workflow: {error}")),
+        (_, Err(error)) => (false, format!("failed to read native release verifier: {error}")),
+    };
+
+    ReleasePreflightCheck {
+        label: "Native Linux release contract",
+        target: ".github/workflows/native-release-artifacts.yml + scripts/native_release_artifact.py"
+            .to_string(),
         required: true,
         passed,
         detail,

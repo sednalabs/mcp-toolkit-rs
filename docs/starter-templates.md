@@ -50,8 +50,9 @@ the inferred transport, with `--transport`, `--name`, `--command`, `--url`, and
 
 Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
 installing a generated repository. It is stricter than doctor: the standalone
-public template is expected to pass when generated with `--toolkit-git` or
-after local toolkit path dependencies are replaced, while smaller starters
+public template is expected to pass after generation with `--toolkit-git` and
+committing the generated `Cargo.lock`, or after local toolkit path dependencies
+are replaced and locked, while smaller starters
 should fail until they add a license file, CodeQL or equivalent static analysis,
 dependency governance, coverage, release metadata, and public-ready docs. The
 checked-in templates use local path dependencies for toolkit development and
@@ -124,11 +125,16 @@ It demonstrates:
 - vendored CodeQL workflow-security queries for downstream reuse;
 - standalone GitHub workflows for baseline validation, CodeQL, coverage, and
   dependency governance;
+- a manual dual-native Linux artifact workflow for x86_64 and arm64, with
+  locked builds, exact-SHA readback, ELF checks, canonical tool-surface parity,
+  target-specific CycloneDX SBOMs, complete checksums, and GitHub attestations;
 - catalog-profile, schema-snapshot, stdio-smoke, response-safety, and
   `mcp-probe` scenario files carried from the curated stdio starter, including
   binary tests for local tool-surface inspection flags;
 - a public-safe `.gitignore`, `LICENSE`, and starter `deny.toml`;
 - repo-local governance and snapshot-rebaseline helper scripts.
+- a generic stdlib-only `scripts/native_release_artifact.py` archive builder
+  and verifier kept outside policy-core.
 
 Validate it with:
 
@@ -150,6 +156,11 @@ cargo run -- --print-tool-schema
 cargo run -- --print-client-config
 mcp-toolkit release-preflight .
 ```
+
+Generate and commit the service `Cargo.lock` before dispatching
+`native-release-artifacts.yml`. The workflow produces SHA-qualified GitHub
+Actions artifacts for native x86_64 and arm64 Linux; it does not publish a
+GitHub Release or install a binary.
 
 ## Hosted HTTP/Auth Server
 

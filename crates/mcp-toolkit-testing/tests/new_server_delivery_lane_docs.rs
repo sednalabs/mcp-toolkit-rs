@@ -101,6 +101,9 @@ fn new_server_delivery_lane_mentions_primary_toolkit_surfaces() {
         "GitHub Actions",
         "reviewer sidecar",
         "SHA256 digest",
+        "target-specific CycloneDX SBOM",
+        "GitHub attestation URLs",
+        "canonical tool inventory/schema equality",
     ] {
         assert!(
             LANE_DOC.contains(surface),
@@ -128,6 +131,7 @@ fn cli_reference_pins_command_and_file_surface() {
         "spec/mcp_probe_stdio_smoke.v1.json",
         "spec/mcp_probe_http_auth_smoke.v1.json",
         ".github/workflows/rust-baseline.yml",
+        ".github/workflows/native-release-artifacts.yml",
         "src/lib.rs",
         "src/main.rs",
         "tests/catalog_profile_contract.rs",

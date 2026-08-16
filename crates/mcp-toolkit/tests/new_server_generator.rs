@@ -115,6 +115,26 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
                 template.id
             );
         }
+
+        if template.id == "single-crate-public-stdio" {
+            assert!(
+                output
+                    .join(".github/workflows/native-release-artifacts.yml")
+                    .exists(),
+                "{} should include the native release artifact workflow",
+                template.id
+            );
+            assert!(
+                output.join("scripts/native_release_artifact.py").exists(),
+                "{} should include the native release verifier",
+                template.id
+            );
+            let workflow = read(&output.join(
+                ".github/workflows/native-release-artifacts.yml",
+            ));
+            assert!(workflow.contains("name: single-crate-public-stdio-generated"));
+            assert!(!workflow.contains("single-crate-public-stdio-server"));
+        }
     }
 
     cleanup(root);
@@ -180,6 +200,7 @@ fn release_preflight_accepts_public_stdio_generated_project() {
         overwrite: false,
     })
     .expect("generate public stdio template");
+    add_lockfile(&output);
 
     let report = inspect_release_preflight(&output);
     assert!(report.ready(), "public template should be release-ready");
@@ -202,8 +223,84 @@ fn release_preflight_accepts_public_stdio_generated_project() {
     assert!(stdout.contains("Public ready: yes"));
     assert!(stdout.contains("CodeQL workflow"));
     assert!(stdout.contains("Dependency governance workflow"));
+    assert!(stdout.contains("Native Linux release workflow"));
+    assert!(stdout.contains("Native Linux release contract"));
     assert!(stdout.contains("Portable toolkit dependencies"));
     assert!(stdout.contains("High-confidence secret marker scan"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_incomplete_native_release_semantics() {
+    let root = temp_root("release-preflight-native-contract");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path)
+        .replace("cargo build --release --locked", "cargo build --release")
+        .replace(
+            "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+            "actions/attest-build-provenance@main",
+        );
+    fs::write(&workflow_path, workflow).expect("weaken native release workflow fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(contract.detail.contains("cargo build --release --locked"));
+    assert!(!report.ready());
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_unpinned_native_release_actions() {
+    let root = temp_root("release-preflight-native-action-pin");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+        "actions/attest-build-provenance@main",
+    );
+    fs::write(&workflow_path, workflow).expect("weaken native action pin fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(contract.detail.contains("unpinned actions"));
+    assert!(!report.ready());
 
     cleanup(root);
 }
@@ -437,12 +534,13 @@ fn release_preflight_accepts_workspace_inherited_package_metadata() {
     let manifest_path = output.join("Cargo.toml");
     let description_line = concat!(
         "description = \"Standalone public Rust MCP server starter with hosted CI, ",
-        "CodeQL, coverage, and dependency governance.\""
+        "governance, and dual-native Linux release artifacts.\""
     );
     let manifest = read(&manifest_path)
         .replace("license = \"Apache-2.0\"", "license.workspace = true")
         .replace(description_line, "description.workspace = true");
     fs::write(&manifest_path, manifest).expect("write workspace-inherited package metadata");
+    add_lockfile(&output);
 
     let report = inspect_release_preflight(&output);
     assert!(
@@ -1158,13 +1256,21 @@ fn add_public_release_files(output: &Path) {
         ".github/workflows/code-coverage.yml",
         ".github/workflows/dependency-governance.yml",
         ".github/workflows/codeql-query-tests.yml",
+        ".github/workflows/native-release-artifacts.yml",
         "scripts/dependency_governance_check.sh",
+        "scripts/native_release_artifact.py",
         "docs/dependency-governance.md",
     ] {
         let target = output.join(relative);
         fs::create_dir_all(target.parent().expect("target parent")).expect("create parent");
         fs::copy(public_template.join(relative), target).expect("copy public release file");
     }
+    add_lockfile(output);
+}
+
+fn add_lockfile(output: &Path) {
+    fs::write(output.join("Cargo.lock"), "# generated for release preflight\nversion = 4\n")
+        .expect("write Cargo.lock fixture");
 }
 
 fn add_manifest_description(output: &Path) {

@@ -15,6 +15,10 @@ fn starter_templates_doc_mentions_standalone_public_template() {
         "ToolCatalog",
         "CodeQL workflow-security queries",
         "dependency governance",
+        "dual-native Linux artifact workflow",
+        "target-specific CycloneDX SBOMs",
+        "GitHub attestations",
+        "native_release_artifact.py",
     ] {
         assert!(
             STARTER_TEMPLATES_DOC.contains(needle),
@@ -54,6 +58,8 @@ fn cli_reference_mentions_template_specific_layouts() {
         "catalog_profile_contract.rs",
         "http_auth_contract.rs",
         "dependency_governance_check.sh",
+        "native-release-artifacts.yml",
+        "native_release_artifact.py",
         "CodeQL",
         "release preflight",
         "OAuth Protected Resource Metadata",

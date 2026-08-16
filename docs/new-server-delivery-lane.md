@@ -204,6 +204,14 @@ Required evidence:
 - terminal conclusion;
 - any relevant artifact name or digest.
 
+For the single-crate public stdio template's
+`.github/workflows/native-release-artifacts.yml` lane, also record
+both native runner targets, exact candidate readback, archive and sidecar
+digests, ELF verification, target-specific CycloneDX SBOM presence, complete
+archive file-set verification, canonical tool inventory/schema equality, and
+GitHub attestation URLs. The workflow is artifact-only and must not be described
+as a published release.
+
 Use the repository's normal workflow when it covers formatting, clippy, tests,
 schema snapshots, and template or server-specific checks. Add a workflow only
 when the existing one cannot prove the lane.
@@ -234,6 +242,11 @@ Acceptable sources:
 - a GitHub Actions artifact produced by the passing run;
 - a release artifact with a stable name and SHA256 digest;
 - a tagged commit whose validation run is recorded.
+
+The maintained public stdio artifact workflow emits SHA-qualified x86_64 and
+arm64 Linux archives and a cross-architecture verification report. A consumer
+must verify the archive sidecar and exact internal manifest before promotion;
+the passing workflow alone is not an installation instruction.
 
 Before promotion, record:
 
