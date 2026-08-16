@@ -420,6 +420,126 @@ fn release_preflight_rejects_untrusted_release_authority() {
 }
 
 #[test]
+fn release_preflight_rejects_extra_privileged_release_job() {
+    let root = temp_root("release-preflight-native-extra-job");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "jobs:\n",
+        "jobs:\n  unreviewed-privileged-job:\n    runs-on: ubuntu-24.04\n    permissions:\n      id-token: write\n      contents: read\n    steps:\n      - run: echo unexpected\n\n",
+    );
+    fs::write(&workflow_path, workflow).expect("add extra privileged release job");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("must contain only"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_unexpected_release_runner() {
+    let root = temp_root("release-preflight-native-runner");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: ubuntu-24.04",
+        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: self-hosted",
+    );
+    fs::write(&workflow_path, workflow).expect("change verifier runner");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("runner labels"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_incomplete_tag_ancestry_proof() {
+    let root = temp_root("release-preflight-native-tag-ancestry");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path)
+        .replace("fetch-depth: 0", "fetch-depth: 1")
+        .replace(
+            "git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+            "echo skipped-main-fetch",
+        );
+    fs::write(&workflow_path, workflow).expect("weaken tag ancestry proof");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native Linux release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("protected-main ancestry")
+            || contract.detail.contains("complete history"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
 fn release_preflight_rejects_attestation_before_consumer_verification() {
     let root = temp_root("release-preflight-native-attestation-order");
     let output = root.join("public-mcp");

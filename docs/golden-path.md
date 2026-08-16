@@ -195,7 +195,9 @@ item before merging.
 For a generated public stdio server, commit `Cargo.lock`, merge the reviewed
 candidate, then use the `native-release-artifacts` run created by a successful
 `main` push or `v...` tag. The workflow has no pull-request or manual release
-entrypoint. Treat the two read-only native build jobs, the cross-architecture
+entrypoint. A version tag must resolve to the exact candidate and that commit
+must be identical to or an ancestor of protected `main`, proven with complete
+Git history. Treat the two read-only native build jobs, the cross-architecture
 verifier, and the final trusted attestation job as one proof unit:
 the x86_64 and arm64 archives must both pass ELF, checksum, exact file-set,
 candidate/source/input-bound SBOM, GNU interpreter/GLIBC, and canonical tool
@@ -208,6 +210,9 @@ read-only, non-attesting `native-stdio-release-template-proof` workflow; the
 separate trusted template attestation workflow runs only on `main` or version
 tag pushes. GitHub-hosted attestations are provenance evidence; they do not
 publish a release.
+An unmerged candidate can prove only the read-only lane. Trusted attestation is
+an explicit post-merge acceptance gap until the protected-`main` workflow runs
+successfully and its exact authorization receipt and attestations are verified.
 
 Snapshot updates are exceptional. To intentionally rebaseline a snapshot:
 

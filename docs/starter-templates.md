@@ -164,6 +164,8 @@ Generate and commit the service `Cargo.lock` before the reviewed change reaches
 GitHub Actions artifacts for native x86_64 and arm64 Linux only from that
 trusted push. Read-only build and parity jobs cannot attest; a final privileged
 job reverifies the complete consumer artifact set before provenance is issued.
+A version tag must identify a commit proven from complete Git history to be
+identical to or an ancestor of protected `main`.
 The final provenance set includes a run-bound `release-authorization.json`
 receipt. The workflow does not publish a GitHub Release or install a binary.
 

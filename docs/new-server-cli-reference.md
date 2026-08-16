@@ -187,7 +187,10 @@ service repository adds public release files and workflows.
 The generated public stdio workflow is artifact-only and runs only for `main`
 pushes or `v...` tags. Generate and commit `Cargo.lock` before that trusted
 push. Pull-request and arbitrary manual feature-branch code receive no OIDC or
-attestation authority. Release preflight structurally parses the workflow,
+attestation authority. Version tags are eligible only when complete Git history
+proves their exact commit is identical to or an ancestor of protected `main`.
+Release preflight structurally parses the complete job map, exact triggers,
+runner labels, permissions, and action references,
 including folded YAML action references, but does not build, attest, publish,
 or install a binary. A trusted successful run produces and attests a run-bound
 `release-authorization.json` receipt only after consumer reverification. Its exact path is

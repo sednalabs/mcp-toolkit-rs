@@ -91,10 +91,65 @@ def require_source(
     require_candidate(source_tree)
 
 
-def release_source_eligible(source_event: str, source_ref: str) -> bool:
-    return source_event == "push" and (
-        source_ref == "refs/heads/main" or TAG_REF_PATTERN.fullmatch(source_ref) is not None
-    )
+def release_source_eligible(
+    source_event: str, source_ref: str, source_main_proven: bool
+) -> bool:
+    if source_event != "push":
+        return False
+    if source_ref == "refs/heads/main":
+        return source_main_proven
+    return source_main_proven and TAG_REF_PATTERN.fullmatch(source_ref) is not None
+
+
+def git_output(repository: Path, *arguments: str) -> str:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or exc.stdout.strip() or "git command failed"
+        raise ArtifactError(detail) from exc
+
+
+def prove_source_on_main(
+    repository: Path,
+    candidate: str,
+    source_event: str,
+    source_ref: str,
+) -> bool:
+    require_candidate(candidate)
+    head = git_output(repository, "rev-parse", "HEAD^{commit}")
+    if head != candidate:
+        raise ArtifactError("checked-out commit does not match the exact candidate")
+    if source_event != "push":
+        return False
+    if source_ref == "refs/heads/main":
+        return True
+    if TAG_REF_PATTERN.fullmatch(source_ref) is None:
+        return False
+    if git_output(repository, "rev-parse", "--is-shallow-repository") != "false":
+        raise ArtifactError("version-tag source proof requires complete Git history")
+    if git_output(repository, "rev-parse", f"{source_ref}^{{commit}}") != candidate:
+        raise ArtifactError("version tag does not resolve to the exact candidate commit")
+    main_ref = "refs/remotes/origin/main"
+    require_candidate(git_output(repository, "rev-parse", f"{main_ref}^{{commit}}"))
+    try:
+        subprocess.run(
+            ["git", "-C", str(repository), "merge-base", "--is-ancestor", candidate, main_ref],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise ArtifactError(
+            "version-tag candidate is not an ancestor of protected main"
+        ) from exc
+    return True
 
 
 def require_target(target: str) -> int:
@@ -275,6 +330,7 @@ def sbom_release_bindings(
     source_event: str,
     source_ref: str,
     source_tree: str,
+    source_main_proven: bool,
     binary_name: str,
     binary_digest: str,
     manifest_digest: str,
@@ -284,7 +340,7 @@ def sbom_release_bindings(
 ) -> dict[str, str]:
     return {
         "mcp-toolkit.release.source.eligible": str(
-            release_source_eligible(source_event, source_ref)
+            release_source_eligible(source_event, source_ref, source_main_proven)
         ).lower(),
         "mcp-toolkit.release.binary.name": binary_name,
         "mcp-toolkit.release.binary.sha256": binary_digest,
@@ -298,6 +354,7 @@ def sbom_release_bindings(
         "mcp-toolkit.release.source.ref": source_ref,
         "mcp-toolkit.release.source.repository": source_repository,
         "mcp-toolkit.release.source.tree": source_tree,
+        "mcp-toolkit.release.source.main_proven": str(source_main_proven).lower(),
         "mcp-toolkit.release.target": target,
     }
 
@@ -310,6 +367,7 @@ def canonical_sbom(
     source_event: str,
     source_ref: str,
     source_tree: str,
+    source_main_proven: bool,
     binary_name: str,
     binary_digest: str,
     manifest_digest: str,
@@ -342,6 +400,7 @@ def canonical_sbom(
         source_event,
         source_ref,
         source_tree,
+        source_main_proven,
         binary_name,
         binary_digest,
         manifest_digest,
@@ -390,6 +449,7 @@ def package(
     source_event: str,
     source_ref: str,
     source_tree: str,
+    source_main_proven: bool,
     output_dir: Path,
 ) -> Path:
     require_candidate(candidate)
@@ -430,6 +490,7 @@ def package(
                 source_event,
                 source_ref,
                 source_tree,
+                source_main_proven,
                 binary_name,
                 binary_digest,
                 manifest_digest,
@@ -443,12 +504,15 @@ def package(
             "candidate": candidate,
             "target": target,
             "binary": binary_name,
-            "release_source_eligible": release_source_eligible(source_event, source_ref),
+            "release_source_eligible": release_source_eligible(
+                source_event, source_ref, source_main_proven
+            ),
             "source": {
                 "repository": source_repository,
                 "event": source_event,
                 "ref": source_ref,
                 "tree": source_tree,
+                "main_proven": source_main_proven,
             },
             "inputs": {
                 "binary_sha256": binary_digest,
@@ -505,6 +569,7 @@ def verify(
     source_event: str,
     source_ref: str,
     source_tree: str,
+    source_main_proven: bool,
     manifest: Path,
     lockfile: Path,
 ) -> dict[str, object]:
@@ -540,12 +605,15 @@ def verify(
             "candidate": candidate,
             "target": target,
             "binary": binary_name,
-            "release_source_eligible": release_source_eligible(source_event, source_ref),
+            "release_source_eligible": release_source_eligible(
+                source_event, source_ref, source_main_proven
+            ),
             "source": {
                 "repository": source_repository,
                 "event": source_event,
                 "ref": source_ref,
                 "tree": source_tree,
+                "main_proven": source_main_proven,
             },
             "inputs": {
                 "binary_sha256": sha256(root / binary_name),
@@ -569,6 +637,7 @@ def verify(
             source_event,
             source_ref,
             source_tree,
+            source_main_proven,
             binary_name,
             sha256(root / binary_name),
             sha256(manifest),
@@ -590,7 +659,9 @@ def verify(
             "archive_sha256": sha256(archive),
             "candidate": candidate,
             "target": target,
-            "release_source_eligible": release_source_eligible(source_event, source_ref),
+            "release_source_eligible": release_source_eligible(
+                source_event, source_ref, source_main_proven
+            ),
             "source_ref": source_ref,
             "source_inputs": expected_metadata["inputs"],
             "runtime": runtime,
@@ -608,6 +679,7 @@ def compare(
     source_event: str,
     source_ref: str,
     source_tree: str,
+    source_main_proven: bool,
     manifest: Path,
     lockfile: Path,
 ) -> dict[str, object]:
@@ -623,6 +695,7 @@ def compare(
             source_event,
             source_ref,
             source_tree,
+            source_main_proven,
             manifest,
             lockfile,
         )
@@ -647,12 +720,15 @@ def compare(
         "schema": "mcp_native_linux_release_verification",
         "version": 2,
         "candidate": candidate,
-        "release_source_eligible": release_source_eligible(source_event, source_ref),
+        "release_source_eligible": release_source_eligible(
+            source_event, source_ref, source_main_proven
+        ),
         "source": {
             "repository": source_repository,
             "event": source_event,
             "ref": source_ref,
             "tree": source_tree,
+            "main_proven": source_main_proven,
         },
         "source_inputs": source_inputs,
         "targets": targets,
@@ -671,17 +747,84 @@ def compare(
     }
 
 
+def validate_authorization_archive(
+    archive: object,
+    binary_name: str,
+    candidate: str,
+    target: str,
+) -> None:
+    if not isinstance(archive, dict) or set(archive) != {
+        "archive",
+        "archive_sha256",
+        "binary_sha256",
+        "target",
+        "runtime",
+    }:
+        raise ArtifactError("authorization archive entry must contain the exact contract fields")
+    expected_name = f"{binary_name}-{target}-{candidate}.tar.gz"
+    if archive.get("archive") != expected_name or archive.get("target") != target:
+        raise ArtifactError("authorization archive identity does not match its expected target")
+    for field in ("archive_sha256", "binary_sha256"):
+        value = archive.get(field)
+        if not isinstance(value, str) or DIGEST_PATTERN.fullmatch(value) is None:
+            raise ArtifactError(f"authorization archive {field} must be an exact SHA-256")
+    runtime = archive.get("runtime")
+    if not isinstance(runtime, dict) or set(runtime) != {
+        "libc",
+        "interpreter",
+        "required_glibc",
+        "maximum_supported_glibc",
+    }:
+        raise ArtifactError("authorization archive runtime must contain the exact contract fields")
+    if runtime.get("libc") != "glibc" or runtime.get("interpreter") != TARGET_INTERPRETERS[target]:
+        raise ArtifactError("authorization archive runtime identity does not match its target")
+    required = runtime.get("required_glibc")
+    maximum = runtime.get("maximum_supported_glibc")
+    match = re.fullmatch(r"(\d+)\.(\d+)", required) if isinstance(required, str) else None
+    if (
+        match is None
+        or maximum != format_glibc(MAX_GLIBC_VERSION)
+        or (int(match.group(1)), int(match.group(2))) > MAX_GLIBC_VERSION
+    ):
+        raise ArtifactError("authorization archive GLIBC contract is invalid")
+
+
 def authorization_receipt(
     verification_path: Path,
+    binary_name: str,
+    expected_candidate: str,
+    expected_source_repository: str,
+    expected_source_event: str,
+    expected_source_ref: str,
+    expected_source_tree: str,
     workflow_run_id: str,
     workflow_run_attempt: str,
 ) -> dict[str, object]:
+    require_candidate(expected_candidate)
+    require_source(
+        expected_source_repository,
+        expected_source_event,
+        expected_source_ref,
+        expected_source_tree,
+    )
     verification = read_json(verification_path)
-    if not isinstance(verification, dict):
-        raise ArtifactError("verification report must be an object")
+    if not isinstance(verification, dict) or set(verification) != {
+        "schema",
+        "version",
+        "candidate",
+        "release_source_eligible",
+        "source",
+        "source_inputs",
+        "targets",
+        "archives",
+        "tool_inventory_equal",
+        "tool_schema_equal",
+    }:
+        raise ArtifactError("verification report must contain the exact authorization fields")
     source = verification.get("source")
     source_inputs = verification.get("source_inputs")
     archives = verification.get("archives")
+    targets = verification.get("targets")
     valid_source_inputs = isinstance(source_inputs, dict) and set(source_inputs) == {
         "manifest_sha256",
         "lockfile_sha256",
@@ -692,32 +835,43 @@ def authorization_receipt(
     if (
         verification.get("schema") != "mcp_native_linux_release_verification"
         or verification.get("version") != 2
+        or verification.get("candidate") != expected_candidate
         or verification.get("release_source_eligible") is not True
-        or not isinstance(source, dict)
+        or source
+        != {
+            "repository": expected_source_repository,
+            "event": expected_source_event,
+            "ref": expected_source_ref,
+            "tree": expected_source_tree,
+            "main_proven": True,
+        }
         or not valid_source_inputs
-        or not isinstance(source.get("event"), str)
-        or not isinstance(source.get("ref"), str)
-        or not release_source_eligible(source.get("event", ""), source.get("ref", ""))
+        or not release_source_eligible(
+            expected_source_event, expected_source_ref, source.get("main_proven", False)
+        )
+        or targets != list(TARGET_MACHINES)
         or not isinstance(archives, list)
-        or len(archives) != 2
+        or len(archives) != len(TARGET_MACHINES)
         or verification.get("tool_inventory_equal") is not True
         or verification.get("tool_schema_equal") is not True
     ):
         raise ArtifactError("verification report is not an eligible trusted release source")
+    for archive, target in zip(archives, TARGET_MACHINES):
+        validate_authorization_archive(archive, binary_name, expected_candidate, target)
     if not workflow_run_id.isdigit() or not workflow_run_attempt.isdigit():
         raise ArtifactError("workflow run id and attempt must be decimal integers")
     return {
         "schema": "mcp_native_linux_release_authorization",
         "version": 1,
         "state": "verified_trusted_source",
-        "candidate": verification.get("candidate"),
+        "candidate": expected_candidate,
         "source": source,
         "source_inputs": source_inputs,
-        "targets": verification.get("targets"),
+        "targets": targets,
         "archives": archives,
         "verification_sha256": sha256(verification_path),
         "workflow": {
-            "repository": source.get("repository"),
+            "repository": expected_source_repository,
             "run_id": workflow_run_id,
             "run_attempt": workflow_run_attempt,
         },
@@ -760,6 +914,55 @@ def fake_sbom(binary_name: str) -> dict[str, object]:
     }
 
 
+def parse_boolean(value: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise argparse.ArgumentTypeError("value must be true or false")
+
+
+def fake_verification_report(binary_name: str = "example-server") -> dict[str, object]:
+    candidate = "a" * 40
+    archives = []
+    for index, target in enumerate(TARGET_MACHINES):
+        archives.append(
+            {
+                "archive": f"{binary_name}-{target}-{candidate}.tar.gz",
+                "archive_sha256": str(index + 1) * 64,
+                "binary_sha256": str(index + 3) * 64,
+                "target": target,
+                "runtime": {
+                    "libc": "glibc",
+                    "interpreter": TARGET_INTERPRETERS[target],
+                    "required_glibc": "2.34",
+                    "maximum_supported_glibc": "2.39",
+                },
+            }
+        )
+    return {
+        "schema": "mcp_native_linux_release_verification",
+        "version": 2,
+        "candidate": candidate,
+        "release_source_eligible": True,
+        "source": {
+            "repository": "example/server",
+            "event": "push",
+            "ref": "refs/heads/main",
+            "tree": "b" * 40,
+            "main_proven": True,
+        },
+        "targets": list(TARGET_MACHINES),
+        "source_inputs": {
+            "manifest_sha256": "d" * 64,
+            "lockfile_sha256": "e" * 64,
+        },
+        "archives": archives,
+        "tool_inventory_equal": True,
+        "tool_schema_equal": True,
+    }
+
+
 class ArtifactTests(unittest.TestCase):
     def test_packages_and_verifies_exact_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -798,6 +1001,7 @@ class ArtifactTests(unittest.TestCase):
                     "push",
                     "refs/heads/main",
                     "b" * 40,
+                    True,
                     root / "dist",
                 )
                 report = verify(
@@ -809,6 +1013,7 @@ class ArtifactTests(unittest.TestCase):
                     "push",
                     "refs/heads/main",
                     "b" * 40,
+                    True,
                     manifest,
                     lockfile,
                 )
@@ -827,11 +1032,47 @@ class ArtifactTests(unittest.TestCase):
             require_candidate("main")
 
     def test_release_authorization_requires_trusted_push_ref(self) -> None:
-        self.assertTrue(release_source_eligible("push", "refs/heads/main"))
-        self.assertTrue(release_source_eligible("push", "refs/tags/v1.2.3"))
-        self.assertFalse(release_source_eligible("workflow_dispatch", "refs/heads/main"))
-        self.assertFalse(release_source_eligible("push", "refs/heads/feature"))
-        self.assertFalse(release_source_eligible("pull_request", "refs/pull/180/merge"))
+        self.assertTrue(release_source_eligible("push", "refs/heads/main", True))
+        self.assertTrue(release_source_eligible("push", "refs/tags/v1.2.3", True))
+        self.assertFalse(release_source_eligible("push", "refs/tags/v1.2.3", False))
+        self.assertFalse(
+            release_source_eligible("workflow_dispatch", "refs/heads/main", True)
+        )
+        self.assertFalse(release_source_eligible("push", "refs/heads/feature", True))
+        self.assertFalse(
+            release_source_eligible("pull_request", "refs/pull/180/merge", True)
+        )
+
+    def test_tag_source_proof_requires_complete_history_and_main_ancestry(self) -> None:
+        candidate = "a" * 40
+        with mock.patch(
+            __name__ + ".git_output",
+            side_effect=[candidate, "false", candidate, "b" * 40],
+        ), mock.patch(__name__ + ".subprocess.run") as run:
+            self.assertTrue(
+                prove_source_on_main(Path("."), candidate, "push", "refs/tags/v1.2.3")
+            )
+            run.assert_called_once()
+        with mock.patch(
+            __name__ + ".git_output", side_effect=[candidate, "true"]
+        ):
+            with self.assertRaisesRegex(ArtifactError, "complete Git history"):
+                prove_source_on_main(Path("."), candidate, "push", "refs/tags/v1.2.3")
+        with mock.patch(
+            __name__ + ".git_output",
+            side_effect=[candidate, "false", "c" * 40],
+        ):
+            with self.assertRaisesRegex(ArtifactError, "exact candidate"):
+                prove_source_on_main(Path("."), candidate, "push", "refs/tags/v1.2.3")
+        with mock.patch(
+            __name__ + ".git_output",
+            side_effect=[candidate, "false", candidate, "b" * 40],
+        ), mock.patch(
+            __name__ + ".subprocess.run",
+            side_effect=subprocess.CalledProcessError(1, ["git", "merge-base"]),
+        ):
+            with self.assertRaisesRegex(ArtifactError, "not an ancestor"):
+                prove_source_on_main(Path("."), candidate, "push", "refs/tags/v1.2.3")
 
     def test_glibc_contract_binds_interpreter_and_maximum_version(self) -> None:
         contract = parse_glibc_contract(
@@ -876,6 +1117,7 @@ class ArtifactTests(unittest.TestCase):
             "push",
             "refs/heads/main",
             "b" * 40,
+            True,
             "example-server",
             "c" * 64,
             "d" * 64,
@@ -897,6 +1139,7 @@ class ArtifactTests(unittest.TestCase):
             "workflow_dispatch",
             "refs/heads/main",
             "b" * 40,
+            False,
             "example-server",
             "c" * 64,
             "d" * 64,
@@ -909,34 +1152,73 @@ class ArtifactTests(unittest.TestCase):
     def test_authorization_receipt_requires_verified_trusted_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "verification.json"
-            report = {
-                "schema": "mcp_native_linux_release_verification",
-                "version": 2,
-                "candidate": "a" * 40,
-                "release_source_eligible": True,
-                "source": {
-                    "repository": "example/server",
-                    "event": "push",
-                    "ref": "refs/heads/main",
-                    "tree": "b" * 40,
-                },
-                "targets": list(TARGET_MACHINES),
-                "source_inputs": {
-                    "manifest_sha256": "d" * 64,
-                    "lockfile_sha256": "e" * 64,
-                },
-                "archives": [{"target": target} for target in TARGET_MACHINES],
-                "tool_inventory_equal": True,
-                "tool_schema_equal": True,
-            }
+            report = fake_verification_report()
+            arguments = (
+                path,
+                "example-server",
+                "a" * 40,
+                "example/server",
+                "push",
+                "refs/heads/main",
+                "b" * 40,
+                "123",
+                "1",
+            )
             write_json(path, report)
-            receipt = authorization_receipt(path, "123", "1")
+            receipt = authorization_receipt(*arguments)
             self.assertEqual(receipt["state"], "verified_trusted_source")
             report["source"]["event"] = "workflow_dispatch"
             report["release_source_eligible"] = False
             write_json(path, report)
             with self.assertRaisesRegex(ArtifactError, "not an eligible"):
-                authorization_receipt(path, "123", "1")
+                authorization_receipt(*arguments)
+
+    def test_authorization_receipt_rejects_identity_and_archive_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "verification.json"
+            arguments = (
+                path,
+                "example-server",
+                "a" * 40,
+                "example/server",
+                "push",
+                "refs/heads/main",
+                "b" * 40,
+                "123",
+                "1",
+            )
+            mutations = {
+                "candidate": lambda value: value.__setitem__("candidate", "c" * 40),
+                "tree": lambda value: value["source"].__setitem__("tree", "c" * 40),
+                "repository": lambda value: value["source"].__setitem__(
+                    "repository", "other/server"
+                ),
+                "skeletal archive": lambda value: value.__setitem__(
+                    "archives", [{"target": target} for target in TARGET_MACHINES]
+                ),
+                "extra archive": lambda value: value["archives"].append(
+                    value["archives"][0].copy()
+                ),
+                "mismatched archive": lambda value: value["archives"][0].__setitem__(
+                    "binary_sha256", "not-a-digest"
+                ),
+                "wrong targets": lambda value: value.__setitem__(
+                    "targets", list(reversed(TARGET_MACHINES))
+                ),
+                "extra archive field": lambda value: value["archives"][0].__setitem__(
+                    "unexpected", True
+                ),
+                "runtime mismatch": lambda value: value["archives"][0]["runtime"].__setitem__(
+                    "interpreter", TARGET_INTERPRETERS["aarch64-unknown-linux-gnu"]
+                ),
+            }
+            for label, mutate in mutations.items():
+                with self.subTest(label=label):
+                    report = fake_verification_report()
+                    mutate(report)
+                    write_json(path, report)
+                    with self.assertRaises(ArtifactError):
+                        authorization_receipt(*arguments)
 
     def test_cross_arch_compare_allows_distinct_binaries_but_not_source_inputs(self) -> None:
         runtime = {
@@ -983,6 +1265,7 @@ class ArtifactTests(unittest.TestCase):
             "push",
             "refs/heads/main",
             "a" * 40,
+            True,
             Path("Cargo.toml"),
             Path("Cargo.lock"),
         )
@@ -1007,6 +1290,11 @@ def parser() -> argparse.ArgumentParser:
     capture_parser.add_argument("--binary", type=Path, required=True)
     capture_parser.add_argument("--inventory-output", type=Path, required=True)
     capture_parser.add_argument("--schema-output", type=Path, required=True)
+    source_parser = commands.add_parser("prove-source")
+    source_parser.add_argument("--repository", type=Path, required=True)
+    source_parser.add_argument("--candidate", required=True)
+    source_parser.add_argument("--source-event", required=True)
+    source_parser.add_argument("--source-ref", required=True)
     package_parser = commands.add_parser("package")
     for action in (package_parser,):
         action.add_argument("--binary", type=Path, required=True)
@@ -1022,6 +1310,7 @@ def parser() -> argparse.ArgumentParser:
     package_parser.add_argument("--source-event", required=True)
     package_parser.add_argument("--source-ref", required=True)
     package_parser.add_argument("--source-tree", required=True)
+    package_parser.add_argument("--source-main-proven", type=parse_boolean, required=True)
     package_parser.add_argument("--output-dir", type=Path, required=True)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--archive", type=Path, required=True)
@@ -1034,6 +1323,7 @@ def parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--source-event", required=True)
     verify_parser.add_argument("--source-ref", required=True)
     verify_parser.add_argument("--source-tree", required=True)
+    verify_parser.add_argument("--source-main-proven", type=parse_boolean, required=True)
     compare_parser = commands.add_parser("compare")
     compare_parser.add_argument("--archive", type=Path, action="append", required=True)
     compare_parser.add_argument("--target", action="append", required=True)
@@ -1045,9 +1335,16 @@ def parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--source-event", required=True)
     compare_parser.add_argument("--source-ref", required=True)
     compare_parser.add_argument("--source-tree", required=True)
+    compare_parser.add_argument("--source-main-proven", type=parse_boolean, required=True)
     compare_parser.add_argument("--output", type=Path)
     authorize_parser = commands.add_parser("authorize")
     authorize_parser.add_argument("--verification", type=Path, required=True)
+    authorize_parser.add_argument("--binary-name", required=True)
+    authorize_parser.add_argument("--candidate", required=True)
+    authorize_parser.add_argument("--source-repository", required=True)
+    authorize_parser.add_argument("--source-event", required=True)
+    authorize_parser.add_argument("--source-ref", required=True)
+    authorize_parser.add_argument("--source-tree", required=True)
     authorize_parser.add_argument("--workflow-run-id", required=True)
     authorize_parser.add_argument("--workflow-run-attempt", required=True)
     authorize_parser.add_argument("--output", type=Path, required=True)
@@ -1064,6 +1361,17 @@ def main() -> int:
     try:
         if args.command == "capture":
             capture(args.binary, args.inventory_output, args.schema_output)
+        elif args.command == "prove-source":
+            print(
+                str(
+                    prove_source_on_main(
+                        args.repository,
+                        args.candidate,
+                        args.source_event,
+                        args.source_ref,
+                    )
+                ).lower()
+            )
         elif args.command == "package":
             archive = package(
                 args.binary,
@@ -1079,6 +1387,7 @@ def main() -> int:
                 args.source_event,
                 args.source_ref,
                 args.source_tree,
+                args.source_main_proven,
                 args.output_dir,
             )
             print(archive)
@@ -1094,6 +1403,7 @@ def main() -> int:
                         args.source_event,
                         args.source_ref,
                         args.source_tree,
+                        args.source_main_proven,
                         args.manifest,
                         args.lockfile,
                     ),
@@ -1111,6 +1421,7 @@ def main() -> int:
                 args.source_event,
                 args.source_ref,
                 args.source_tree,
+                args.source_main_proven,
                 args.manifest,
                 args.lockfile,
             )
@@ -1121,6 +1432,12 @@ def main() -> int:
         elif args.command == "authorize":
             receipt = authorization_receipt(
                 args.verification,
+                args.binary_name,
+                args.candidate,
+                args.source_repository,
+                args.source_event,
+                args.source_ref,
+                args.source_tree,
                 args.workflow_run_id,
                 args.workflow_run_attempt,
             )

@@ -85,7 +85,9 @@ inventories and schemas.
 
 The SBOM and release metadata bind the repository, event, full ref, commit,
 source tree, binary digest, manifest digest, lockfile digest, target, and
-resolved dependency graph. GNU binaries must use the target's standard dynamic
+resolved dependency graph. A version tag is eligible only when its exact commit
+is proven, from complete Git history, to be identical to or an ancestor of the
+protected `main` branch. GNU binaries must use the target's standard dynamic
 interpreter and may require no newer than GLIBC 2.39; the exact required GLIBC
 version is recorded and re-read from each ELF binary.
 
@@ -100,6 +102,10 @@ binary. Consumers should accept release artifacts only from a successful run
 whose event/ref and verification report match the intended `main` push or
 version tag, whose workflow conclusion is successful, and whose authorization
 receipt is covered by GitHub's attestation verification.
+Before merge, only the separate read-only proof workflow can run on the review
+candidate. The first trusted OIDC/attestation proof is therefore a mandatory
+post-merge acceptance gate on protected `main`; do not treat the pre-merge
+artifact proof as evidence that trusted attestation has already executed.
 
 Run the verifier's fixture-backed contract tests locally without building Rust:
 

@@ -211,11 +211,16 @@ digests, ELF machine and GNU interpreter/GLIBC verification, target-specific Cyc
 evidence semantically bound to source, binary, manifest,
 lockfile, and dependency inputs, complete archive
 file-set verification, canonical tool inventory/schema equality, the trusted
-`main` or version-tag push ref, and GitHub attestation URLs. Build and parity
+`main` or version-tag push ref, proof that any tag commit is identical to or an
+ancestor of protected `main`, and GitHub attestation URLs. Build and parity
 jobs are read-only; the attestation job must depend on successful consumer reverification.
 The workflow is artifact-only and must not be described as a
 published release. Consumer acceptance additionally requires the successful
 hosted run and its attested, run-bound `release-authorization.json` receipt.
+Pre-merge review can cover only the read-only proof workflow. Record trusted
+attestation as a post-merge acceptance gap until the protected-`main` run and
+its exact receipt have been verified; never mint OIDC authority for a PR to
+close that evidence gap.
 
 Use the repository's normal workflow when it covers formatting, clippy, tests,
 schema snapshots, and template or server-specific checks. Add a workflow only

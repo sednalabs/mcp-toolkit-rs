@@ -509,7 +509,7 @@ fn job_needs(job: &YamlMapping, context: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn contains_strings(value: Option<&YamlValue>, expected: &[&str]) -> bool {
+fn exact_strings(value: Option<&YamlValue>, expected: &[&str]) -> bool {
     let Some(values) = value.and_then(YamlValue::as_sequence) else {
         return false;
     };
@@ -517,7 +517,7 @@ fn contains_strings(value: Option<&YamlValue>, expected: &[&str]) -> bool {
         .iter()
         .filter_map(YamlValue::as_str)
         .collect::<Vec<_>>();
-    expected.iter().all(|item| actual.contains(item))
+    actual == expected
 }
 
 fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, String> {
@@ -532,10 +532,19 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         violations.push("workflow must be triggered only by trusted push events".to_string());
     } else if let Some(push) = yaml_get(triggers, "push") {
         let push = yaml_mapping(push, "workflow.on.push")?;
-        if !contains_strings(yaml_get(push, "branches"), &["main"])
-            || !contains_strings(yaml_get(push, "tags"), &["v[0-9]*"])
+        let mut push_keys = push
+            .keys()
+            .filter_map(YamlValue::as_str)
+            .collect::<Vec<_>>();
+        push_keys.sort_unstable();
+        if push.len() != 2
+            || push_keys != ["branches", "tags"]
+            || !exact_strings(yaml_get(push, "branches"), &["main"])
+            || !exact_strings(yaml_get(push, "tags"), &["v[0-9]*"])
         {
-            violations.push("push trigger must include main and version tags".to_string());
+            violations.push(
+                "push trigger must contain only exact main and version-tag filters".to_string(),
+            );
         }
     }
     if !permission_map_matches(yaml_get(root, "permissions"), &[("contents", "read")]) {
@@ -545,6 +554,23 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     let jobs = yaml_get(root, "jobs")
         .ok_or_else(|| "workflow.jobs is required".to_string())
         .and_then(|value| yaml_mapping(value, "workflow.jobs"))?;
+    let mut job_names = jobs
+        .keys()
+        .filter_map(YamlValue::as_str)
+        .collect::<Vec<_>>();
+    job_names.sort_unstable();
+    if jobs.len() != 3
+        || job_names
+            != [
+                "attest-native-linux",
+                "build-native-linux",
+                "verify-native-linux",
+            ]
+    {
+        violations.push(
+            "workflow jobs must contain only build, verification, and attestation jobs".to_string(),
+        );
+    }
     let build = yaml_get(jobs, "build-native-linux")
         .ok_or_else(|| "build-native-linux job is required".to_string())
         .and_then(|value| yaml_mapping(value, "build-native-linux"))?;
@@ -558,6 +584,15 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     if yaml_get(build, "permissions").is_some() || yaml_get(verify, "permissions").is_some() {
         violations
             .push("build and verification jobs must inherit read-only permissions".to_string());
+    }
+    if yaml_get(build, "runs-on").and_then(YamlValue::as_str) != Some("${{ matrix.runner }}")
+        || yaml_get(verify, "runs-on").and_then(YamlValue::as_str) != Some("ubuntu-24.04")
+        || yaml_get(attest, "runs-on").and_then(YamlValue::as_str) != Some("ubuntu-24.04")
+    {
+        violations.push(
+            "required jobs must use the exact matrix or literal GitHub-hosted runner labels"
+                .to_string(),
+        );
     }
     if !permission_map_matches(
         yaml_get(attest, "permissions"),
@@ -622,6 +657,18 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     }
 
     let build_run = job_run_text(build, "build-native-linux")?;
+    if !has_active_command(&build_run, "git fetch --force --no-tags origin")
+        || !has_active_command(
+            &build_run,
+            "source_main_proven=$(python3 scripts/native_release_artifact.py prove-source",
+        )
+        || !build_run.contains("--source-main-proven")
+    {
+        violations.push(
+            "build job must prove protected-main ancestry from complete fetched history"
+                .to_string(),
+        );
+    }
     for required in ["cargo build --release --locked", "cargo cyclonedx"] {
         if !has_active_command(&build_run, required) {
             violations.push(format!("build job is missing active command {required}"));
@@ -643,6 +690,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             "--source-event",
             "--source-ref",
             "--source-tree",
+            "--source-main-proven",
             "--manifest",
             "--lockfile",
         ] {
@@ -652,11 +700,25 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         }
     }
     let verify_run = job_run_text(verify, "verify-native-linux")?;
+    if !has_active_command(&verify_run, "git fetch --force --no-tags origin")
+        || !has_active_command(
+            &verify_run,
+            "source_main_proven=$(python3 scripts/native_release_artifact.py prove-source",
+        )
+        || !verify_run.contains("--source-main-proven")
+    {
+        violations
+            .push("verification job must independently prove protected-main ancestry".to_string());
+    }
     let compare_command = verify_run
         .lines()
         .find(|line| line.starts_with("python3 scripts/native_release_artifact.py compare"));
     if match compare_command {
-        Some(command) => !command.contains("--source-tree") || !command.contains("--lockfile"),
+        Some(command) => {
+            !command.contains("--source-tree")
+                || !command.contains("--source-main-proven")
+                || !command.contains("--lockfile")
+        }
         None => true,
     } {
         violations.push("verification job must compare source-bound native artifacts".to_string());
@@ -673,18 +735,43 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         || !attest_run
             .lines()
             .any(|line| line.contains("--output release-authorization.json"))
+        || !has_active_command(&attest_run, "git fetch --force --no-tags origin")
+        || !has_active_command(
+            &attest_run,
+            "source_main_proven=$(python3 scripts/native_release_artifact.py prove-source",
+        )
+        || !attest_run.contains("--source-main-proven")
     {
         violations.push(
             "attestation job must independently reverify the consumer artifact set".to_string(),
         );
     }
+    let authorize_command = attest_run
+        .lines()
+        .find(|line| line.starts_with("python3 scripts/native_release_artifact.py authorize"));
+    if match authorize_command {
+        Some(command) => [
+            "--binary-name",
+            "--candidate",
+            "--source-repository",
+            "--source-event",
+            "--source-ref",
+            "--source-tree",
+        ]
+        .iter()
+        .any(|argument| !command.contains(argument)),
+        None => true,
+    } {
+        violations.push("authorization receipt must bind every exact source identity".to_string());
+    }
 
     let mut all_uses = Vec::new();
-    for (name, job) in [
-        ("build-native-linux", build),
-        ("verify-native-linux", verify),
-        ("attest-native-linux", attest),
-    ] {
+    for (name, value) in jobs {
+        let Some(name) = name.as_str() else {
+            violations.push("workflow job identifiers must be strings".to_string());
+            continue;
+        };
+        let job = yaml_mapping(value, &format!("workflow.jobs.{name}"))?;
         for value in job_uses(job, name)? {
             if !value.starts_with("./") {
                 let pinned = value.rsplit_once('@').is_some_and(|(_, reference)| {
@@ -718,6 +805,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         ("verify-native-linux", verify),
         ("attest-native-linux", attest),
     ] {
+        let mut checkout_count = 0;
         for step in step_mappings(job, name)? {
             let Some(uses) = yaml_get(step, "uses").and_then(YamlValue::as_str) else {
                 continue;
@@ -725,6 +813,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             if !uses.trim().starts_with("actions/checkout@") {
                 continue;
             }
+            checkout_count += 1;
             let Some(with) = yaml_get(step, "with").and_then(YamlValue::as_mapping) else {
                 violations.push(format!(
                     "{name} checkout must define exact candidate settings"
@@ -733,11 +822,17 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             };
             if yaml_get(with, "persist-credentials").and_then(YamlValue::as_bool) != Some(false)
                 || yaml_get(with, "ref").and_then(YamlValue::as_str) != Some("${{ github.sha }}")
+                || yaml_get(with, "fetch-depth").and_then(YamlValue::as_i64) != Some(0)
             {
                 violations.push(format!(
-                    "{name} checkout must disable credentials and pin github.sha"
+                    "{name} checkout must disable credentials, pin github.sha, and fetch complete history"
                 ));
             }
+        }
+        if checkout_count != 1 {
+            violations.push(format!(
+                "{name} must contain exactly one pinned checkout step"
+            ));
         }
     }
 
@@ -761,8 +856,10 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
                     "verify_elf",
                     "inspect_glibc",
                     "validate_sbom_graph",
+                    "prove_source_on_main",
                     "release_source_eligible",
                     "authorization_receipt",
+                    "mcp-toolkit.release.source.main_proven",
                     "mcp-toolkit.release.source.tree",
                     "mcp-toolkit.release.lockfile.sha256",
                 ];
