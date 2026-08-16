@@ -60,7 +60,7 @@ pub enum HostedHttpConfigError {
 }
 
 impl fmt::Display for HostedHttpConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BindSafety(err) => err.fmt(f),
             Self::DevelopmentDelegationSecret => write!(
@@ -321,10 +321,9 @@ impl ServerHandler for HostedHttpServer {
             )
             .map_err(profile_error)?;
         if !decision.allowed() {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                decision.caller_message(),
-            )])
-            .into());
+            return Ok(
+                CallToolResult::error(vec![ContentBlock::text(decision.caller_message())]).into(),
+            );
         }
 
         let context = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
