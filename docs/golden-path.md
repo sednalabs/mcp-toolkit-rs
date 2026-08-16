@@ -198,6 +198,8 @@ two native build jobs and the cross-architecture verifier as one proof unit:
 the x86_64 and arm64 archives must both pass ELF, checksum, exact file-set,
 candidate, SBOM, and canonical tool inventory/schema checks. GitHub-hosted
 artifact attestations are provenance evidence; they do not publish a release.
+Toolkit changes to that generated lane are exercised by the repository's
+`native-stdio-release-template-proof` workflow before merge.
 
 Snapshot updates are exceptional. To intentionally rebaseline a snapshot:
 
