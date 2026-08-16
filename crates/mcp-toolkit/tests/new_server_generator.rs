@@ -2379,12 +2379,16 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
+fn missing_fixture_anchor(kind: &str, label: &str) -> ! {
+    std::panic::panic_any(
+        ["fixture is missing ", kind, " anchor for ", label].concat(),
+    )
+}
+
 fn replace_once(contents: &str, original: &str, replacement: &str, label: &str) -> String {
-    assert!(
-        contents.contains(original),
-        "{}",
-        ["fixture is missing mutation anchor for ", label].concat()
-    );
+    if !contents.contains(original) {
+        missing_fixture_anchor("mutation", label);
+    }
     contents.replacen(original, replacement, 1)
 }
 
@@ -2397,11 +2401,11 @@ fn replace_once_after(
 ) -> String {
     let section_start = contents
         .find(section)
-        .unwrap_or_else(|| panic!("fixture is missing section anchor for {}", label));
+        .unwrap_or_else(|| missing_fixture_anchor("section", label));
     let search_start = section_start + section.len();
     let relative_start = contents[search_start..]
         .find(original)
-        .unwrap_or_else(|| panic!("fixture is missing mutation anchor for {}", label));
+        .unwrap_or_else(|| missing_fixture_anchor("mutation", label));
     let replacement_start = search_start + relative_start;
     let replacement_end = replacement_start + original.len();
     let mut mutated = contents.to_string();
