@@ -16,6 +16,7 @@ members = [
   "crates/mcp-toolkit-process",
   "crates/mcp-toolkit-scratchpad",
   "crates/mcp-toolkit-gemini",
+  "crates/mcp-toolkit-tasks",
   "crates/mcp-toolkit-testing",
   "crates/mcp-toolkit-server",
 ]
