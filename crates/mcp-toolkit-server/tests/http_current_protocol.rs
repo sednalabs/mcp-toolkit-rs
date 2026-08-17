@@ -3,7 +3,7 @@
 use axum::{body::Body, extract::State};
 use http::{
     header::{ACCEPT, CONTENT_TYPE, HOST},
-    Request, StatusCode,
+    HeaderValue, Request, StatusCode,
 };
 use http_body_util::BodyExt;
 use mcp_toolkit_server::http::{handle_mcp, LocalMcpHttpRuntimeBuilder};
@@ -77,7 +77,10 @@ async fn assert_current_tools_list_response(response: axum::response::Response) 
     let payload: Value = serde_json::from_slice(&body).expect("JSON-RPC response JSON");
     assert_eq!(payload["jsonrpc"], json!("2.0"));
     assert_eq!(payload["id"], json!(1));
-    assert!(payload.get("error").is_none(), "unexpected error: {payload}");
+    assert!(
+        payload.get("error").is_none(),
+        "unexpected error: {payload}"
+    );
     assert!(
         payload["result"]["tools"].is_array(),
         "expected tools/list result: {payload}"
@@ -102,9 +105,10 @@ async fn current_protocol_post_bypasses_legacy_session_preflight() {
         .build(|| Ok(EmptyToolServer));
     let state = runtime.into_state(false);
     let mut request = current_request();
-    request
-        .headers_mut()
-        .insert(HEADER_SESSION_ID, "stale-legacy-session".parse().unwrap());
+    request.headers_mut().insert(
+        HEADER_SESSION_ID,
+        HeaderValue::from_static("stale-legacy-session"),
+    );
 
     let response = handle_mcp(State(state), request).await;
     assert_current_tools_list_response(response).await;
