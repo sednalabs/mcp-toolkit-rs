@@ -78,14 +78,18 @@ ToolCallTerminalDiagnostic::success(
 ```
 
 The typed terminal record is the preferred tool-call completion boundary. It
-emits one `mcp.tool_call.terminal` event with a fixed schema. Failure records
-accept only stable error code and class identifiers. There is deliberately no
-API for arguments, request or response bodies, tokens, claims, or raw errors.
+emits one `mcp.tool_call.terminal` event with a fixed schema and consumes the
+record. This guarantees at-most-once emission for that record instance; the
+server lifecycle remains responsible for constructing one record per real tool
+call. Failure records accept only validated program-static error code and class
+identifiers. There is deliberately no API for arguments, request or response
+bodies, tokens, claims, or raw errors.
 
-Optional session, principal, and schema/catalogue identifiers must first be
-constructed as their purpose-specific bounded types. Principal identifiers
-must be opaque telemetry identifiers, not display names, email addresses, or
-raw identity claims.
+Optional session and principal correlation values accept only fixed-size keyed
+digest output produced by the caller's identity boundary. Use distinct domain
+separators and a secret-keyed construction; an unkeyed hash of an enumerable
+identifier is insufficient. Schema/catalogue revisions accept only a SHA-256
+fingerprint. The toolkit does not accept raw session or principal identifiers.
 
 ## Server Migration Checklist
 
@@ -105,8 +109,10 @@ Use this checklist per server.
    - Transport/session replay failures.
 4. Replace tool completion logs with one typed terminal record.
    - `mcp.tool_call.terminal` with `outcome=success`.
-   - `mcp.tool_call.terminal` with `outcome=failure` and stable error identifiers.
+   - `mcp.tool_call.terminal` with `outcome=failure` and static error identifiers.
    - Keep start/progress events separate and low-volume only when operationally required.
+   - Make the server lifecycle construct and consume one terminal record on
+     every success, denial, failure, cancellation, and panic-safe exit path.
 5. Add task lifecycle logs if the server uses tasks.
 6. Add metrics facade calls if metrics are enabled.
 7. Validate with toolkit tests, server smoke tests, and log redaction checks.
@@ -134,9 +140,12 @@ After deploying a migrated server, verify:
    - Trigger an auth failure and confirm no raw token or secret appears.
 2. Tool lifecycle diagnostics.
    - Run at least one successful tool call and one failing tool call.
-   - Confirm exactly one terminal event exists for each call.
+   - Confirm the server integration creates exactly one terminal record for
+     each call; the toolkit enforces only at-most-once emission per record.
    - Confirm the terminal event has the same request correlation identifier as
      the enclosing request path.
+   - Confirm session and principal fields contain opaque keyed digests rather
+     than raw identifiers or unkeyed hashes.
 3. Metrics health if `metrics-facade` is enabled.
    - Confirm metrics exist and labels are bounded.
 4. Redaction guarantees.
@@ -174,6 +183,12 @@ After deploying a migrated server, verify:
 - Do not add an arbitrary field map or raw error to the terminal contract.
 - Map failures to a stable code and class.
 - Put high-volume debugging data behind a separately reviewed diagnostic path.
+
+`A dynamic error value needs to be recorded`
+
+- Map it onto a documented static code and class at the service boundary.
+- Do not leak dynamic error text, tenant identifiers, or dependency payloads
+  through error identifiers.
 
 ## Rollback Strategy
 

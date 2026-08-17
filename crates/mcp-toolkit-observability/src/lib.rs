@@ -60,9 +60,9 @@ pub use sanitize::{
 };
 pub use tool_call_diagnostic::{
     emit_tool_call_terminal, CatalogueFingerprint, DiagnosticField, DiagnosticToolName,
-    DiagnosticValueError, DiagnosticValueErrorKind, RequestCorrelationId, SafePrincipalId,
-    SafeSessionId, StableErrorClass, StableErrorCode, ToolCallTerminalDiagnostic,
-    ToolCallTerminalOutcome,
+    DiagnosticValueError, DiagnosticValueErrorKind, PrincipalCorrelationDigest,
+    RequestCorrelationId, SessionCorrelationDigest, StaticErrorClass, StaticErrorCode,
+    ToolCallTerminalDiagnostic, ToolCallTerminalOutcome,
 };
 #[cfg(feature = "tracing-bridge")]
 pub use tracing_bridge::{

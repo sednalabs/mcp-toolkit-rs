@@ -32,7 +32,8 @@ Toolkit-owned responsibilities:
 - stable APIs for safe event/span context;
 - safe label/value normalization for metrics;
 - redaction policy invariants and conformance tests.
-- a closed, typed terminal tool-call event that excludes raw payload and error data.
+- a closed, typed terminal tool-call event that excludes raw payload and error data;
+- opaque keyed-digest correlation types and static error vocabulary boundaries.
 
 Ecosystem-owned responsibilities:
 
@@ -74,9 +75,15 @@ Boundary rules:
 - error messages are sanitized and redacted before emission;
 - secret-bearing fields such as tokens, secrets, authorization headers, and
   database URLs are masked;
-- context identifiers are sanitized and length-bounded.
-- terminal tool-call records accept only purpose-specific bounded identifiers;
-  they have no arguments, body, token, claim-set, raw-error, or arbitrary-field path.
+- dynamic context identifiers are validated while borrowed and length-bounded;
+- principal and session correlation cross the boundary only as fixed-size,
+  caller-derived keyed digests, while catalogue revisions use SHA-256 fingerprints;
+- error code and class identifiers must be program-static and selected from a
+  documented or allowlisted service vocabulary;
+- terminal records have no arguments, body, token, claim-set, raw-error, or
+  arbitrary-field path;
+- consuming a record guarantees at-most-once emission for that instance, not
+  exactly-once coverage of an external lifecycle.
 
 ## Migration Expectations
 

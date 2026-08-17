@@ -1,17 +1,20 @@
 //! # Terminal Tool-Call Diagnostics
 //!
-//! Provides a closed, typed event contract for one terminal diagnostic per MCP
-//! tool call. The contract deliberately has no arbitrary payload, arguments,
+//! Provides a closed, typed event contract for terminal MCP tool-call
+//! diagnostics. The contract deliberately has no arbitrary payload, arguments,
 //! body, claim-set, or error-message field.
 //!
 //! ## Security Boundaries
-//! * Every textual value is represented by a purpose-specific, length-bounded
-//!   type with a restricted ASCII alphabet.
-//! * Failure records accept stable error identifiers, never raw error values.
-//! * Emission consumes the record, preventing the same record from being
-//!   emitted twice.
-//! * Callers must supply opaque, already-approved identifiers. In particular,
-//!   principal identifiers must not contain names, email addresses, or claims.
+//! * Dynamic textual identifiers are validated while borrowed, then copied into
+//!   a purpose-specific length-bounded type.
+//! * Principal and session correlation accept only fixed-size keyed digest
+//!   output produced by the caller's identity boundary, never raw identifiers.
+//! * Failure records accept validated static identifiers, never dynamic error
+//!   data or raw error values.
+//! * Emission consumes the record, providing at-most-once emission for that
+//!   record instance. Downstream lifecycle integration remains responsible for
+//!   constructing exactly one record for each real tool call.
+//! * Value-bearing public types use redacted `Debug` implementations.
 
 use std::error::Error;
 use std::fmt;
@@ -20,34 +23,31 @@ use std::time::Duration;
 use tracing::{event, Level};
 
 const MAX_REQUEST_ID_LEN: usize = 128;
-const MAX_SESSION_ID_LEN: usize = 128;
-const MAX_PRINCIPAL_ID_LEN: usize = 96;
 const MAX_TOOL_NAME_LEN: usize = 128;
 const MAX_ERROR_IDENTIFIER_LEN: usize = 64;
-const MAX_CATALOGUE_FINGERPRINT_LEN: usize = 128;
+const DIGEST_BYTES: usize = 32;
+const PRINCIPAL_DIGEST_PREFIX: &str = "principal-keyed256:";
+const SESSION_DIGEST_PREFIX: &str = "session-keyed256:";
+const CATALOGUE_FINGERPRINT_PREFIX: &str = "sha256:";
+const REDACTED_DEBUG_VALUE: &str = "<redacted>";
+const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// Identifies a field in a rejected terminal diagnostic value.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DiagnosticField {
     RequestId,
-    SessionId,
-    PrincipalId,
     ToolName,
     ErrorCode,
     ErrorClass,
-    CatalogueFingerprint,
 }
 
 impl DiagnosticField {
     const fn as_str(self) -> &'static str {
         match self {
             Self::RequestId => "request_id",
-            Self::SessionId => "session_id",
-            Self::PrincipalId => "principal_id",
             Self::ToolName => "tool_name",
             Self::ErrorCode => "error_code",
             Self::ErrorClass => "error_class",
-            Self::CatalogueFingerprint => "catalogue_fingerprint",
         }
     }
 }
@@ -101,35 +101,18 @@ impl fmt::Display for DiagnosticValueError {
 
 impl Error for DiagnosticValueError {}
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 struct BoundedIdentifier(String);
 
 impl BoundedIdentifier {
     fn parse(
         field: DiagnosticField,
-        value: impl Into<String>,
+        value: impl AsRef<str>,
         max_bytes: usize,
     ) -> Result<Self, DiagnosticValueError> {
-        let value = value.into();
-        if value.is_empty() {
-            return Err(DiagnosticValueError {
-                field,
-                kind: DiagnosticValueErrorKind::Empty,
-            });
-        }
-        if value.len() > max_bytes {
-            return Err(DiagnosticValueError {
-                field,
-                kind: DiagnosticValueErrorKind::TooLong { max_bytes },
-            });
-        }
-        if !value.bytes().all(is_diagnostic_identifier_byte) {
-            return Err(DiagnosticValueError {
-                field,
-                kind: DiagnosticValueErrorKind::InvalidCharacter,
-            });
-        }
-        Ok(Self(value))
+        let value = value.as_ref();
+        validate_identifier(field, value, max_bytes)?;
+        Ok(Self(value.to_owned()))
     }
 
     fn as_str(&self) -> &str {
@@ -137,11 +120,87 @@ impl BoundedIdentifier {
     }
 }
 
+impl fmt::Debug for BoundedIdentifier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(REDACTED_DEBUG_VALUE)
+    }
+}
+
+#[derive(Eq, PartialEq)]
+struct StaticIdentifier(&'static str);
+
+impl StaticIdentifier {
+    fn parse(
+        field: DiagnosticField,
+        value: &'static str,
+        max_bytes: usize,
+    ) -> Result<Self, DiagnosticValueError> {
+        validate_identifier(field, value, max_bytes)?;
+        Ok(Self(value))
+    }
+
+    fn as_str(&self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Debug for StaticIdentifier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(REDACTED_DEBUG_VALUE)
+    }
+}
+
+fn validate_identifier(
+    field: DiagnosticField,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), DiagnosticValueError> {
+    if value.is_empty() {
+        return Err(DiagnosticValueError {
+            field,
+            kind: DiagnosticValueErrorKind::Empty,
+        });
+    }
+    if value.len() > max_bytes {
+        return Err(DiagnosticValueError {
+            field,
+            kind: DiagnosticValueErrorKind::TooLong { max_bytes },
+        });
+    }
+    if !value.bytes().all(is_diagnostic_identifier_byte) {
+        return Err(DiagnosticValueError {
+            field,
+            kind: DiagnosticValueErrorKind::InvalidCharacter,
+        });
+    }
+    Ok(())
+}
+
 const fn is_diagnostic_identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
 }
 
-macro_rules! bounded_identifier {
+fn encode_digest(prefix: &str, digest: [u8; DIGEST_BYTES]) -> String {
+    let mut encoded = String::with_capacity(prefix.len() + (DIGEST_BYTES * 2));
+    encoded.push_str(prefix);
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn redacted_wrapper_debug(
+    type_name: &'static str,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    formatter
+        .debug_tuple(type_name)
+        .field(&REDACTED_DEBUG_VALUE)
+        .finish()
+}
+
+macro_rules! bounded_owned_identifier {
     (
         $(#[$meta:meta])*
         $name:ident,
@@ -149,7 +208,7 @@ macro_rules! bounded_identifier {
         $max:ident
     ) => {
         $(#[$meta])*
-        #[derive(Debug, Eq, PartialEq)]
+        #[derive(Eq, PartialEq)]
         pub struct $name(BoundedIdentifier);
 
         impl $name {
@@ -160,9 +219,10 @@ macro_rules! bounded_identifier {
             /// contains characters outside `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `:`, `/`.
             ///
             /// # Security
-            /// The constructor does not decide whether the identifier is appropriate to
-            /// disclose. Supply only an opaque identifier already approved for telemetry.
-            pub fn new(value: impl Into<String>) -> Result<Self, DiagnosticValueError> {
+            /// Validation occurs against the borrowed input before this type allocates
+            /// owned storage. Lexical validity does not make a value safe to disclose;
+            /// callers must still use the intended identifier source.
+            pub fn new(value: impl AsRef<str>) -> Result<Self, DiagnosticValueError> {
                 BoundedIdentifier::parse($field, value, $max).map(Self)
             }
 
@@ -171,93 +231,192 @@ macro_rules! bounded_identifier {
                 self.0.as_str()
             }
         }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                redacted_wrapper_debug(stringify!($name), formatter)
+            }
+        }
     };
 }
 
-bounded_identifier!(
+macro_rules! bounded_static_identifier {
+    (
+        $(#[$meta:meta])*
+        $name:ident,
+        $field:path
+    ) => {
+        $(#[$meta])*
+        #[derive(Eq, PartialEq)]
+        pub struct $name(StaticIdentifier);
+
+        impl $name {
+            /// Creates an error identifier from program-static vocabulary.
+            ///
+            /// # Errors
+            /// Returns [`DiagnosticValueError`] when the value is empty, too long, or
+            /// contains characters outside `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `:`, `/`.
+            ///
+            /// # Security
+            /// The static lifetime prevents dynamic error text and tenant data from
+            /// entering this field. It does not prove governance: callers must select
+            /// values from a documented or allowlisted error vocabulary.
+            pub fn from_static(value: &'static str) -> Result<Self, DiagnosticValueError> {
+                StaticIdentifier::parse($field, value, MAX_ERROR_IDENTIFIER_LEN).map(Self)
+            }
+
+            /// Returns the validated static identifier.
+            pub fn as_str(&self) -> &'static str {
+                self.0.as_str()
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                redacted_wrapper_debug(stringify!($name), formatter)
+            }
+        }
+    };
+}
+
+bounded_owned_identifier!(
     /// Correlates the terminal diagnostic with the originating request.
     RequestCorrelationId,
     DiagnosticField::RequestId,
     MAX_REQUEST_ID_LEN
 );
 
-bounded_identifier!(
-    /// Identifies a session only when its identifier is safe to emit.
-    SafeSessionId,
-    DiagnosticField::SessionId,
-    MAX_SESSION_ID_LEN
-);
-
-bounded_identifier!(
-    /// Identifies a principal using an opaque, pre-approved telemetry identifier.
-    SafePrincipalId,
-    DiagnosticField::PrincipalId,
-    MAX_PRINCIPAL_ID_LEN
-);
-
-bounded_identifier!(
-    /// Identifies the invoked MCP tool.
+bounded_owned_identifier!(
+    /// Identifies the invoked MCP tool using its registered catalogue name.
     DiagnosticToolName,
     DiagnosticField::ToolName,
     MAX_TOOL_NAME_LEN
 );
 
-bounded_identifier!(
-    /// Identifies a stable, documented error code without carrying error text.
-    StableErrorCode,
-    DiagnosticField::ErrorCode,
-    MAX_ERROR_IDENTIFIER_LEN
+bounded_static_identifier!(
+    /// Identifies a documented static error code without carrying error text.
+    StaticErrorCode,
+    DiagnosticField::ErrorCode
 );
 
-bounded_identifier!(
-    /// Identifies a stable error class without carrying error text.
-    StableErrorClass,
-    DiagnosticField::ErrorClass,
-    MAX_ERROR_IDENTIFIER_LEN
+bounded_static_identifier!(
+    /// Identifies a documented static error class without carrying error text.
+    StaticErrorClass,
+    DiagnosticField::ErrorClass
 );
 
-bounded_identifier!(
-    /// Identifies the schema or catalogue revision used for the call.
-    CatalogueFingerprint,
-    DiagnosticField::CatalogueFingerprint,
-    MAX_CATALOGUE_FINGERPRINT_LEN
-);
+/// Carries an opaque principal correlation derived at the identity boundary.
+#[derive(Eq, PartialEq)]
+pub struct PrincipalCorrelationDigest(String);
+
+impl PrincipalCorrelationDigest {
+    /// Encodes a keyed, principal-domain-separated 256-bit digest.
+    ///
+    /// # Security
+    /// The toolkit deliberately does not accept a raw principal identifier.
+    /// Derive this digest with a secret-keyed construction and a principal-specific
+    /// domain separator before crossing the observability boundary. An unkeyed hash
+    /// of an email address or other enumerable identifier is not sufficient.
+    pub fn from_keyed_digest(digest: [u8; DIGEST_BYTES]) -> Self {
+        Self(encode_digest(PRINCIPAL_DIGEST_PREFIX, digest))
+    }
+
+    /// Returns the opaque rendered correlation digest.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PrincipalCorrelationDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        redacted_wrapper_debug("PrincipalCorrelationDigest", formatter)
+    }
+}
+
+/// Carries an opaque session correlation derived at the session boundary.
+#[derive(Eq, PartialEq)]
+pub struct SessionCorrelationDigest(String);
+
+impl SessionCorrelationDigest {
+    /// Encodes a keyed, session-domain-separated 256-bit digest.
+    ///
+    /// # Security
+    /// The toolkit deliberately does not accept a raw session identifier. Derive
+    /// this digest with a secret-keyed construction and a session-specific domain
+    /// separator before crossing the observability boundary.
+    pub fn from_keyed_digest(digest: [u8; DIGEST_BYTES]) -> Self {
+        Self(encode_digest(SESSION_DIGEST_PREFIX, digest))
+    }
+
+    /// Returns the opaque rendered correlation digest.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SessionCorrelationDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        redacted_wrapper_debug("SessionCorrelationDigest", formatter)
+    }
+}
+
+/// Carries the SHA-256 fingerprint of the schema or catalogue revision.
+#[derive(Eq, PartialEq)]
+pub struct CatalogueFingerprint(String);
+
+impl CatalogueFingerprint {
+    /// Encodes a 256-bit SHA-256 schema or catalogue fingerprint.
+    pub fn from_sha256(digest: [u8; DIGEST_BYTES]) -> Self {
+        Self(encode_digest(CATALOGUE_FINGERPRINT_PREFIX, digest))
+    }
+
+    /// Returns the rendered fingerprint.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for CatalogueFingerprint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        redacted_wrapper_debug("CatalogueFingerprint", formatter)
+    }
+}
 
 /// Describes the terminal result without accepting raw error data.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub enum ToolCallTerminalOutcome {
     Success,
     Failure {
-        code: StableErrorCode,
-        class: StableErrorClass,
+        code: StaticErrorCode,
+        class: StaticErrorClass,
     },
 }
 
-/// Carries the fixed-schema terminal diagnostic for one MCP tool call.
+impl fmt::Debug for ToolCallTerminalOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success => formatter.write_str("Success"),
+            Self::Failure { code, class } => formatter
+                .debug_struct("Failure")
+                .field("code", code)
+                .field("class", class)
+                .finish(),
+        }
+    }
+}
+
+/// Carries one fixed-schema terminal diagnostic record.
 ///
 /// The record is intentionally not `Clone` or `Copy`, and [`Self::emit`]
-/// consumes it. The following therefore does not compile:
-///
-/// ```compile_fail
-/// use std::time::Duration;
-/// use mcp_toolkit_observability::{
-///     DiagnosticToolName, RequestCorrelationId, ToolCallTerminalDiagnostic,
-/// };
-///
-/// let diagnostic = ToolCallTerminalDiagnostic::success(
-///     RequestCorrelationId::new("request-1").unwrap(),
-///     DiagnosticToolName::new("example.search").unwrap(),
-///     Duration::from_millis(5),
-/// );
-/// diagnostic.emit();
-/// diagnostic.emit();
-/// ```
+/// consumes it. Required hosted compile-fail coverage proves that one record
+/// cannot be emitted twice. The caller remains responsible for creating one
+/// record per real tool-call lifecycle.
 #[must_use = "terminal diagnostics must be emitted or deliberately discarded"]
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct ToolCallTerminalDiagnostic {
     request_id: RequestCorrelationId,
-    session_id: Option<SafeSessionId>,
-    principal_id: Option<SafePrincipalId>,
+    session_correlation: Option<SessionCorrelationDigest>,
+    principal_correlation: Option<PrincipalCorrelationDigest>,
     tool_name: DiagnosticToolName,
     duration: Duration,
     outcome: ToolCallTerminalOutcome,
@@ -265,7 +424,7 @@ pub struct ToolCallTerminalDiagnostic {
 }
 
 impl ToolCallTerminalDiagnostic {
-    /// Creates a successful terminal diagnostic.
+    /// Creates a successful terminal diagnostic record.
     pub fn success(
         request_id: RequestCorrelationId,
         tool_name: DiagnosticToolName,
@@ -273,8 +432,8 @@ impl ToolCallTerminalDiagnostic {
     ) -> Self {
         Self {
             request_id,
-            session_id: None,
-            principal_id: None,
+            session_correlation: None,
+            principal_correlation: None,
             tool_name,
             duration,
             outcome: ToolCallTerminalOutcome::Success,
@@ -282,22 +441,22 @@ impl ToolCallTerminalDiagnostic {
         }
     }
 
-    /// Creates a failed terminal diagnostic from stable error identifiers.
+    /// Creates a failed terminal diagnostic from static error identifiers.
     ///
     /// # Security
     /// This constructor intentionally accepts no error object or message. Map
-    /// failures to documented, bounded identifiers before constructing the record.
+    /// failures to a documented static code and class before constructing the record.
     pub fn failure(
         request_id: RequestCorrelationId,
         tool_name: DiagnosticToolName,
         duration: Duration,
-        code: StableErrorCode,
-        class: StableErrorClass,
+        code: StaticErrorCode,
+        class: StaticErrorClass,
     ) -> Self {
         Self {
             request_id,
-            session_id: None,
-            principal_id: None,
+            session_correlation: None,
+            principal_correlation: None,
             tool_name,
             duration,
             outcome: ToolCallTerminalOutcome::Failure { code, class },
@@ -305,32 +464,32 @@ impl ToolCallTerminalDiagnostic {
         }
     }
 
-    /// Adds a session identifier that is already safe for telemetry.
-    pub fn with_session_id(mut self, session_id: SafeSessionId) -> Self {
-        self.session_id = Some(session_id);
+    /// Adds an opaque session correlation digest.
+    pub fn with_session_correlation(mut self, digest: SessionCorrelationDigest) -> Self {
+        self.session_correlation = Some(digest);
         self
     }
 
-    /// Adds an opaque principal identifier that is already safe for telemetry.
-    ///
-    /// # Security
-    /// Do not use a display name, email address, raw claim, or subject token.
-    pub fn with_principal_id(mut self, principal_id: SafePrincipalId) -> Self {
-        self.principal_id = Some(principal_id);
+    /// Adds an opaque principal correlation digest.
+    pub fn with_principal_correlation(mut self, digest: PrincipalCorrelationDigest) -> Self {
+        self.principal_correlation = Some(digest);
         self
     }
 
-    /// Adds the schema or catalogue fingerprint used for this call.
+    /// Adds the schema or catalogue SHA-256 fingerprint used for this call.
     pub fn with_catalogue_fingerprint(mut self, fingerprint: CatalogueFingerprint) -> Self {
         self.catalogue_fingerprint = Some(fingerprint);
         self
     }
 
-    /// Emits exactly one fixed-schema terminal tracing event and consumes the record.
+    /// Emits one fixed-schema tracing event and consumes this record.
+    ///
+    /// This is an at-most-once guarantee for this record instance, not an
+    /// exactly-once guarantee for an external tool-call lifecycle.
     ///
     /// # Security
-    /// The event contains only the purpose-specific bounded fields represented by
-    /// this type. It has no raw error, argument, body, token, or arbitrary-field path.
+    /// The event contains only the purpose-specific fields represented by this
+    /// type. It has no raw error, argument, body, token, or arbitrary-field path.
     pub fn emit(self) {
         emit_tool_call_terminal(self);
     }
@@ -345,15 +504,15 @@ impl ToolCallTerminalDiagnostic {
 
         ToolCallTerminalSnapshot {
             request_id: self.request_id.as_str(),
-            session_id: self
-                .session_id
+            session_correlation: self
+                .session_correlation
                 .as_ref()
-                .map(SafeSessionId::as_str)
+                .map(SessionCorrelationDigest::as_str)
                 .unwrap_or(""),
-            principal_id: self
-                .principal_id
+            principal_correlation: self
+                .principal_correlation
                 .as_ref()
-                .map(SafePrincipalId::as_str)
+                .map(PrincipalCorrelationDigest::as_str)
                 .unwrap_or(""),
             tool_name: self.tool_name.as_str(),
             duration_ms: duration_millis(self.duration),
@@ -369,11 +528,44 @@ impl ToolCallTerminalDiagnostic {
     }
 }
 
+impl fmt::Debug for ToolCallTerminalDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolCallTerminalDiagnostic")
+            .field("request_id", &REDACTED_DEBUG_VALUE)
+            .field(
+                "session_correlation",
+                &self
+                    .session_correlation
+                    .as_ref()
+                    .map(|_| REDACTED_DEBUG_VALUE),
+            )
+            .field(
+                "principal_correlation",
+                &self
+                    .principal_correlation
+                    .as_ref()
+                    .map(|_| REDACTED_DEBUG_VALUE),
+            )
+            .field("tool_name", &REDACTED_DEBUG_VALUE)
+            .field("duration", &self.duration)
+            .field("outcome", &self.outcome)
+            .field(
+                "catalogue_fingerprint",
+                &self
+                    .catalogue_fingerprint
+                    .as_ref()
+                    .map(|_| REDACTED_DEBUG_VALUE),
+            )
+            .finish()
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct ToolCallTerminalSnapshot<'a> {
     request_id: &'a str,
-    session_id: &'a str,
-    principal_id: &'a str,
+    session_correlation: &'a str,
+    principal_correlation: &'a str,
     tool_name: &'a str,
     duration_ms: u64,
     outcome: &'static str,
@@ -382,11 +574,14 @@ struct ToolCallTerminalSnapshot<'a> {
     catalogue_fingerprint: &'a str,
 }
 
-/// Emits one fixed-schema terminal tracing event and consumes its diagnostic.
+/// Emits one fixed-schema terminal tracing event and consumes its record.
+///
+/// The same record cannot be emitted twice. Downstream lifecycle integration is
+/// responsible for constructing one record for each real tool call.
 ///
 /// # Security
 /// The API accepts no raw error, arguments, body, token, claim set, or arbitrary
-/// field collection. Use stable error identifiers and opaque telemetry identifiers.
+/// field collection. Use static error vocabulary and opaque correlation digests.
 pub fn emit_tool_call_terminal(diagnostic: ToolCallTerminalDiagnostic) {
     let fields = diagnostic.snapshot();
     event!(
@@ -394,8 +589,8 @@ pub fn emit_tool_call_terminal(diagnostic: ToolCallTerminalDiagnostic) {
         Level::INFO,
         event = "mcp.tool_call.terminal",
         request_id = fields.request_id,
-        session_id = fields.session_id,
-        principal_id = fields.principal_id,
+        session_correlation = fields.session_correlation,
+        principal_correlation = fields.principal_correlation,
         tool_name = fields.tool_name,
         duration_ms = fields.duration_ms,
         outcome = fields.outcome,
@@ -417,12 +612,24 @@ mod tests {
 
     use tracing_subscriber::fmt::MakeWriter;
 
+    const PRINCIPAL_DIGEST: [u8; DIGEST_BYTES] = [0x11; DIGEST_BYTES];
+    const SESSION_DIGEST: [u8; DIGEST_BYTES] = [0x22; DIGEST_BYTES];
+    const CATALOGUE_DIGEST: [u8; DIGEST_BYTES] = [0x33; DIGEST_BYTES];
+
     fn request_id() -> RequestCorrelationId {
         RequestCorrelationId::new("request-123").expect("fixture request id is valid")
     }
 
     fn tool_name() -> DiagnosticToolName {
-        DiagnosticToolName::new("work_item.read").expect("fixture tool name is valid")
+        DiagnosticToolName::new("example.read").expect("fixture tool name is valid")
+    }
+
+    fn error_code() -> StaticErrorCode {
+        StaticErrorCode::from_static("request.invalid_shape").expect("valid static error code")
+    }
+
+    fn error_class() -> StaticErrorClass {
+        StaticErrorClass::from_static("invalid_request").expect("valid static error class")
     }
 
     #[test]
@@ -432,46 +639,54 @@ mod tests {
             tool_name(),
             Duration::from_millis(27),
         )
-        .with_session_id(SafeSessionId::new("session-9").expect("valid session id"))
-        .with_principal_id(SafePrincipalId::new("service-principal-1").expect("valid principal id"))
-        .with_catalogue_fingerprint(
-            CatalogueFingerprint::new("sha256:0123456789abcdef")
-                .expect("valid catalogue fingerprint"),
-        );
+        .with_session_correlation(SessionCorrelationDigest::from_keyed_digest(SESSION_DIGEST))
+        .with_principal_correlation(PrincipalCorrelationDigest::from_keyed_digest(
+            PRINCIPAL_DIGEST,
+        ))
+        .with_catalogue_fingerprint(CatalogueFingerprint::from_sha256(CATALOGUE_DIGEST));
 
         assert_eq!(
             diagnostic.snapshot(),
             ToolCallTerminalSnapshot {
                 request_id: "request-123",
-                session_id: "session-9",
-                principal_id: "service-principal-1",
-                tool_name: "work_item.read",
+                session_correlation: concat!(
+                    "session-keyed256:",
+                    "2222222222222222222222222222222222222222222222222222222222222222"
+                ),
+                principal_correlation: concat!(
+                    "principal-keyed256:",
+                    "1111111111111111111111111111111111111111111111111111111111111111"
+                ),
+                tool_name: "example.read",
                 duration_ms: 27,
                 outcome: "success",
                 error_code: "",
                 error_class: "",
-                catalogue_fingerprint: "sha256:0123456789abcdef",
+                catalogue_fingerprint: concat!(
+                    "sha256:",
+                    "3333333333333333333333333333333333333333333333333333333333333333"
+                ),
             }
         );
     }
 
     #[test]
-    fn failure_snapshot_uses_identifiers_and_has_no_error_text_field() {
+    fn failure_snapshot_uses_static_identifiers_and_has_no_error_text_field() {
         let diagnostic = ToolCallTerminalDiagnostic::failure(
             request_id(),
             tool_name(),
             Duration::from_millis(31),
-            StableErrorCode::new("request.invalid_shape").expect("valid error code"),
-            StableErrorClass::new("invalid_request").expect("valid error class"),
+            error_code(),
+            error_class(),
         );
 
         assert_eq!(
             diagnostic.snapshot(),
             ToolCallTerminalSnapshot {
                 request_id: "request-123",
-                session_id: "",
-                principal_id: "",
-                tool_name: "work_item.read",
+                session_correlation: "",
+                principal_correlation: "",
+                tool_name: "example.read",
                 duration_ms: 31,
                 outcome: "failure",
                 error_code: "request.invalid_shape",
@@ -482,42 +697,85 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_input_is_validated_before_owned_storage_is_created() {
+        struct BorrowOnly<'a>(&'a str);
+
+        impl AsRef<str> for BorrowOnly<'_> {
+            fn as_ref(&self) -> &str {
+                self.0
+            }
+        }
+
+        let oversized = "x".repeat(MAX_REQUEST_ID_LEN + 1);
+        let error = RequestCorrelationId::new(BorrowOnly(&oversized))
+            .expect_err("oversized borrowed input must be rejected");
+        assert_eq!(
+            error.kind(),
+            DiagnosticValueErrorKind::TooLong {
+                max_bytes: MAX_REQUEST_ID_LEN,
+            }
+        );
+    }
+
+    #[test]
     fn value_errors_never_echo_the_rejected_value() {
         let rejected = "Bearer secret value";
-        let error = SafePrincipalId::new(rejected).expect_err("spaces must be rejected");
+        let error = RequestCorrelationId::new(rejected).expect_err("spaces must be rejected");
 
-        assert_eq!(error.field(), DiagnosticField::PrincipalId);
+        assert_eq!(error.field(), DiagnosticField::RequestId);
         assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCharacter);
         assert!(!error.to_string().contains(rejected));
         assert!(!error.to_string().contains("secret"));
     }
 
     #[test]
-    fn identifiers_reject_empty_oversized_and_non_ascii_values() {
+    fn static_error_identifiers_reject_invalid_vocabulary() {
         assert_eq!(
-            RequestCorrelationId::new("")
+            StaticErrorCode::from_static("")
                 .expect_err("empty values must be rejected")
                 .kind(),
             DiagnosticValueErrorKind::Empty
         );
         assert_eq!(
-            StableErrorCode::new("x".repeat(MAX_ERROR_IDENTIFIER_LEN + 1))
-                .expect_err("oversized values must be rejected")
-                .kind(),
-            DiagnosticValueErrorKind::TooLong {
-                max_bytes: MAX_ERROR_IDENTIFIER_LEN,
-            }
-        );
-        assert_eq!(
-            SafeSessionId::new("session-☃")
-                .expect_err("non-ascii values must be rejected")
+            StaticErrorClass::from_static("invalid request")
+                .expect_err("spaces must be rejected")
                 .kind(),
             DiagnosticValueErrorKind::InvalidCharacter
         );
     }
 
     #[test]
-    fn emit_produces_one_terminal_event_with_the_fixed_schema() {
+    fn debug_output_redacts_every_value_bearing_public_type() {
+        let diagnostic = ToolCallTerminalDiagnostic::failure(
+            request_id(),
+            tool_name(),
+            Duration::from_millis(31),
+            error_code(),
+            error_class(),
+        )
+        .with_session_correlation(SessionCorrelationDigest::from_keyed_digest(SESSION_DIGEST))
+        .with_principal_correlation(PrincipalCorrelationDigest::from_keyed_digest(
+            PRINCIPAL_DIGEST,
+        ))
+        .with_catalogue_fingerprint(CatalogueFingerprint::from_sha256(CATALOGUE_DIGEST));
+
+        let output = format!("{diagnostic:?}");
+        for forbidden in [
+            "request-123",
+            "example.read",
+            "request.invalid_shape",
+            "invalid_request",
+            "11111111",
+            "22222222",
+            "33333333",
+        ] {
+            assert!(!output.contains(forbidden), "debug leaked {forbidden}");
+        }
+        assert!(output.contains(REDACTED_DEBUG_VALUE));
+    }
+
+    #[test]
+    fn emit_produces_one_terminal_event_for_one_record() {
         let sink = SharedSink::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(sink.clone())
@@ -533,8 +791,9 @@ mod tests {
                 request_id(),
                 tool_name(),
                 Duration::from_millis(42),
-                StableErrorCode::new("db.unavailable").expect("valid error code"),
-                StableErrorClass::new("dependency_failure").expect("valid error class"),
+                StaticErrorCode::from_static("db.unavailable").expect("valid static error code"),
+                StaticErrorClass::from_static("dependency_failure")
+                    .expect("valid static error class"),
             )
             .emit();
         });
@@ -545,9 +804,9 @@ mod tests {
             concat!(
                 "event=\"mcp.tool_call.terminal\" ",
                 "request_id=\"request-123\" ",
-                "session_id=\"\" ",
-                "principal_id=\"\" ",
-                "tool_name=\"work_item.read\" ",
+                "session_correlation=\"\" ",
+                "principal_correlation=\"\" ",
+                "tool_name=\"example.read\" ",
                 "duration_ms=42 ",
                 "outcome=\"failure\" ",
                 "error_code=\"db.unavailable\" ",
