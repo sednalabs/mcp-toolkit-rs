@@ -32,7 +32,7 @@ The client:
 6. bounds nonce length, token and resource nonce cardinality, response size, and
    retry count;
 7. retries a token request once only for an OAuth `use_dpop_nonce` response with
-   a single valid `DPoP-Nonce` header;
+   a single RFC 9449 `b64token` `DPoP-Nonce` header;
 8. requires non-empty audit subject, actor-client, and exchange-id metadata before
    a token-exchange request can be constructed;
 9. accepts RFC 8707 resource indicators only as absolute, fragment-free URIs;

@@ -556,7 +556,7 @@ async fn basic_client_auth_uses_one_sensitive_header_and_no_body_credentials() {
 #[tokio::test]
 async fn malformed_or_duplicate_dpop_nonce_headers_fail_closed() {
     for headers in [
-        vec![("dpop-nonce", " first-with-space ")],
+        vec![("dpop-nonce", "invalid,nonce")],
         vec![("dpop-nonce", "first"), ("dpop-nonce", "second")],
     ] {
         let (endpoint, state, server) = start_scripted_server(vec![ScriptedResponse::json(

@@ -1367,10 +1367,20 @@ fn strict_nonce_header(headers: &HeaderMap) -> Result<Option<String>, OutboundDp
 }
 
 fn valid_nonce(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_NONCE_BYTES
-        && value.trim() == value
-        && !value.chars().any(char::is_control)
+    if value.is_empty() || value.len() > MAX_NONCE_BYTES {
+        return false;
+    }
+    let core_len = value
+        .bytes()
+        .position(|byte| byte == b'=')
+        .unwrap_or(value.len());
+    core_len > 0
+        && value.as_bytes()[..core_len].iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
+        })
+        && value.as_bytes()[core_len..]
+            .iter()
+            .all(|byte| *byte == b'=')
 }
 
 fn required_field(
