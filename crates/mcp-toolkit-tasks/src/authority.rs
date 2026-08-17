@@ -158,12 +158,12 @@ fn panic_task_exit(message: &'static str) -> TaskExit {
 }
 
 async fn catch_task_future_panic(mut future: TaskFuture) -> Result<CallToolResult, TaskExit> {
-    poll_fn(move |cx| {
-        match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
+    poll_fn(
+        move |cx| match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
             Ok(poll) => poll,
             Err(_panic) => Poll::Ready(Err(panic_task_exit("task operation panicked"))),
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -286,9 +286,9 @@ impl TaskAuthority {
             };
             let future: TaskFuture = match catch_unwind(AssertUnwindSafe(|| make_future(managed))) {
                 Ok(future) => future,
-                Err(_panic) => Box::pin(async {
-                    Err(panic_task_exit("task operation factory panicked"))
-                }),
+                Err(_panic) => {
+                    Box::pin(async { Err(panic_task_exit("task operation factory panicked")) })
+                }
             };
 
             Box::pin(async move {
@@ -434,7 +434,11 @@ impl TaskAuthority {
         self.manager.shutdown();
         let bindings = match self.state.lock() {
             Ok(mut state) => {
-                let bindings = state.bindings.drain().map(|(_, binding)| binding).collect::<Vec<_>>();
+                let bindings = state
+                    .bindings
+                    .drain()
+                    .map(|(_, binding)| binding)
+                    .collect::<Vec<_>>();
                 state.prune_queue.clear();
                 bindings
             }
@@ -553,9 +557,7 @@ impl TaskAuthority {
         }
     }
 
-    fn lock_state(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, AuthorityState>, TaskAuthorityError> {
+    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, AuthorityState>, TaskAuthorityError> {
         match self.state.lock() {
             Ok(state) => Ok(state),
             Err(_) => {
