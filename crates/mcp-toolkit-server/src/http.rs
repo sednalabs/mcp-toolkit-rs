@@ -45,6 +45,7 @@ use mcp_toolkit_http::{
     },
 };
 use rmcp::{
+    model::ProtocolVersion,
     transport::{
         common::http_header::{HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID},
         streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService},
@@ -58,7 +59,6 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::AuthSurfaceLayer;
 
 const LEGACY_SESSIONLESS_POST_PROBE_LIMIT: usize = 64 * 1024;
-const CURRENT_PROTOCOL_VERSION: &str = "2026-07-28";
 const CURRENT_PROTOCOL_META_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
 /// Bind safety policy for hosted HTTP MCP servers.
@@ -821,14 +821,18 @@ where
     S: ServerHandler + Send + 'static,
 {
     let stats = state.session_manager.stats().await;
+    let session = session_stats_json(stats);
+    let stateless_fallback = state.stateless_service.is_some();
     Json(json!({
         "status": "ok",
         "transport": "streamable_http",
         "protocol_posture": "rmcp3_dual_era",
         "current_protocol_stateless": true,
         "auth_enabled": state.auth_enabled,
-        "legacy_stateless_fallback": state.stateless_service.is_some(),
-        "legacy_session": session_stats_json(stats),
+        "legacy_stateless_fallback": stateless_fallback,
+        "stateless_fallback": stateless_fallback,
+        "legacy_session": session.clone(),
+        "session": session,
     }))
 }
 
@@ -897,7 +901,8 @@ fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
     headers
         .get(HEADER_MCP_PROTOCOL_VERSION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.trim() == CURRENT_PROTOCOL_VERSION)
+        .and_then(parse_protocol_version)
+        .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
 }
 
 fn payload_declares_current_protocol(body: &[u8]) -> bool {
@@ -909,7 +914,12 @@ fn payload_declares_current_protocol(body: &[u8]) -> bool {
         .and_then(|params| params.get("_meta"))
         .and_then(|meta| meta.get(CURRENT_PROTOCOL_META_KEY))
         .and_then(|value| value.as_str())
-        .is_some_and(|value| value == CURRENT_PROTOCOL_VERSION)
+        .and_then(parse_protocol_version)
+        .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+}
+
+fn parse_protocol_version(value: &str) -> Option<ProtocolVersion> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).ok()
 }
 
 fn log_route_rejection(
