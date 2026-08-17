@@ -10,22 +10,32 @@
 //!
 //! * task-to-principal binding;
 //! * fail-closed cross-principal access;
-//! * monotonic revision tracking;
+//! * monotonic observed-state revisions;
 //! * race-safe wait-for-change and wait-for-terminal observation;
-//! * revision-aware wrappers around RMCP's task context.
+//! * revision-aware wake-up hints around RMCP's task context.
+//!
+//! Revisions are observation generations, not a parallel task event log. They
+//! advance only when a `TaskManager::get_task` read returns a `DetailedTask`
+//! different from the last observed snapshot. Multiple RMCP transitions that
+//! happen entirely between observations may therefore collapse into one local
+//! revision. This keeps RMCP authoritative while still giving servers an
+//! efficient bounded-wait primitive.
 //!
 //! The crate deliberately does not add another MCP Tasks wire protocol and does
 //! not expose `tasks/list`.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use rmcp::model::{DetailedTask, InputRequest, Task};
 use rmcp::task_manager::{TaskContext, TaskExit, TaskFuture, TaskManager, TaskOptions};
 use tokio::sync::Notify;
+
+const OBSERVATION_TICK: Duration = Duration::from_millis(250);
 
 /// Stable principal identifier used to bind an MCP task to its caller.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -85,13 +95,13 @@ impl std::error::Error for TaskAuthorityError {}
 /// Condition used by [`TaskAuthority::wait`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskWaitCondition {
-    /// Return after any revision strictly newer than `after_revision`.
+    /// Return after any observed revision strictly newer than `after_revision`.
     RevisionChange,
     /// Ignore intermediate revisions and return only once the task is terminal.
     Terminal,
 }
 
-/// Principal-authorized task snapshot with a monotonic local revision.
+/// Principal-authorized task snapshot with a monotonic observed-state revision.
 #[derive(Debug, Clone)]
 pub struct AuthorizedTaskSnapshot {
     pub task: DetailedTask,
@@ -99,42 +109,60 @@ pub struct AuthorizedTaskSnapshot {
 }
 
 #[derive(Debug)]
-struct RevisionSignal {
-    revision: AtomicU64,
-    notify: Notify,
-}
-
-impl RevisionSignal {
-    fn new() -> Self {
-        Self {
-            revision: AtomicU64::new(1),
-            notify: Notify::new(),
-        }
-    }
-
-    fn current(&self) -> u64 {
-        self.revision.load(Ordering::SeqCst)
-    }
-
-    fn bump(&self) -> u64 {
-        let revision = self.revision.fetch_add(1, Ordering::SeqCst) + 1;
-        self.notify.notify_waiters();
-        revision
-    }
+struct ObservedTaskState {
+    revision: u64,
+    task: DetailedTask,
 }
 
 #[derive(Debug)]
 struct TaskBinding {
     principal: TaskPrincipal,
-    signal: Arc<RevisionSignal>,
+    observed: Mutex<ObservedTaskState>,
+    notify: Arc<Notify>,
 }
 
-/// RMCP [`TaskContext`] wrapper that keeps the local observation revision in
-/// sync with task-visible state changes.
+impl TaskBinding {
+    fn new(principal: TaskPrincipal, task: DetailedTask, notify: Arc<Notify>) -> Self {
+        Self {
+            principal,
+            observed: Mutex::new(ObservedTaskState { revision: 1, task }),
+            notify,
+        }
+    }
+
+    fn observe(
+        &self,
+        task: DetailedTask,
+    ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        let mut observed = self
+            .observed
+            .lock()
+            .map_err(|_| TaskAuthorityError::StateUnavailable)?;
+        if observed.task != task {
+            observed.revision = observed.revision.saturating_add(1);
+            observed.task = task.clone();
+            self.notify.notify_waiters();
+        }
+        Ok(AuthorizedTaskSnapshot {
+            task,
+            revision: observed.revision,
+        })
+    }
+
+    fn hint(&self) {
+        self.notify.notify_waiters();
+    }
+}
+
+/// RMCP [`TaskContext`] wrapper that emits efficient observation wake-up hints.
+///
+/// Hints never advance the local revision directly. [`TaskAuthority`] validates
+/// the current RMCP `DetailedTask` after waking and advances the revision only
+/// when that authoritative snapshot actually changed.
 #[derive(Clone)]
 pub struct ManagedTaskContext {
     inner: TaskContext,
-    signal: Arc<RevisionSignal>,
+    notify: Arc<Notify>,
 }
 
 impl ManagedTaskContext {
@@ -145,23 +173,37 @@ impl ManagedTaskContext {
 
     /// Surface a mid-flight client input request and wait for its response.
     ///
-    /// The revision is bumped when the task becomes `input_required` and again
-    /// when the input wait resolves.
+    /// The RMCP future is polled once before the first wake-up hint. On the
+    /// normal pending path this guarantees RMCP has installed the
+    /// `input_required` request before local waiters are nudged. A second hint
+    /// is emitted after the input wait resolves. Revisions are still assigned
+    /// only after an authoritative `tasks/get` read observes each change.
     pub async fn request_input(
         &self,
         key: impl Into<String>,
         request: InputRequest,
     ) -> Result<serde_json::Value, TaskExit> {
-        self.signal.bump();
-        let result = self.inner.request_input(key, request).await;
-        self.signal.bump();
+        let mut request_future = Box::pin(self.inner.request_input(key, request));
+        let immediate = poll_fn(|cx| match request_future.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(Some(result)),
+            Poll::Pending => Poll::Ready(None),
+        })
+        .await;
+        self.notify.notify_waiters();
+
+        if let Some(result) = immediate {
+            return result;
+        }
+
+        let result = request_future.await;
+        self.notify.notify_waiters();
         result
     }
 
-    /// Update the task status message and publish a new revision.
+    /// Update the task status message and wake local observers.
     pub fn set_status_message(&self, message: impl Into<String>) {
         self.inner.set_status_message(message);
-        self.signal.bump();
+        self.notify.notify_waiters();
     }
 
     /// Returns true when RMCP has received a cooperative cancellation request.
@@ -194,8 +236,10 @@ impl TaskAuthority {
 
     /// Spawns an RMCP task bound to `principal`.
     ///
-    /// The task binding and revision signal are installed before this method
-    /// returns, so callers may safely return the task handle immediately.
+    /// The initial RMCP `DetailedTask` is read before the binding is installed,
+    /// so revision 1 always names a real RMCP snapshot. If authority binding
+    /// state is poisoned, the manager is shut down fail-closed rather than
+    /// leaving an unbound task running.
     pub fn spawn_for_principal<F>(
         &self,
         principal: TaskPrincipal,
@@ -205,26 +249,32 @@ impl TaskAuthority {
     where
         F: FnOnce(ManagedTaskContext) -> TaskFuture,
     {
-        let signal = Arc::new(RevisionSignal::new());
-        let operation_signal = signal.clone();
+        let notify = Arc::new(Notify::new());
+        let operation_notify = notify.clone();
         let task = self.manager.spawn(options, move |context| {
-            let managed = ManagedTaskContext {
+            make_future(ManagedTaskContext {
                 inner: context,
-                signal: operation_signal.clone(),
-            };
-            let future = make_future(managed);
-            Box::pin(async move {
-                let result = future.await;
-                operation_signal.bump();
-                result
+                notify: operation_notify,
             })
         });
 
-        let binding = Arc::new(TaskBinding { principal, signal });
-        self.bindings
-            .lock()
-            .map_err(|_| TaskAuthorityError::StateUnavailable)?
-            .insert(task.task_id.clone(), binding);
+        let initial = match self.manager.get_task(&task.task_id) {
+            Ok(task) => task,
+            Err(error) => {
+                let _ = self.manager.cancel_task(&task.task_id);
+                return Err(TaskAuthorityError::Rmcp(error));
+            }
+        };
+        let binding = Arc::new(TaskBinding::new(principal, initial, notify));
+
+        let mut bindings = match self.bindings.lock() {
+            Ok(bindings) => bindings,
+            Err(_) => {
+                self.manager.shutdown();
+                return Err(TaskAuthorityError::StateUnavailable);
+            }
+        };
+        bindings.insert(task.task_id.clone(), binding);
         Ok(task)
     }
 
@@ -236,10 +286,7 @@ impl TaskAuthority {
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
         match self.manager.get_task(task_id) {
-            Ok(task) => Ok(AuthorizedTaskSnapshot {
-                task,
-                revision: binding.signal.current(),
-            }),
+            Ok(task) => self.observe_or_shutdown(&binding, task),
             Err(_) => {
                 self.remove_binding(task_id);
                 Err(TaskAuthorityError::TaskNotFound)
@@ -258,8 +305,8 @@ impl TaskAuthority {
         self.manager
             .update_task(task_id, input_responses)
             .map_err(TaskAuthorityError::Rmcp)?;
-        binding.signal.bump();
-        Ok(())
+        binding.hint();
+        self.observe_current(&binding, task_id).map(|_| ())
     }
 
     /// Records cooperative RMCP `tasks/cancel` intent after principal validation.
@@ -272,13 +319,15 @@ impl TaskAuthority {
         self.manager
             .cancel_task(task_id)
             .map_err(TaskAuthorityError::Rmcp)?;
-        binding.signal.bump();
-        Ok(())
+        binding.hint();
+        self.observe_current(&binding, task_id).map(|_| ())
     }
 
-    /// Waits for a newer revision or a terminal task state without polling the
-    /// RMCP manager in a tight loop.
+    /// Waits for an observed newer revision or a terminal RMCP task state.
     ///
+    /// Wake-up hints cover Toolkit-controlled transitions immediately. A
+    /// bounded 250 ms observation tick covers RMCP-owned transitions, including
+    /// terminal completion and TTL expiry, without a tight polling loop.
     /// Returns `Ok(None)` when the timeout expires.
     pub async fn wait(
         &self,
@@ -289,27 +338,27 @@ impl TaskAuthority {
         condition: TaskWaitCondition,
     ) -> Result<Option<AuthorizedTaskSnapshot>, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
-        let baseline = after_revision.unwrap_or_else(|| binding.signal.current());
+        let initial = self.get_task_for_principal(principal, task_id)?;
+        let baseline = after_revision.unwrap_or(initial.revision);
+
+        if Self::wait_condition_ready(condition, baseline, &initial) {
+            return Ok(Some(initial));
+        }
 
         let wait = async {
             loop {
-                let notified = binding.signal.notify.notified();
+                // Register before the read so a hint arriving between the
+                // authoritative state check and the await cannot be lost.
+                let notified = binding.notify.notified();
                 let snapshot = self.get_task_for_principal(principal, task_id)?;
-                let ready = match condition {
-                    TaskWaitCondition::RevisionChange => snapshot.revision > baseline,
-                    TaskWaitCondition::Terminal => snapshot.task.status().is_terminal(),
-                };
-                if ready {
+                if Self::wait_condition_ready(condition, baseline, &snapshot) {
                     return Ok(snapshot);
                 }
 
-                // Double-check after creating the waiter so an update cannot
-                // land between the state check and the await.
-                let revision_after_check = binding.signal.current();
-                if revision_after_check > snapshot.revision {
-                    continue;
+                tokio::select! {
+                    _ = notified => {}
+                    _ = tokio::time::sleep(OBSERVATION_TICK) => {}
                 }
-                notified.await;
             }
         };
 
@@ -332,15 +381,57 @@ impl TaskAuthority {
         }
     }
 
+    fn wait_condition_ready(
+        condition: TaskWaitCondition,
+        baseline: u64,
+        snapshot: &AuthorizedTaskSnapshot,
+    ) -> bool {
+        match condition {
+            TaskWaitCondition::RevisionChange => snapshot.revision > baseline,
+            TaskWaitCondition::Terminal => snapshot.task.status().is_terminal(),
+        }
+    }
+
+    fn observe_current(
+        &self,
+        binding: &TaskBinding,
+        task_id: &str,
+    ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        match self.manager.get_task(task_id) {
+            Ok(task) => self.observe_or_shutdown(binding, task),
+            Err(_) => {
+                self.remove_binding(task_id);
+                Err(TaskAuthorityError::TaskNotFound)
+            }
+        }
+    }
+
+    fn observe_or_shutdown(
+        &self,
+        binding: &TaskBinding,
+        task: DetailedTask,
+    ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        match binding.observe(task) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                self.manager.shutdown();
+                Err(error)
+            }
+        }
+    }
+
     fn binding_for(
         &self,
         principal: &TaskPrincipal,
         task_id: &str,
     ) -> Result<Arc<TaskBinding>, TaskAuthorityError> {
-        let bindings = self
-            .bindings
-            .lock()
-            .map_err(|_| TaskAuthorityError::StateUnavailable)?;
+        let bindings = match self.bindings.lock() {
+            Ok(bindings) => bindings,
+            Err(_) => {
+                self.manager.shutdown();
+                return Err(TaskAuthorityError::StateUnavailable);
+            }
+        };
         let binding = bindings
             .get(task_id)
             .cloned()
@@ -352,8 +443,11 @@ impl TaskAuthority {
     }
 
     fn remove_binding(&self, task_id: &str) {
-        if let Ok(mut bindings) = self.bindings.lock() {
-            bindings.remove(task_id);
+        match self.bindings.lock() {
+            Ok(mut bindings) => {
+                bindings.remove(task_id);
+            }
+            Err(_) => self.manager.shutdown(),
         }
     }
 }
@@ -394,6 +488,33 @@ mod tests {
         assert!(authority
             .get_task_for_principal(&owner, &task.task_id)
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn repeated_reads_keep_revision_stable_without_rmcp_change() {
+        let authority = TaskAuthority::new();
+        let owner = principal("owner-a");
+        let task = authority
+            .spawn_for_principal(owner.clone(), TaskOptions::default(), |ctx| {
+                Box::pin(async move {
+                    ctx.cancelled().await;
+                    Err(TaskExit::Cancelled)
+                })
+            })
+            .expect("spawn task");
+
+        let first = authority
+            .get_task_for_principal(&owner, &task.task_id)
+            .expect("first snapshot");
+        let second = authority
+            .get_task_for_principal(&owner, &task.task_id)
+            .expect("second snapshot");
+        assert_eq!(first.revision, second.revision);
+        assert_eq!(first.task, second.task);
+
+        authority
+            .cancel_task_for_principal(&owner, &task.task_id)
+            .expect("cancel task");
     }
 
     #[tokio::test]
@@ -448,7 +569,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_wait_ignores_intermediate_revision_and_returns_completion() {
+    async fn terminal_wait_observes_rmcp_owned_completion_without_completion_hint() {
         let authority = Arc::new(TaskAuthority::new());
         let owner = principal("owner-a");
         let (finish_tx, finish_rx) = oneshot::channel::<()>();
@@ -490,10 +611,11 @@ mod tests {
             .expect("wait result")
             .expect("terminal snapshot");
         assert_eq!(observed.task.status(), TaskStatus::Completed);
+        assert!(observed.revision > initial.revision);
     }
 
     #[tokio::test]
-    async fn owner_cancel_wakes_operation_and_terminal_waiter() {
+    async fn owner_cancel_reaches_terminal_without_relying_on_cancel_revision_hint() {
         let authority = Arc::new(TaskAuthority::new());
         let owner = principal("owner-a");
         let task = authority
