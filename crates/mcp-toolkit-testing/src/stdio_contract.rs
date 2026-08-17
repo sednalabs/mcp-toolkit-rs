@@ -21,6 +21,10 @@ const PROTOCOL_VERSION_META_KEY: &str = "io.modelcontextprotocol/protocolVersion
 const CLIENT_INFO_META_KEY: &str = "io.modelcontextprotocol/clientInfo";
 const CLIENT_CAPABILITIES_META_KEY: &str = "io.modelcontextprotocol/clientCapabilities";
 
+fn uses_current_request_model(protocol_version: &str) -> bool {
+    protocol_version >= DEFAULT_PROTOCOL_VERSION
+}
+
 /// Running stdio MCP process with a JSON-RPC line protocol harness.
 pub struct StdioMcpProcess {
     child: Child,
@@ -44,9 +48,9 @@ impl StdioMcpProcess {
 
     /// Spawn a binary with explicit client metadata and protocol version.
     ///
-    /// `2026-07-28` uses the current stateless request model. Older protocol
-    /// versions run the legacy initialize/initialized handshake so callers can
-    /// exercise backward compatibility deliberately.
+    /// `2026-07-28` and newer protocol dates use the current stateless request
+    /// model. Older protocol versions run the legacy initialize/initialized
+    /// handshake so callers can exercise backward compatibility deliberately.
     ///
     /// # Panics
     /// Panics if the process cannot spawn, a requested legacy initialize
@@ -58,7 +62,7 @@ impl StdioMcpProcess {
         protocol_version: &str,
     ) -> Self {
         let mut process = Self::spawn(exe);
-        if protocol_version == DEFAULT_PROTOCOL_VERSION {
+        if uses_current_request_model(protocol_version) {
             process.request_meta = Some(current_request_meta(client_name, protocol_version));
         } else {
             process.initialize_legacy(client_name, protocol_version);
@@ -73,15 +77,16 @@ impl StdioMcpProcess {
     ///
     /// # Panics
     /// Panics if the process cannot spawn, the initialize response times out,
-    /// or the server returns a different protocol version.
+    /// the server returns a different protocol version, or the requested
+    /// version belongs to the current stateless lifecycle.
     pub fn start_legacy_with_client(
         exe: impl AsRef<OsStr>,
         client_name: &str,
         protocol_version: &str,
     ) -> Self {
-        assert_ne!(
-            protocol_version, DEFAULT_PROTOCOL_VERSION,
-            "current MCP does not use the legacy initialize handshake"
+        assert!(
+            !uses_current_request_model(protocol_version),
+            "MCP 2026-07-28 and newer do not use the legacy initialize handshake"
         );
         let mut process = Self::spawn(exe);
         process.initialize_legacy(client_name, protocol_version);
@@ -329,21 +334,34 @@ pub fn assert_stdio_tool_response_excludes_substrings<S>(
 #[cfg(test)]
 mod tests {
     use super::{
-        current_request_meta, tool_call_request, tool_call_request_with_meta, StdioMcpProcess,
-        CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY,
+        current_request_meta, tool_call_request, tool_call_request_with_meta,
+        uses_current_request_model, StdioMcpProcess, CLIENT_CAPABILITIES_META_KEY,
+        CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY,
     };
     use serde_json::json;
     use std::thread;
     use std::time::{Duration, Instant};
 
     #[test]
-    fn default_protocol_version_tracks_current_mcp_spec() {
-        let latest_version =
-            serde_json::to_value(rmcp::model::ProtocolVersion::LATEST).expect("serialize latest");
+    fn default_protocol_version_is_explicit_2026_cutline() {
+        let current_version = serde_json::to_value(rmcp::model::ProtocolVersion::V_2026_07_28)
+            .expect("serialize 2026 protocol");
         assert_eq!(
             super::DEFAULT_PROTOCOL_VERSION,
-            latest_version.as_str().expect("latest version string")
+            current_version.as_str().expect("2026 version string")
         );
+        assert_eq!(
+            rmcp::model::ProtocolVersion::LATEST,
+            rmcp::model::ProtocolVersion::V_2025_11_25,
+            "RMCP 3.1.2 intentionally keeps LATEST on the legacy lifecycle"
+        );
+    }
+
+    #[test]
+    fn request_model_boundary_is_forward_compatible() {
+        assert!(!uses_current_request_model("2025-11-25"));
+        assert!(uses_current_request_model("2026-07-28"));
+        assert!(uses_current_request_model("2027-01-01"));
     }
 
     #[test]

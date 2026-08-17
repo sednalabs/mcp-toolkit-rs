@@ -518,13 +518,13 @@ mod tests {
 
     const ACCEPT_STREAMABLE: &str = "application/json, text/event-stream";
 
-    fn init_body() -> String {
+    fn legacy_init_body() -> String {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": rmcp::model::ProtocolVersion::LATEST,
+                "protocolVersion": rmcp::model::ProtocolVersion::V_2025_11_25,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "test",
@@ -587,7 +587,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(init_body()))
+            .body(Body::from(legacy_init_body()))
             .expect("request");
 
         let response = runtime.service.handle(request).await;
@@ -629,7 +629,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Full::from(Bytes::from(init_body())))
+            .body(Full::from(Bytes::from(legacy_init_body())))
             .expect("request");
 
         let response = runtime.service.handle(request).await;
@@ -710,7 +710,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(init_body()))
+            .body(Body::from(legacy_init_body()))
             .expect("request");
         let response = runtime.service.handle(request).await;
         let session_id = response
@@ -818,7 +818,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(init_body()))
+            .body(Body::from(legacy_init_body()))
             .expect("initialize request");
         let initialize_response = runtime.service.handle(initialize).await;
         let live_session_id = initialize_response
@@ -848,7 +848,7 @@ mod tests {
                 .header(HOST, "127.0.0.1")
                 .header(ACCEPT, ACCEPT_STREAMABLE)
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(init_body()))
+                .body(Body::from(legacy_init_body()))
                 .expect("session-bearing initialize request");
             for value in values {
                 request.headers_mut().append(HEADER_SESSION_ID, value);
@@ -915,7 +915,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(init_body()))
+            .body(Body::from(legacy_init_body()))
             .expect("request");
 
         let response =
@@ -935,7 +935,7 @@ mod tests {
             .header(HOST, "127.0.0.1")
             .header(ACCEPT, ACCEPT_STREAMABLE)
             .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(init_body()))
+            .body(Body::from(legacy_init_body()))
             .expect("initialize request");
         let initialize_response = runtime.service.handle(initialize).await;
         let session_id = initialize_response
