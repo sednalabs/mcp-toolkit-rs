@@ -29,7 +29,12 @@ fn input_request(message: &str) -> InputRequest {
 }
 
 fn binding_count(authority: &TaskAuthority) -> usize {
-    authority.state.lock().expect("authority state").bindings.len()
+    authority
+        .state
+        .lock()
+        .expect("authority state")
+        .bindings
+        .len()
 }
 
 #[test]
@@ -261,9 +266,11 @@ async fn synchronous_factory_panic_is_contained_as_failed_task() {
     let authority = TaskAuthority::new();
     let owner = principal("owner-a");
     let task = authority
-        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(None), |_ctx| {
-            panic!("factory panic")
-        })
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| panic!("factory panic"),
+        )
         .expect("factory panic should be contained");
 
     let terminal = authority
@@ -286,14 +293,18 @@ async fn asynchronous_operation_panic_is_contained_as_failed_task() {
     let authority = TaskAuthority::new();
     let owner = principal("owner-a");
     let task = authority
-        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(None), |_ctx| {
-            Box::pin(async {
-                tokio::task::yield_now().await;
-                panic!("future panic");
-                #[allow(unreachable_code)]
-                Ok(ok_result("never"))
-            })
-        })
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| {
+                Box::pin(async {
+                    tokio::task::yield_now().await;
+                    panic!("future panic");
+                    #[allow(unreachable_code)]
+                    Ok(ok_result("never"))
+                })
+            },
+        )
         .expect("spawn task");
 
     let terminal = authority
@@ -368,9 +379,8 @@ async fn panicking_update_iterator_does_not_poison_rmcp_manager() {
         })
         .expect("spawn task");
 
-    let bad_iter = std::iter::from_fn(|| -> Option<(String, serde_json::Value)> {
-        panic!("iterator panic")
-    });
+    let bad_iter =
+        std::iter::from_fn(|| -> Option<(String, serde_json::Value)> { panic!("iterator panic") });
     let panic = catch_unwind(AssertUnwindSafe(|| {
         let _ = authority.update_task_for_principal(&owner, &task.task_id, bad_iter);
     }));
@@ -438,15 +448,15 @@ async fn stale_binding_pruning_is_incremental_after_rmcp_global_sweep() {
     assert_eq!(authority.prune_one_stale_binding().expect("first probe"), 0);
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    assert_eq!(authority.prune_one_stale_binding().expect("second probe"), 1);
+    assert_eq!(
+        authority.prune_one_stale_binding().expect("second probe"),
+        1
+    );
     assert_eq!(binding_count(&authority), 1);
     assert_eq!(authority.prune_one_stale_binding().expect("third probe"), 1);
     assert_eq!(binding_count(&authority), 0);
 
-    assert!(matches!(
-        authority.manager.get_task(&first.task_id),
-        Err(_)
-    ));
+    assert!(matches!(authority.manager.get_task(&first.task_id), Err(_)));
     assert!(matches!(
         authority.manager.get_task(&second.task_id),
         Err(_)
