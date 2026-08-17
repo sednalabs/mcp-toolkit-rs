@@ -24,6 +24,11 @@
 //!
 //! The crate deliberately does not add another MCP Tasks wire protocol and does
 //! not expose `tasks/list`.
+//!
+//! RMCP task models and [`rmcp::task_manager::TaskOptions`] appear directly in
+//! this crate's public API. Use the [`rmcp`] re-export here rather than selecting
+//! an independent SDK version in direct consumers; the re-export is the exact
+//! RMCP release coordinated by this Toolkit revision.
 
 mod authority;
 
@@ -31,3 +36,5 @@ pub use authority::{
     AuthorizedTaskSnapshot, ManagedTaskContext, TaskAuthority, TaskAuthorityError, TaskPrincipal,
     TaskWaitCondition,
 };
+/// Exact RMCP SDK coordinated with this Toolkit Tasks crate.
+pub use rmcp;
