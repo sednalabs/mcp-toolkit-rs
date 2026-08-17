@@ -271,8 +271,10 @@ impl TaskAuthority {
                 notify: operation_notify,
             });
             Box::pin(async move {
-                let _drop_hint = drop_hint;
-                future.await
+                let drop_hint = drop_hint;
+                let result = future.await;
+                drop(drop_hint);
+                result
             })
         });
 
@@ -303,13 +305,15 @@ impl TaskAuthority {
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
-        match self.manager.get_task(task_id) {
+        let task = self.manager.get_task(task_id);
+        let result = match task {
             Ok(task) => self.observe_or_shutdown(&binding, task),
             Err(_) => {
                 self.remove_binding(task_id);
                 Err(TaskAuthorityError::TaskNotFound)
             }
-        }
+        };
+        result
     }
 
     /// Delivers RMCP `tasks/update` input responses after principal validation.
@@ -382,10 +386,12 @@ impl TaskAuthority {
             }
         };
 
-        match tokio::time::timeout(timeout, wait).await {
+        let outcome = tokio::time::timeout(timeout, wait).await;
+        let result = match outcome {
             Ok(result) => result.map(Some),
             Err(_) => Ok(None),
-        }
+        };
+        result
     }
 
     /// Returns the number of currently non-terminal RMCP tasks.
@@ -417,13 +423,15 @@ impl TaskAuthority {
         binding: &TaskBinding,
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
-        match self.manager.get_task(task_id) {
+        let task = self.manager.get_task(task_id);
+        let result = match task {
             Ok(task) => self.observe_or_shutdown(binding, task),
             Err(_) => {
                 self.remove_binding(task_id);
                 Err(TaskAuthorityError::TaskNotFound)
             }
-        }
+        };
+        result
     }
 
     fn observe_or_shutdown(
