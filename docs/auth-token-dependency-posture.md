@@ -49,7 +49,8 @@ Auth/token mechanics must follow these rules:
 6. Enable a sender-constraint or token-exchange mechanic only after it has an
    explicit design note, dependency-governance evidence, and conformance tests.
    DPoP meets that gate only through the atomic entrypoint documented below;
-   mTLS and token exchange remain absent.
+   mTLS remains absent. Outbound DPoP token exchange meets this gate through
+   the crate-backed boundary documented below.
 
 ## Current Auth/Token Mechanics Inventory
 
@@ -65,8 +66,9 @@ Auth/token mechanics must follow these rules:
 | Replay/JTI checks | `crates/mcp-toolkit-auth/src/replay.rs` | Approved local policy/storage glue | Store replay markers through the `JtiReplayStore` abstraction; fail closed on backend errors. |
 | Auth error mapping | `crates/mcp-toolkit-auth/src/error.rs`, `claims.rs`, and `surface.rs` | Approved local contract glue | Map provider failures to stable low-leakage error codes and challenges. |
 | DPoP sender constraints | `crates/mcp-toolkit-auth/src/dpop.rs` and `authenticator.rs` | Crate-backed atomic verification | `dpop-verifier` validates the full proof and toolkit immediately matches its JKT against `cnf.jkt`; see `docs/design/dpop-atomic-authentication-boundary.md`. Normal Bearer entrypoints reject every `cnf` claim. |
-| Test-only P-256 proof fixtures | `crates/mcp-toolkit-auth/src/internal_tests.rs` | `p256` dev-dependency | Real signed DPoP fixtures only; production verification remains exclusively in `dpop-verifier`. |
-| RFC 8693 token exchange client | Not implemented in toolkit | Explicit gap | Use the authorization server as executor and policy kernel as decision boundary; add crate-backed client work before any local implementation. |
+| Outbound DPoP P-256 key generation | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Narrow `p256` production boundary | Generate P-256 key material only; use `jsonwebtoken` for JWK extraction, thumbprints, compact JWS encoding, and ES256 signing. Do not expand this boundary into proof verification or bespoke JOSE parsing. |
+| Test-only P-256 proof fixtures | `crates/mcp-toolkit-auth/src/internal_tests.rs` and integration tests | `p256` test use | Real signed DPoP fixtures only; production verification remains exclusively in `dpop-verifier`. |
+| RFC 8693 token exchange client | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Crate-backed HTTP, JOSE, URL, and typed local glue | Use the no-redirect client, mandatory audit metadata, isolated bounded nonce stores, one nonce retry, and fail-closed `token_type=DPoP` response validation documented in `docs/design/outbound-dpop-token-exchange.md`. |
 
 ## No-Go Patterns
 
@@ -94,9 +96,11 @@ Any new auth/token mechanic must include:
 - a tracked follow-up for any unacceptable bespoke token logic that remains
   after the change.
 
-For future DPoP extensions, mTLS, token exchange, private-key JWT, or new JOSE formats,
-prefer a crate whose API validates the whole proof/token object. Do not compose
-signature primitives, compact token parsing, and claim checks by hand.
+For future DPoP extensions, mTLS, private-key JWT, or new JOSE formats, prefer a
+crate whose API validates the whole proof/token object. Do not compose signature
+primitives, compact token parsing, and claim checks by hand. Outbound proof
+construction uses `jsonwebtoken`; inbound proof verification remains exclusively
+owned by `dpop-verifier`.
 
 ## Enforcement
 
