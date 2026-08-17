@@ -9,7 +9,9 @@ use http_body_util::BodyExt;
 use mcp_toolkit_server::http::{handle_mcp, LocalMcpHttpRuntimeBuilder};
 use rmcp::{
     model::{ServerCapabilities, ServerInfo},
-    transport::common::http_header::{HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID},
+    transport::common::http_header::{
+        HEADER_MCP_METHOD, HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID,
+    },
     ServerHandler,
 };
 use serde_json::{json, Value};
@@ -57,6 +59,7 @@ fn current_request() -> Request<Body> {
         .header(ACCEPT, ACCEPT_STREAMABLE)
         .header(CONTENT_TYPE, "application/json")
         .header(HEADER_MCP_PROTOCOL_VERSION, CURRENT_PROTOCOL)
+        .header(HEADER_MCP_METHOD, "tools/list")
         .body(Body::from(current_tools_list_body()))
         .expect("current MCP request")
 }
