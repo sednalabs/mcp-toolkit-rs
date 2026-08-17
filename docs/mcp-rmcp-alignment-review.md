@@ -1,244 +1,339 @@
 # MCP/rmcp Alignment Review
 
-> Retirement note (2026-08-17): `mcp-toolkit-gemini` has been removed from the
-> active workspace. Gemini references below are preserved as evidence of the
-> 2026-07-11 review state and do not describe current Toolkit availability.
+This document is the current alignment review for `mcp-toolkit-rs` against the
+official MCP Rust SDK and the MCP 2026 protocol cut line.
 
-This review records the custom MCP-adjacent layers the toolkit maintains on
-top of `rmcp` and the invariants that keep those layers aligned with the
-official MCP specification and the official Rust SDK.
+Review date: 2026-08-17.
 
-Review date: 2026-07-11.
+## Reviewed baseline
 
-Primary references:
+- Rust SDK: `rmcp = 3.1.2`, exact published release `rmcp-v3.1.2`.
+- Toolkit protocol cut line for maintained starters and contract tests:
+  `2026-07-28`.
+- Legacy compatibility remains deliberate for pre-2026 clients where the SDK
+  still supports it.
+- `mcp-toolkit-gemini` has been retired from the active workspace. Provider
+  specific compatibility code is not an architectural precedent for new
+  Toolkit abstractions.
 
-- MCP specification entry point: <https://modelcontextprotocol.io/specification>
-- MCP tools: <https://modelcontextprotocol.io/specification/2025-11-25/server/tools>
-- MCP pagination: <https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination>
-- MCP transports: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
-- `rmcp` Rust SDK: <https://github.com/modelcontextprotocol/rust-sdk>
-- `rmcp` API docs: <https://docs.rs/rmcp>
+The migration was reviewed against the exact pinned RMCP 3.1.2 source, not the
+moving Rust SDK main branch.
 
-Second-pass review note: the custom layers below were rechecked against the
-current public MCP specification, the public `rmcp` docs, and the exact
-workspace-pinned `rmcp` `2.1.0` source. The pinned SDK already owns Host
-validation, optional full `Origin` validation, Streamable HTTP session routing,
-protocol-version header checks, `Mcp-Session-Id`, `Last-Event-Id`, SSE event-id
-formatting, and `SessionManager` restoration hooks. Toolkit code must therefore
-stay in one of two categories: thin deployment assembly around those SDK
-surfaces, or explicit server-authoring policy that the SDK intentionally does
-not own.
+## Governing rule
 
-Third-pass review note: the OAuth/OIDC discovery helpers were rechecked against
-the MCP 2025-11-25 authorization discovery order. Toolkit auth discovery now
-tries OAuth path-insertion, OIDC path-insertion, then path-appended OIDC for
-issuer URLs with path components, and validates the returned issuer and endpoint
-metadata before accepting a result.
+> RMCP owns MCP protocol semantics. Toolkit owns reusable production substrate
+> around RMCP.
 
-Fourth-pass review note: toolkit-owned protocol defaults were rechecked against
-the pinned SDK. Toolkit-owned fallbacks should use `ProtocolVersion::LATEST`
-from the pinned SDK unless a compatibility test deliberately passes an older
-version. The stdio contract harness now defaults to `2025-11-25`, and
-`mcp-toolkit-gemini` uses `ProtocolVersion::LATEST` as its server fallback.
+Toolkit must not become a parallel MCP implementation.
 
-Fifth-pass review note: the workspace RMCP SDK pin has moved through the
-toolkit facade to `rmcp` and `rmcp-macros` `2.1.0`. `mcp-toolkit-core` now also
-re-exports the pinned SDK so facade consumers can route direct SDK model and
-macro support through toolkit-owned version policy.
+Protocol-level behavior belongs in RMCP whenever the SDK exposes the required
+surface. Toolkit may add deployment policy, production hardening, authority,
+observability, persistence adapters, process supervision, testing helpers, and
+server-authoring ergonomics without replacing RMCP's protocol state machines.
 
-## SDK Version Posture
+## SDK version posture
 
-As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
-published runtime version, `=2.1.0`, and the lockfile resolves both crates to
-`2.1.0`. That is intentional: the toolkit facade owns the SDK version used by
-generated servers, and generated templates import the server-authoring surface
-through `mcp_toolkit::rmcp` instead of declaring their own direct `rmcp` or
-`rmcp-macros` dependencies.
+The Toolkit is the RMCP version authority for the workspace. Direct RMCP
+runtime dependencies use the exact coordinated pin `=3.1.2`.
 
-Treat future SDK-major or behavior-changing SDK-minor releases as coordinated
-facade upgrades, not as a reason for generated servers to bypass the facade.
-Before moving this workspace to the next such SDK version, re-run this
-alignment review and specifically compare:
+Exact lockstep is intentional. A behavior-changing RMCP patch must be treated as
+an SDK migration with hosted conformance evidence rather than silently accepted
+through Cargo resolution.
 
-- `StreamableHttpService` and session-manager behavior against the toolkit's
-  route-bundle preflight responses;
-- SSE event-id shape and resume semantics against `RecordingSessionManager`;
-- `#[tool_router]` / `#[tool_handler]` macro output and generated
-  `tools/list` pagination;
-- feature flags needed by the facade versus template dependencies;
-- migration guidance from the official SDK release notes.
+Maintained starter templates consume the server-authoring surface through
+Toolkit facade features and do not independently select an RMCP version.
 
-## Automated Guardrails
+Some low-level consumer crates may still require a direct dependency named
+`rmcp` because RMCP procedural macros can emit literal `rmcp::...` paths. Such a
+dependency is an implementation requirement, not permission for version drift.
+It must remain exactly aligned with the Toolkit-owned RMCP version.
 
-The dependency-governance workflow now treats rmcp alignment as a workspace-wide
-SDK pin rule, not only a macro/runtime rule:
+Dependency governance therefore requires:
 
-- every direct `rmcp` dependency must use a concrete exact version pin;
-- every direct `rmcp` dependency must use the same version across workspace
-  crates;
-- any direct `rmcp-macros` dependency must match the direct `rmcp` runtime pin;
-- starter-template integrity tests keep generated templates importing the
-  authoring surface through `mcp_toolkit::rmcp`.
+- every direct RMCP dependency to use a concrete exact version;
+- all direct RMCP dependencies in the workspace to agree;
+- any direct macro/runtime dependency combination to remain aligned;
+- maintained templates to avoid introducing an independent SDK version policy.
 
-This means the intended shape is enforced in CI: shared toolkit crates may bind
-to the SDK deliberately, generated services consume the facade, and a future
-SDK major upgrade is a single coordinated review instead of gradual service
-drift.
+## ProtocolVersion nuance
 
-## Current Posture
+RMCP 3.1.2 supports `ProtocolVersion::V_2026_07_28`, but its
+`ProtocolVersion::LATEST` constant deliberately remains
+`ProtocolVersion::V_2025_11_25`.
 
-The toolkit should stay a thin policy and ergonomics layer over `rmcp`, not a
-parallel MCP implementation. Server authors should import `rmcp` through
-`mcp_toolkit::rmcp` and let `rmcp` own the JSON-RPC types, macro wiring,
-stdio transport, Streamable HTTP service, and standard handler traits.
+Toolkit must not equate the SDK's conservative `LATEST` alias with the newest
+protocol version supported by that SDK release.
 
-The toolkit-owned layers are appropriate where they encode reusable deployment
-or server-authoring policy:
+For this migration:
 
-- profile-aware tool inventory and capability projection;
-- generated server templates and schema snapshots;
-- cursor pagination helpers for list operations;
-- bounded complete-list collection for clients that wrap standard list results
-  with host-specific metadata;
-- host and Origin guards around Streamable HTTP route bundles;
-- bounded session manager composition;
-- OAuth metadata and protected-resource helpers;
-- provider-auth UX helpers that sit outside the MCP transport itself.
+- Toolkit's current-protocol test harness deliberately selects `2026-07-28`;
+- legacy session tests deliberately select an explicit pre-2026 version;
+- protocol-era classification uses the SDK model or an explicit 2026 boundary,
+  rather than assuming `LATEST` means current Toolkit policy;
+- future SDK upgrades must re-audit this relationship rather than inheriting
+  the current constants by assumption.
 
-## Alignment Inventory
+## MCP 2026 lifecycle
 
-| Area | Toolkit behavior | Alignment decision |
+MCP 2026-07-28 removes the protocol-level session lifecycle used by earlier
+versions. Current requests carry protocol and client context per request.
+
+Toolkit's maintained stdio contract therefore uses the current request model:
+
+- no initialize/initialized handshake for the 2026 path;
+- every ordinary request carries the required current-protocol `_meta`;
+- explicit older versions retain the legacy initialize/initialized flow for
+  compatibility testing.
+
+The harness must not infer lifecycle solely from one literal equality in a way
+that would send a newer supported protocol through legacy initialization.
+
+## Streamable HTTP ownership
+
+RMCP 3.1.2's primary `StreamableHttpService` already understands both protocol
+eras.
+
+For current MCP requests:
+
+- POST is stateless;
+- GET may be used for native retained-event replay when an RMCP `EventStore` is
+  available;
+- DELETE does not perform legacy session termination;
+- current request routing must not depend on `Mcp-Session-Id`.
+
+For legacy requests, RMCP may still use the initialize/session lifecycle.
+Toolkit's bounded session manager remains a compatibility and deployment layer
+around that SDK behavior.
+
+The Toolkit HTTP front door must therefore follow this ordering:
+
+1. apply deployment-level Host, Origin, authentication, and route policy;
+2. identify an explicitly current request using SDK protocol metadata;
+3. delegate current GET/POST/DELETE semantics to RMCP;
+4. apply Toolkit legacy-session preflight only to legacy or genuinely ambiguous
+   compatibility traffic.
+
+A stale, malformed, unknown, or expired legacy `Mcp-Session-Id` must not steal
+routing authority from an otherwise valid current-protocol request.
+
+## Ambiguous headerless POSTs
+
+A headerless POST can be ambiguous because compatibility traffic may include a
+legacy initialize request while a current request may identify its protocol in
+request metadata.
+
+Toolkit may buffer a strictly bounded request body only to classify this outer
+routing ambiguity. It must not implement a second JSON-RPC engine.
+
+Once the route is classified, RMCP remains authoritative for protocol parsing,
+validation, dispatch, and response framing.
+
+## SEP-2243 standard HTTP headers
+
+RMCP 3.1.2 enforces SEP-2243 standard headers for requests declaring protocol
+version `2026-07-28` or newer.
+
+Current HTTP contract tests must therefore model a complete request, including:
+
+- `MCP-Protocol-Version`;
+- required current request `_meta`;
+- `Mcp-Method` matching the JSON-RPC method;
+- `Mcp-Name` only for methods whose protocol shape carries a routable name,
+  URI, or task ID;
+- applicable `Mcp-Param-*` headers when a tool schema promotes annotated
+  primitive arguments.
+
+A 400 from RMCP for an incomplete SEP-2243 request is correct behavior and must
+not be worked around by weakening server validation.
+
+## Tool and result models
+
+RMCP 3 changed several protocol-facing Rust types. Toolkit migration must use
+SDK models instead of recreating old structures.
+
+Current decisions include:
+
+- generic descriptor/result metadata uses `MetaObject` where that is the exact
+  RMCP field type;
+- request and notification metadata retain their distinct SDK metadata types;
+- tool calls use RMCP's `CallToolResponse` union rather than forcing every call
+  back into a plain `CallToolResult`;
+- list results use RMCP constructors so cache/result metadata evolves with the
+  SDK rather than being hand-built from stale fields.
+
+This preserves native paths for Tasks and future RMCP result variants.
+
+## MCP Tasks
+
+MCP Tasks are the official `io.modelcontextprotocol/tasks` extension.
+
+RMCP owns:
+
+- task protocol methods and result models;
+- task statuses and status-specific payloads;
+- `input_required` and `tasks/update` behavior;
+- cooperative cancellation semantics;
+- TTL behavior;
+- terminal result/error projection.
+
+Toolkit must not reintroduce removed legacy methods such as `tasks/list` or
+`tasks/result` as wire protocol.
+
+Toolkit may add production authority around RMCP. The task-authority work in
+#186 therefore uses RMCP's native `TaskManager` and adds only reusable concerns
+such as principal binding, concealed cross-principal access, race-safe
+observation generations, bounded waiting, and stale authority-record cleanup.
+
+A Toolkit task revision is an observed snapshot generation, not a duplicate
+task event log. It advances only after an authoritative RMCP `DetailedTask`
+read actually changes.
+
+## Task durability boundary
+
+RMCP 3.1.2's native task manager is process-local. A process restart cannot
+honestly resurrect an in-flight Rust future merely because its last task record
+was persisted.
+
+Durable task support must first define an RMCP-native persistence/restoration
+boundary and explicit crash semantics. This is tracked in #191.
+
+Any future implementation must preserve principal ownership, TTL semantics,
+terminal integrity, and duplicate-execution safety without copying RMCP's task
+state machine into Toolkit.
+
+## Replay and event retention
+
+Toolkit's historical legacy-session replay format is not equivalent to RMCP 3
+native stateless retained-event replay.
+
+The legacy recorder uses session-era event identity such as
+`index[/request_id]` together with an already-known session. RMCP's native
+`EventStore` requires opaque globally unique event IDs that can resolve the
+originating stream from `Last-Event-Id` alone.
+
+Those contracts must not be conflated merely because both persist SSE events.
+
+A bounded RMCP-native current-protocol replay adapter is tracked in #190.
+Until that lands:
+
+- legacy `allow_resume` must not be advertised as native MCP 2026 replay;
+- current GET routing should still delegate to RMCP so the future native store
+  can be connected without another protocol rewrite.
+
+## Host, Origin, authentication, and policy
+
+Deployment-level security remains an appropriate Toolkit responsibility.
+
+Toolkit may enforce:
+
+- loopback-first bind posture;
+- explicit non-loopback authorization requirements;
+- Host/authority validation;
+- Origin validation;
+- OAuth protected-resource and authorization-server metadata;
+- route/method/scope policy;
+- actor/session binding stronger than transport-level session membership.
+
+These controls must not reinterpret valid MCP protocol messages after RMCP has
+become authoritative for protocol handling.
+
+`LiveMcpSessionId` proves only that a legacy session ID was live in the
+configured session store at routing time. It does not authenticate an actor and
+must never be treated as application authorization by itself.
+
+## Tool inventory and discovery policy
+
+Toolkit may continue to own server-authoring policy that is not protocol state:
+
+- fail-closed tool inventory registration;
+- profile-aware tool visibility;
+- capability and safety-hint projection;
+- schema snapshots;
+- bounded cursor helpers;
+- deferred tool search and compact discovery responses;
+- list-change observation for deliberate capability/profile changes.
+
+Tool annotations are client-facing hints, not authorization.
+
+## Current alignment inventory
+
+| Area | Authority | Toolkit decision |
 | --- | --- | --- |
-| `rmcp` dependency | The facade crate re-exports `rmcp` and templates avoid direct `rmcp` dependencies. | Keep. This prevents template and service drift across different SDK versions. |
-| stdio transport | `mcp-toolkit-server::stdio` delegates to `rmcp::serve_server(..., stdio())`. | Keep. The toolkit must not write non-MCP data to stdout; diagnostics belong on stderr/logging. |
-| Server macros | Templates use `#[tool_router]`, `#[tool_handler]`, and `ToolRouter`. | Keep. This matches official Rust SDK idioms while still allowing profile gates. |
-| `tools/list` | Templates filter tools by profile and now delegate cursor mechanics to `server::tools::list_tools_result`. | Keep. Custom visibility is service policy; pagination is centralized protocol hygiene. |
-| complete list collection | `core::pagination::collect_paginated_list` drains opaque cursors with page/item limits and cycle rejection, returning items only after terminal success. | Keep as the narrow extension seam for clients whose metadata wrappers cannot call `rmcp::Peer::list_all_tools` directly. Do not publish partial walks. |
-| Tool-call denial | Hidden or profile-denied tools return `CallToolResult::error` with a caller-facing message. | Keep for profile denials. Unknown tool/protocol-shape errors should continue to use `rmcp` protocol errors where the tool router sees them. |
-| Tool annotations and schemas | `mcp-toolkit-core::capability` projects safety hints, input schemas, output schemas, and metadata into `rmcp::model::Tool`. | Keep. Tool annotations are hints, not authorization. Runtime policy must still enforce scopes and risk posture. |
-| Tool inventory defaults | `ToolInventoryPolicy::default()` is fail-closed for unknown tools, with an explicit `permissive()` migration helper for incomplete legacy catalogs. | Keep. Generated and public-facing servers should not list or call unregistered tools by accident. |
-| Profile-filtered schema discovery | Catalog `search_response` attaches schemas only for the tools visible in the filtered result set. Full catalog snapshots may still include all registered schemas. | Keep. Deferred discovery must not leak hidden operator or profile-specific tool schemas through a profile-filtered search response. |
-| Tool list changes | `ToolListTracker` fingerprints stable tool names and exposes `notifications/tools/list_changed` method metadata. | Keep with invariant: a negotiated session's tool list must not vary as an incidental side effect of ordinary requests. Emit list-changed only for explicit refresh/profile changes. |
-| Streamable HTTP session routing | Route bundles use `rmcp` Streamable HTTP services plus bounded local session management and optional stateless fallback for headerless POSTs. Requests that carry a malformed, whitespace-padded, duplicate, unknown, expired, or unverifiable `MCP-Session-Id` return HTTP 404 instead of falling back to stateless handling. A successfully resolved stateful request carries a typed `LiveMcpSessionId` in its forwarded HTTP request parts so downstream code does not repeat the session-store lookup. | Keep. This is deployment assembly, not protocol reimplementation. `LiveMcpSessionId` proves only live store membership at routing time; actor binding and application authorization remain service-owned. Session resume and retained-event replay remain a separate opt-in policy after a live session has been accepted. |
-| DNS rebinding defense | Route bundles validate Host/authority and validate present `Origin` headers. Explicit `allowed_origins` are now wired through to the underlying `rmcp` stateful and stateless services and use full origin tuple matching in the outer route guard. When explicit origins are not configured, the toolkit keeps the older host-derived Origin guard for safer local defaults. | Keep for route-bundle preflight and endpoint-ready hints. Do not add more custom parsing here when an `rmcp` configuration surface exists. Public browser-facing deployments should configure explicit `allowed_origins`. |
-| Session errors | Toolkit route bundles return HTTP errors for missing/invalid sessions before forwarding to `rmcp`. | Keep, but periodically compare with `rmcp` Streamable HTTP behavior when upgrading the SDK. |
-| Auth metadata | Toolkit auth helpers generate protected-resource and authorization-server metadata. | Keep. Resource URL, issuer, scopes, and challenges are deployment-owned configuration. |
-| OAuth/OIDC issuer discovery | Toolkit auth helpers fetch and validate authorization-server metadata for configured issuers. | Keep centrally. Discovery must follow MCP 2025-11-25 order for pathful issuers and must validate issuer/endpoint metadata before accepting fallback results. |
-| SDK pin guardrails | The umbrella crate re-exports `rmcp`, templates avoid direct `rmcp` and `rmcp-macros` dependencies, and dependency governance enforces one exact direct `rmcp` pin across the workspace. | Keep. Use this as the workspace-level upgrade checkpoint before adopting the next SDK major. |
+| RMCP dependency version | Toolkit workspace policy | Exact coordinated `=3.1.2` pin. |
+| JSON-RPC models and handler traits | RMCP | Reuse directly. Do not duplicate. |
+| stdio MCP 2026 lifecycle | RMCP semantics, Toolkit test harness | Current path uses per-request metadata without initialize. |
+| legacy stdio lifecycle | RMCP | Retain only for explicit compatibility tests. |
+| Streamable HTTP protocol routing | RMCP | Current GET/POST/DELETE delegate to the primary RMCP service. |
+| legacy session capacity | Toolkit deployment policy around RMCP | Keep bounded and explicitly legacy. |
+| legacy session preflight | Toolkit compatibility policy | Must never intercept valid current requests. |
+| SEP-2243 headers | RMCP | Tests and clients must send the exact SDK-standard header contract. |
+| MCP Tasks state machine | RMCP | Wrap with production authority; do not fork. |
+| task principal ownership | Toolkit | Keep fail-closed and cross-principal concealed. |
+| durable task recovery | unresolved RMCP/Toolkit boundary | Track in #191 before implementing. |
+| current retained-event replay | RMCP `EventStore` contract | Build a compatible bounded adapter under #190. |
+| Host/Origin/bind posture | Toolkit deployment layer plus RMCP native guards | Keep aligned; prefer SDK hooks where available. |
+| OAuth metadata and deployment auth | Toolkit | Keep provider-neutral and configuration driven. |
+| tool inventory/profile policy | Toolkit | Keep as server-authoring policy. |
+| generated server templates | Toolkit | Exercise the current supported path and exact SDK policy. |
 
-## Drift Fixed In This Review
+## Automated guardrails
 
-1. Generated templates no longer ignore `PaginatedRequestParams` in
-   `list_tools`; they use a shared server helper that returns `nextCursor` and
-   maps invalid cursors to JSON-RPC `Invalid params`.
-2. Streamable HTTP route bundles now validate present `Origin` headers in
-   addition to Host/authority, aligning the hosted path with the MCP transport
-   security guidance.
-3. Stale documentation links that pointed at draft or old concepts pages now
-   point at the versioned 2025-11-25 specification pages.
-4. Dependency governance now fails if direct `rmcp` dependencies drift to
-   different SDK versions across the workspace.
-5. Hosted route-bundle builders now expose explicit `allowed_origins`, copy
-   them into stateless fallback services, and validate full origin tuples in
-   the outer guard when configured. This keeps route-level hints aligned with
-   the SDK's native `StreamableHttpServerConfig::with_allowed_origins` posture.
-6. The optional SSE event-store parser now accepts only the SDK-shaped
-   non-negative `index` or `index/request_id` event IDs. Malformed IDs such as
-   `1/` or negative indexes no longer get treated as valid replay positions.
-7. OIDC issuer discovery no longer relies only on the older
-   `{issuer}/.well-known/openid-configuration` shape. It now follows the
-   MCP 2025-11-25 OAuth/OIDC discovery order for pathful issuers, while keeping
-   the path-appended OIDC endpoint as the compatibility fallback.
-8. Route-bundle stateless fallback accepts only requests that omit
-   `MCP-Session-Id`. Malformed, whitespace-padded, duplicate, unknown, expired,
-   and lookup-failed values return HTTP 404 so clients re-initialize the session
-   as required by Streamable HTTP session semantics. The route guard never
-   normalizes an identifier that the underlying service will receive unchanged.
-9. The hosted HTTP/auth starter now validates deployment settings before router
-   construction. Loopback development still works with scaffold values, but
-   non-loopback serving rejects the development delegation secret, placeholder
-   issuer, and non-HTTPS public metadata URLs.
-10. Tool inventory policy now fails closed by default for unknown tools, keeps
-    permissive fallback behind an explicit migration helper, and profile-filtered
-    tool search now returns schemas only for visible search results.
-11. Toolkit-owned protocol defaults no longer fall back to `2024-11-05` by
-    default. The stdio contract helper requests `2025-11-25`, and
-    `mcp-toolkit-gemini` uses the pinned SDK's `ProtocolVersion::LATEST`.
-12. HTTP route-bundle and Streamable HTTP tests now serialize
-    `rmcp::model::ProtocolVersion::LATEST` in initialize fixtures instead of
-    carrying a stale literal protocol version.
-13. The RMCP SDK pin now moves through the toolkit facade at `2.1.0`; direct
-    runtime and macro pins remain aligned, and facade consumers can import SDK
-    model types through toolkit-owned re-exports.
+The coordinated SDK migration is not complete merely because `cargo check`
+passes. Hosted validation should cover:
 
-## Current Risk Notes
+- one exact RMCP pin across direct workspace dependencies;
+- maintained template fmt, Clippy, and tests;
+- full workspace fmt, Clippy, and tests;
+- Rust 2024 compatibility;
+- dependency audit and deny policy;
+- CodeQL/query policy checks used by the repository;
+- current HTTP contract tests;
+- deliberate legacy compatibility tests;
+- exact task lifecycle race tests for any production task wrapper.
 
-- The toolkit intentionally carries custom session-bounding and optional SSE
-  replay layers around `rmcp`'s Streamable HTTP service. Keep these layers only
-  as deployment policy; do not add JSON-RPC envelope handling or standard
-  transport parsing here when an `rmcp` hook exists.
-- The toolkit's Host/Origin guard intentionally duplicates part of the pinned
-  SDK's DNS-rebinding protection so route-level health and endpoint-hint
-  responses receive the same preflight. Keep the helper aligned with `rmcp`
-  semantics, prefer explicit `allowed_origins` for browser-facing deployments,
-  and replace local parsing with a public SDK middleware if one becomes
-  available.
-- The optional `EventStore` records SDK-emitted SSE event IDs but is not wired
-  into default route-bundle replay. If a future server exposes persistent
-  replay through it, review that flow against the SDK's `EventId` parser and
-  session-store support before shipping.
-- Compatibility smoke tests may still pass explicit older protocol versions to
-  the stdio harness. Keep the helper default aligned with the pinned SDK's
-  latest stable protocol version.
-- HTTP route bundles rely on `rmcp` to process accepted JSON-RPC requests after
-  local preflight checks. On each future SDK upgrade, compare accepted/missing
-  `MCP-Protocol-Version`, session-id, and SSE-resume behavior before landing.
+A PR is review-ready only when the final remote head and the correct synthetic
+PR merge commit have the required evidence. Green checks from an older head or
+an older base are useful diagnostic evidence but are not final promotion proof.
 
-## Invariants For New Servers
+## Invariants for new servers
 
-- Start from a maintained template or pattern recipe before copying code from a
-  service repository.
-- Import `rmcp` through `mcp_toolkit::rmcp` unless a crate has a deliberate
-  low-level SDK integration reason.
-- Prefer `#[tool_router(server_handler)]` for simple tools-only servers. Use an
-  explicit `#[tool_handler]` implementation only when the server needs custom
-  profile filtering, metadata, resources, prompts, or transport policy.
-- When overriding `list_tools`, call `mcp_toolkit::server::tools::list_tools_result`
-  after applying service-owned visibility filtering.
-- Treat `ToolAnnotations` as client-facing hints. Do not rely on annotations as
-  authorization or safety enforcement.
-- Keep default inventory policy fail-closed. Use `ToolInventoryPolicy::permissive()`
-  only as a reviewed migration bridge while completing legacy registrations.
-- When publishing profile-filtered tool search, include schemas only for tools
-  visible in that response.
-- Keep generated `tools/list` surfaces stable for a negotiated session. If an
-  explicit profile or capability refresh changes the surface, emit
-  `notifications/tools/list_changed` when the server declared that capability.
-- For Streamable HTTP, keep local binds loopback by default, configure allowed
-  hosts, configure explicit allowed origins for browser-facing deployments,
-  keep Origin validation enabled, require auth for non-loopback exposure, and
-  replace scaffold issuer/secret values before public serving.
-- Do not add bespoke JSON-RPC envelopes or transport behavior when an `rmcp`
-  type or service hook already exists.
+- Start from a maintained Toolkit template or documented adoption path.
+- Let Toolkit own the coordinated RMCP version.
+- Declare a direct `rmcp` dependency only when the SDK/macro integration truly
+  requires the crate name, and keep it in exact lockstep.
+- Do not use `ProtocolVersion::LATEST` as a synonym for Toolkit's chosen current
+  protocol without checking the exact pinned SDK.
+- Do not add bespoke JSON-RPC envelope handling when RMCP exposes the needed
+  model or service hook.
+- Treat current MCP HTTP traffic as stateless unless the specification and SDK
+  say otherwise.
+- Keep legacy session compatibility explicit and isolated.
+- Send the complete SEP-2243 header contract for MCP 2026 HTTP requests.
+- Treat tool annotations as hints, never authorization.
+- Keep inventory policy fail-closed for public and generated servers.
+- Bind long-running task authority to authenticated principals without
+  replacing RMCP's task state machine.
+- Make crash, persistence, replay, and recovery identity contracts explicit
+  before sharing storage implementations across protocol eras.
 
-## Follow-Up Watchlist
+## Upgrade watchlist
 
-- Re-check route-bundle session error bodies whenever `rmcp` changes
-  Streamable HTTP session handling. The toolkit should keep pre-forwarding
-  errors small and compatible.
-- Re-check `RecordingSessionManager` whenever `rmcp` changes SSE event IDs,
-  resume behavior, or Streamable HTTP session-manager trait contracts.
-- Re-check OAuth/OIDC discovery helpers whenever the MCP authorization section
-  changes discovery ordering, Client ID Metadata Document requirements, or
-  PKCE metadata requirements.
-- Re-check facade feature flags and generated template imports before adopting
-  the next `rmcp` release that changes feature, macro, model, or transport
-  requirements.
-- Re-check whether route-bundle Host/Origin preflight can delegate to a public
-  `rmcp` middleware or hook instead of local parsing.
-- Keep generated and host-profile contract probes on the complete-catalogue
-  contract: exact page chain, exact count, and at least one required later-page
-  sentinel. First-page budgets are compatibility hints, not discovery proof.
-- Review tool-name validation through the `rmcp` router during each SDK upgrade;
-  the toolkit should avoid duplicating SDK validation unless it is enforcing a
-  stricter public template policy.
+For every future RMCP upgrade, recheck at minimum:
+
+1. supported protocol versions and the meaning of `ProtocolVersion::LATEST`;
+2. Streamable HTTP current/legacy classification;
+3. standard HTTP header requirements;
+4. session-manager and `EventStore` contracts;
+5. Tasks models, manager behavior, TTL, cancellation, and restoration hooks;
+6. proc-macro emitted crate paths and downstream direct-dependency needs;
+7. `CallToolResponse`, list-result, and metadata model changes;
+8. maintained template feature flags;
+9. Toolkit preflight behavior against the exact SDK implementation;
+10. whether any Toolkit compatibility layer can now be deleted in favor of a
+    public RMCP hook.
+
+The desired long-term shape remains simple:
+
+- RMCP is the protocol/SDK implementation;
+- `mcp-toolkit-rs` is the hardened reusable production substrate;
+- downstream MCP servers contain domain behavior and service-specific policy.
