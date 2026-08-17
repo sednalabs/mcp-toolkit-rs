@@ -5,6 +5,7 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Principal-bound and observable production substrate around RMCP Tasks."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+readme = "../../README.md"
 publish = false
 
 [lib]
