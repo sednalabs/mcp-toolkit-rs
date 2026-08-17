@@ -1,6 +1,9 @@
+use std::sync::{Arc, Barrier};
+
 use mcp_toolkit_tasks::{TaskAuthority, TaskAuthorityError, TaskPrincipal};
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::task_manager::TaskOptions;
+use tokio::sync::oneshot;
 
 fn principal(value: &str) -> TaskPrincipal {
     TaskPrincipal::new(value).expect("valid principal")
@@ -80,4 +83,59 @@ async fn shutdown_inside_factory_prevents_task_publication() {
         },),
         Err(TaskAuthorityError::Closed)
     ));
+}
+
+struct DropSignal(Option<oneshot::Sender<()>>);
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        if let Some(signal) = self.0.take() {
+            let _ = signal.send(());
+        }
+    }
+}
+
+#[tokio::test]
+async fn concurrent_final_handle_drops_abort_unlimited_task() {
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    let authority = TaskAuthority::new();
+    authority
+        .spawn_for_principal(
+            principal("owner-a"),
+            TaskOptions::new().with_ttl_ms(None),
+            move |_ctx| {
+                let drop_signal = DropSignal(Some(dropped_tx));
+                Box::pin(async move {
+                    let _drop_signal = drop_signal;
+                    std::future::pending::<()>().await;
+                    Ok(ok_result("unreachable"))
+                })
+            },
+        )
+        .expect("spawn task");
+
+    let left = authority.clone();
+    let right = authority.clone();
+    drop(authority);
+
+    let barrier = Arc::new(Barrier::new(3));
+    let left_barrier = barrier.clone();
+    let left_drop = std::thread::spawn(move || {
+        left_barrier.wait();
+        drop(left);
+    });
+    let right_barrier = barrier.clone();
+    let right_drop = std::thread::spawn(move || {
+        right_barrier.wait();
+        drop(right);
+    });
+
+    barrier.wait();
+    left_drop.join().expect("left drop thread");
+    right_drop.join().expect("right drop thread");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), dropped_rx)
+        .await
+        .expect("task future should be dropped after concurrent final handles")
+        .expect("drop signal");
 }
