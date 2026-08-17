@@ -29,12 +29,6 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract test helpers. |
 | `mcp-toolkit-docs` | Documentation and tool metadata helpers. |
-| `mcp-toolkit-gemini` | Optional process-backed Gemini CLI integration helpers. |
-
-`mcp-toolkit-gemini` is intentionally API-key-only. It requires
-`GEMINI_API_KEY`, clears inherited process environment state before launching
-the Gemini CLI, and does not support browser, account, or home-directory based
-Gemini CLI authentication.
 
 ## Quick Start
 
