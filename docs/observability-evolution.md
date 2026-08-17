@@ -32,6 +32,7 @@ Toolkit-owned responsibilities:
 - stable APIs for safe event/span context;
 - safe label/value normalization for metrics;
 - redaction policy invariants and conformance tests.
+- a closed, typed terminal tool-call event that excludes raw payload and error data.
 
 Ecosystem-owned responsibilities:
 
@@ -74,6 +75,8 @@ Boundary rules:
 - secret-bearing fields such as tokens, secrets, authorization headers, and
   database URLs are masked;
 - context identifiers are sanitized and length-bounded.
+- terminal tool-call records accept only purpose-specific bounded identifiers;
+  they have no arguments, body, token, claim-set, raw-error, or arbitrary-field path.
 
 ## Migration Expectations
 

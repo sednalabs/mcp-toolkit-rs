@@ -63,20 +63,29 @@ tracing::info!("tool finished");
 After:
 
 ```rust
-use mcp_toolkit_observability::{emit_event, safe_text, EventContext, Level};
+use std::time::Duration;
+use mcp_toolkit_observability::{
+    DiagnosticToolName, RequestCorrelationId, ToolCallTerminalDiagnostic,
+};
 
-let ctx = EventContext::new()
-    .with_tool_name("example.search")
-    .with_session_id(session_id);
-
-emit_event(Level::INFO, "tool.call.started", &ctx, &[]);
-emit_event(
-    Level::INFO,
-    "tool.call.finished",
-    &ctx,
-    &[safe_text("outcome", "success")],
-);
+ToolCallTerminalDiagnostic::success(
+    RequestCorrelationId::new("request-123")?,
+    DiagnosticToolName::new("example.search")?,
+    Duration::from_millis(12),
+)
+.emit();
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+The typed terminal record is the preferred tool-call completion boundary. It
+emits one `mcp.tool_call.terminal` event with a fixed schema. Failure records
+accept only stable error code and class identifiers. There is deliberately no
+API for arguments, request or response bodies, tokens, claims, or raw errors.
+
+Optional session, principal, and schema/catalogue identifiers must first be
+constructed as their purpose-specific bounded types. Principal identifiers
+must be opaque telemetry identifiers, not display names, email addresses, or
+raw identity claims.
 
 ## Server Migration Checklist
 
@@ -94,10 +103,10 @@ Use this checklist per server.
    - Startup listening event.
    - Auth failure path.
    - Transport/session replay failures.
-4. Replace tool lifecycle logs.
-   - `tool.call.started`.
-   - `tool.call.finished`.
-   - `tool.call.failed`.
+4. Replace tool completion logs with one typed terminal record.
+   - `mcp.tool_call.terminal` with `outcome=success`.
+   - `mcp.tool_call.terminal` with `outcome=failure` and stable error identifiers.
+   - Keep start/progress events separate and low-volume only when operationally required.
 5. Add task lifecycle logs if the server uses tasks.
 6. Add metrics facade calls if metrics are enabled.
 7. Validate with toolkit tests, server smoke tests, and log redaction checks.
@@ -125,7 +134,9 @@ After deploying a migrated server, verify:
    - Trigger an auth failure and confirm no raw token or secret appears.
 2. Tool lifecycle diagnostics.
    - Run at least one successful tool call and one failing tool call.
-   - Confirm start and finish/fail events exist.
+   - Confirm exactly one terminal event exists for each call.
+   - Confirm the terminal event has the same request correlation identifier as
+     the enclosing request path.
 3. Metrics health if `metrics-facade` is enabled.
    - Confirm metrics exist and labels are bounded.
 4. Redaction guarantees.
@@ -157,6 +168,12 @@ After deploying a migrated server, verify:
 
 - Route dynamic values through `safe_text` or label normalizers.
 - Remove user-input dimensions from per-event or per-metric labels.
+
+`A terminal event needs additional payload`
+
+- Do not add an arbitrary field map or raw error to the terminal contract.
+- Map failures to a stable code and class.
+- Put high-volume debugging data behind a separately reviewed diagnostic path.
 
 ## Rollback Strategy
 

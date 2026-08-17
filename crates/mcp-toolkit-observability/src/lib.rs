@@ -31,6 +31,7 @@ pub mod metrics_facade;
 pub mod otel_export;
 pub mod redaction;
 pub mod sanitize;
+pub mod tool_call_diagnostic;
 #[cfg(feature = "tracing-bridge")]
 pub mod tracing_bridge;
 
@@ -56,6 +57,12 @@ pub use sanitize::{
     sanitize_error_message, sanitize_exchange_error, sanitize_header_name, sanitize_header_value,
     sanitize_log_value, sanitize_log_value_opt, sanitize_log_value_with_limit, strip_control_chars,
     truncate_bytes,
+};
+pub use tool_call_diagnostic::{
+    emit_tool_call_terminal, CatalogueFingerprint, DiagnosticField, DiagnosticToolName,
+    DiagnosticValueError, DiagnosticValueErrorKind, RequestCorrelationId, SafePrincipalId,
+    SafeSessionId, StableErrorClass, StableErrorCode, ToolCallTerminalDiagnostic,
+    ToolCallTerminalOutcome,
 };
 #[cfg(feature = "tracing-bridge")]
 pub use tracing_bridge::{
