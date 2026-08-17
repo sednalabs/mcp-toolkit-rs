@@ -306,14 +306,11 @@ impl TaskAuthority {
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
         let task = self.manager.get_task(task_id);
-        let result = match task {
-            Ok(task) => self.observe_or_shutdown(&binding, task),
-            Err(_) => {
-                self.remove_binding(task_id);
-                Err(TaskAuthorityError::TaskNotFound)
-            }
-        };
-        result
+        if let Ok(task) = task {
+            return self.observe_or_shutdown(&binding, task);
+        }
+        self.remove_binding(task_id);
+        Err(TaskAuthorityError::TaskNotFound)
     }
 
     /// Delivers RMCP `tasks/update` input responses after principal validation.
@@ -387,11 +384,10 @@ impl TaskAuthority {
         };
 
         let outcome = tokio::time::timeout(timeout, wait).await;
-        let result = match outcome {
-            Ok(result) => result.map(Some),
-            Err(_) => Ok(None),
-        };
-        result
+        if let Ok(result) = outcome {
+            return result.map(Some);
+        }
+        Ok(None)
     }
 
     /// Returns the number of currently non-terminal RMCP tasks.
@@ -424,14 +420,11 @@ impl TaskAuthority {
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let task = self.manager.get_task(task_id);
-        let result = match task {
-            Ok(task) => self.observe_or_shutdown(binding, task),
-            Err(_) => {
-                self.remove_binding(task_id);
-                Err(TaskAuthorityError::TaskNotFound)
-            }
-        };
-        result
+        if let Ok(task) = task {
+            return self.observe_or_shutdown(binding, task);
+        }
+        self.remove_binding(task_id);
+        Err(TaskAuthorityError::TaskNotFound)
     }
 
     fn observe_or_shutdown(
@@ -683,7 +676,10 @@ mod tests {
             .update_task_for_principal(
                 &owner,
                 &task.task_id,
-                [("approval".to_string(), serde_json::json!({"approved": true}))],
+                [(
+                    "approval".to_string(),
+                    serde_json::json!({"approved": true}),
+                )],
             )
             .expect("update task");
 
@@ -792,16 +788,12 @@ mod tests {
         let authority = TaskAuthority::new();
         let owner = principal("owner-a");
         let abandoned = authority
-            .spawn_for_principal(
-                owner.clone(),
-                TaskOptions::new().with_ttl_ms(10),
-                |_ctx| {
-                    Box::pin(async {
-                        tokio::time::sleep(Duration::from_secs(60)).await;
-                        Ok(ok_result("never"))
-                    })
-                },
-            )
+            .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(10), |_ctx| {
+                Box::pin(async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Ok(ok_result("never"))
+                })
+            })
             .expect("spawn abandoned task");
 
         tokio::time::sleep(Duration::from_millis(20)).await;
