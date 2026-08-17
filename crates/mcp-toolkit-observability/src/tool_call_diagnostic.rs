@@ -2,15 +2,14 @@
 //!
 //! Provides a closed, typed event contract for terminal MCP tool-call
 //! diagnostics. The contract deliberately has no arbitrary payload, arguments,
-//! body, claim-set, or error-message field.
+//! body, claim-set, identity-correlation, or error-message field.
 //!
 //! ## Security Boundaries
-//! * Dynamic textual identifiers are validated while borrowed, then copied into
-//!   a purpose-specific length-bounded type.
-//! * Principal and session correlation accept only fixed-size keyed digest
-//!   output produced by the caller's identity boundary, never raw identifiers.
-//! * Failure records accept validated static identifiers, never dynamic error
-//!   data or raw error values.
+//! * Request correlation is accepted only as a canonical lowercase UUID.
+//! * Tool names are validated while borrowed, then copied into a
+//!   purpose-specific length-bounded type.
+//! * Failure records accept only toolkit-owned error-code and error-class enums.
+//! * Catalogue fingerprints accept only fixed-width SHA-256 output.
 //! * Emission consumes the record, providing at-most-once emission for that
 //!   record instance. Downstream lifecycle integration remains responsible for
 //!   constructing exactly one record for each real tool call.
@@ -22,12 +21,9 @@ use std::time::Duration;
 
 use tracing::{event, Level};
 
-const MAX_REQUEST_ID_LEN: usize = 128;
+const CANONICAL_UUID_LEN: usize = 36;
 const MAX_TOOL_NAME_LEN: usize = 128;
-const MAX_ERROR_IDENTIFIER_LEN: usize = 64;
 const DIGEST_BYTES: usize = 32;
-const PRINCIPAL_DIGEST_PREFIX: &str = "principal-keyed256:";
-const SESSION_DIGEST_PREFIX: &str = "session-keyed256:";
 const CATALOGUE_FINGERPRINT_PREFIX: &str = "sha256:";
 const REDACTED_DEBUG_VALUE: &str = "<redacted>";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
@@ -37,8 +33,6 @@ const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 pub enum DiagnosticField {
     RequestId,
     ToolName,
-    ErrorCode,
-    ErrorClass,
 }
 
 impl DiagnosticField {
@@ -46,8 +40,6 @@ impl DiagnosticField {
         match self {
             Self::RequestId => "request_id",
             Self::ToolName => "tool_name",
-            Self::ErrorCode => "error_code",
-            Self::ErrorClass => "error_class",
         }
     }
 }
@@ -58,9 +50,10 @@ pub enum DiagnosticValueErrorKind {
     Empty,
     TooLong { max_bytes: usize },
     InvalidCharacter,
+    InvalidCanonicalUuid,
 }
 
-/// Reports a rejected bounded diagnostic identifier without echoing its value.
+/// Reports a rejected diagnostic value without echoing its contents.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DiagnosticValueError {
     field: DiagnosticField,
@@ -95,76 +88,126 @@ impl fmt::Display for DiagnosticValueError {
                 "{} contains a character outside the diagnostic identifier alphabet",
                 self.field.as_str()
             ),
+            DiagnosticValueErrorKind::InvalidCanonicalUuid => write!(
+                formatter,
+                "{} must be a canonical lowercase UUID",
+                self.field.as_str()
+            ),
         }
     }
 }
 
 impl Error for DiagnosticValueError {}
 
-#[derive(Eq, PartialEq)]
-struct BoundedIdentifier(String);
+fn redacted_wrapper_debug(
+    type_name: &'static str,
+    formatter: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    formatter
+        .debug_tuple(type_name)
+        .field(&REDACTED_DEBUG_VALUE)
+        .finish()
+}
 
-impl BoundedIdentifier {
-    fn parse(
-        field: DiagnosticField,
-        value: impl AsRef<str>,
-        max_bytes: usize,
-    ) -> Result<Self, DiagnosticValueError> {
+/// Correlates the terminal diagnostic with its originating request.
+///
+/// The value is restricted to the canonical lowercase textual UUID form so it
+/// is opaque, fixed-width, and non-semantic at this shared contract boundary.
+#[derive(Eq, PartialEq)]
+pub struct RequestCorrelationId(String);
+
+impl RequestCorrelationId {
+    /// Parses a canonical lowercase UUID after validating the borrowed input.
+    ///
+    /// # Errors
+    /// Returns [`DiagnosticValueError`] unless `value` is exactly 36 ASCII
+    /// bytes with lowercase hexadecimal groups in `8-4-4-4-12` form.
+    pub fn parse(value: impl AsRef<str>) -> Result<Self, DiagnosticValueError> {
         let value = value.as_ref();
-        validate_identifier(field, value, max_bytes)?;
+        if !is_canonical_lowercase_uuid(value) {
+            return Err(DiagnosticValueError {
+                field: DiagnosticField::RequestId,
+                kind: DiagnosticValueErrorKind::InvalidCanonicalUuid,
+            });
+        }
         Ok(Self(value.to_owned()))
     }
 
-    fn as_str(&self) -> &str {
+    /// Returns the canonical UUID.
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-impl fmt::Debug for BoundedIdentifier {
+impl fmt::Debug for RequestCorrelationId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(REDACTED_DEBUG_VALUE)
+        redacted_wrapper_debug("RequestCorrelationId", formatter)
     }
 }
 
+fn is_canonical_lowercase_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != CANONICAL_UUID_LEN {
+        return false;
+    }
+
+    bytes.iter().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            *byte == b'-'
+        } else {
+            byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f')
+        }
+    })
+}
+
+/// Identifies the invoked MCP tool using its registered catalogue name.
 #[derive(Eq, PartialEq)]
-struct StaticIdentifier(&'static str);
+pub struct DiagnosticToolName(String);
 
-impl StaticIdentifier {
-    fn parse(
-        field: DiagnosticField,
-        value: &'static str,
-        max_bytes: usize,
-    ) -> Result<Self, DiagnosticValueError> {
-        validate_identifier(field, value, max_bytes)?;
-        Ok(Self(value))
+impl DiagnosticToolName {
+    /// Creates a tool name after enforcing its closed alphabet and byte bound.
+    ///
+    /// # Errors
+    /// Returns [`DiagnosticValueError`] when the value is empty, longer than
+    /// 128 bytes, or contains characters outside `A-Z`, `a-z`, `0-9`, `-`,
+    /// `_`, `.`, `:`, `/`.
+    ///
+    /// # Security
+    /// Validation occurs against borrowed input before owned storage is
+    /// allocated. Callers must still supply the registered catalogue name, not
+    /// untrusted request data.
+    pub fn new(value: impl AsRef<str>) -> Result<Self, DiagnosticValueError> {
+        let value = value.as_ref();
+        validate_tool_name(value)?;
+        Ok(Self(value.to_owned()))
     }
 
-    fn as_str(&self) -> &'static str {
-        self.0
+    /// Returns the validated tool name.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-impl fmt::Debug for StaticIdentifier {
+impl fmt::Debug for DiagnosticToolName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(REDACTED_DEBUG_VALUE)
+        redacted_wrapper_debug("DiagnosticToolName", formatter)
     }
 }
 
-fn validate_identifier(
-    field: DiagnosticField,
-    value: &str,
-    max_bytes: usize,
-) -> Result<(), DiagnosticValueError> {
+fn validate_tool_name(value: &str) -> Result<(), DiagnosticValueError> {
+    let field = DiagnosticField::ToolName;
     if value.is_empty() {
         return Err(DiagnosticValueError {
             field,
             kind: DiagnosticValueErrorKind::Empty,
         });
     }
-    if value.len() > max_bytes {
+    if value.len() > MAX_TOOL_NAME_LEN {
         return Err(DiagnosticValueError {
             field,
-            kind: DiagnosticValueErrorKind::TooLong { max_bytes },
+            kind: DiagnosticValueErrorKind::TooLong {
+                max_bytes: MAX_TOOL_NAME_LEN,
+            },
         });
     }
     if !value.bytes().all(is_diagnostic_identifier_byte) {
@@ -180,6 +223,91 @@ const fn is_diagnostic_identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
 }
 
+/// Toolkit-owned terminal error codes.
+///
+/// Public enum variants are the only construction path, so runtime strings and
+/// leaked allocations cannot become diagnostic error codes.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ToolCallErrorCode {
+    InvalidArguments,
+    Unauthenticated,
+    PermissionDenied,
+    NotFound,
+    Conflict,
+    RateLimited,
+    Cancelled,
+    Timeout,
+    DependencyUnavailable,
+    Internal,
+}
+
+impl ToolCallErrorCode {
+    /// Returns the stable emitted representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidArguments => "invalid_arguments",
+            Self::Unauthenticated => "unauthenticated",
+            Self::PermissionDenied => "permission_denied",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::RateLimited => "rate_limited",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::DependencyUnavailable => "dependency_unavailable",
+            Self::Internal => "internal",
+        }
+    }
+
+    /// Returns the single error class assigned to this code.
+    pub const fn class(self) -> ToolCallErrorClass {
+        match self {
+            Self::InvalidArguments => ToolCallErrorClass::InvalidRequest,
+            Self::Unauthenticated => ToolCallErrorClass::Authentication,
+            Self::PermissionDenied => ToolCallErrorClass::Authorization,
+            Self::NotFound => ToolCallErrorClass::NotFound,
+            Self::Conflict => ToolCallErrorClass::Conflict,
+            Self::RateLimited => ToolCallErrorClass::ResourceExhausted,
+            Self::Cancelled => ToolCallErrorClass::Cancellation,
+            Self::Timeout => ToolCallErrorClass::DeadlineExceeded,
+            Self::DependencyUnavailable => ToolCallErrorClass::Dependency,
+            Self::Internal => ToolCallErrorClass::Internal,
+        }
+    }
+}
+
+/// Toolkit-owned terminal error classes.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ToolCallErrorClass {
+    InvalidRequest,
+    Authentication,
+    Authorization,
+    NotFound,
+    Conflict,
+    ResourceExhausted,
+    Cancellation,
+    DeadlineExceeded,
+    Dependency,
+    Internal,
+}
+
+impl ToolCallErrorClass {
+    /// Returns the stable emitted representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::Authentication => "authentication",
+            Self::Authorization => "authorization",
+            Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
+            Self::ResourceExhausted => "resource_exhausted",
+            Self::Cancellation => "cancellation",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::Dependency => "dependency",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 fn encode_digest(prefix: &str, digest: [u8; DIGEST_BYTES]) -> String {
     let mut encoded = String::with_capacity(prefix.len() + (DIGEST_BYTES * 2));
     encoded.push_str(prefix);
@@ -190,182 +318,12 @@ fn encode_digest(prefix: &str, digest: [u8; DIGEST_BYTES]) -> String {
     encoded
 }
 
-fn redacted_wrapper_debug(
-    type_name: &'static str,
-    formatter: &mut fmt::Formatter<'_>,
-) -> fmt::Result {
-    formatter
-        .debug_tuple(type_name)
-        .field(&REDACTED_DEBUG_VALUE)
-        .finish()
-}
-
-macro_rules! bounded_owned_identifier {
-    (
-        $(#[$meta:meta])*
-        $name:ident,
-        $field:path,
-        $max:ident
-    ) => {
-        $(#[$meta])*
-        #[derive(Eq, PartialEq)]
-        pub struct $name(BoundedIdentifier);
-
-        impl $name {
-            /// Creates an identifier after enforcing its closed alphabet and byte bound.
-            ///
-            /// # Errors
-            /// Returns [`DiagnosticValueError`] when the value is empty, too long, or
-            /// contains characters outside `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `:`, `/`.
-            ///
-            /// # Security
-            /// Validation occurs against the borrowed input before this type allocates
-            /// owned storage. Lexical validity does not make a value safe to disclose;
-            /// callers must still use the intended identifier source.
-            pub fn new(value: impl AsRef<str>) -> Result<Self, DiagnosticValueError> {
-                BoundedIdentifier::parse($field, value, $max).map(Self)
-            }
-
-            /// Returns the validated identifier.
-            pub fn as_str(&self) -> &str {
-                self.0.as_str()
-            }
-        }
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                redacted_wrapper_debug(stringify!($name), formatter)
-            }
-        }
-    };
-}
-
-macro_rules! bounded_static_identifier {
-    (
-        $(#[$meta:meta])*
-        $name:ident,
-        $field:path
-    ) => {
-        $(#[$meta])*
-        #[derive(Eq, PartialEq)]
-        pub struct $name(StaticIdentifier);
-
-        impl $name {
-            /// Creates an error identifier from program-static vocabulary.
-            ///
-            /// # Errors
-            /// Returns [`DiagnosticValueError`] when the value is empty, too long, or
-            /// contains characters outside `A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `:`, `/`.
-            ///
-            /// # Security
-            /// The static lifetime prevents dynamic error text and tenant data from
-            /// entering this field. It does not prove governance: callers must select
-            /// values from a documented or allowlisted error vocabulary.
-            pub fn from_static(value: &'static str) -> Result<Self, DiagnosticValueError> {
-                StaticIdentifier::parse($field, value, MAX_ERROR_IDENTIFIER_LEN).map(Self)
-            }
-
-            /// Returns the validated static identifier.
-            pub fn as_str(&self) -> &'static str {
-                self.0.as_str()
-            }
-        }
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                redacted_wrapper_debug(stringify!($name), formatter)
-            }
-        }
-    };
-}
-
-bounded_owned_identifier!(
-    /// Correlates the terminal diagnostic with the originating request.
-    RequestCorrelationId,
-    DiagnosticField::RequestId,
-    MAX_REQUEST_ID_LEN
-);
-
-bounded_owned_identifier!(
-    /// Identifies the invoked MCP tool using its registered catalogue name.
-    DiagnosticToolName,
-    DiagnosticField::ToolName,
-    MAX_TOOL_NAME_LEN
-);
-
-bounded_static_identifier!(
-    /// Identifies a documented static error code without carrying error text.
-    StaticErrorCode,
-    DiagnosticField::ErrorCode
-);
-
-bounded_static_identifier!(
-    /// Identifies a documented static error class without carrying error text.
-    StaticErrorClass,
-    DiagnosticField::ErrorClass
-);
-
-/// Carries an opaque principal correlation derived at the identity boundary.
-#[derive(Eq, PartialEq)]
-pub struct PrincipalCorrelationDigest(String);
-
-impl PrincipalCorrelationDigest {
-    /// Encodes a keyed, principal-domain-separated 256-bit digest.
-    ///
-    /// # Security
-    /// The toolkit deliberately does not accept a raw principal identifier.
-    /// Derive this digest with a secret-keyed construction and a principal-specific
-    /// domain separator before crossing the observability boundary. An unkeyed hash
-    /// of an email address or other enumerable identifier is not sufficient.
-    pub fn from_keyed_digest(digest: [u8; DIGEST_BYTES]) -> Self {
-        Self(encode_digest(PRINCIPAL_DIGEST_PREFIX, digest))
-    }
-
-    /// Returns the opaque rendered correlation digest.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for PrincipalCorrelationDigest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        redacted_wrapper_debug("PrincipalCorrelationDigest", formatter)
-    }
-}
-
-/// Carries an opaque session correlation derived at the session boundary.
-#[derive(Eq, PartialEq)]
-pub struct SessionCorrelationDigest(String);
-
-impl SessionCorrelationDigest {
-    /// Encodes a keyed, session-domain-separated 256-bit digest.
-    ///
-    /// # Security
-    /// The toolkit deliberately does not accept a raw session identifier. Derive
-    /// this digest with a secret-keyed construction and a session-specific domain
-    /// separator before crossing the observability boundary.
-    pub fn from_keyed_digest(digest: [u8; DIGEST_BYTES]) -> Self {
-        Self(encode_digest(SESSION_DIGEST_PREFIX, digest))
-    }
-
-    /// Returns the opaque rendered correlation digest.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for SessionCorrelationDigest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        redacted_wrapper_debug("SessionCorrelationDigest", formatter)
-    }
-}
-
 /// Carries the SHA-256 fingerprint of the schema or catalogue revision.
 #[derive(Eq, PartialEq)]
 pub struct CatalogueFingerprint(String);
 
 impl CatalogueFingerprint {
-    /// Encodes a 256-bit SHA-256 schema or catalogue fingerprint.
+    /// Encodes a fixed-width 256-bit SHA-256 schema or catalogue fingerprint.
     pub fn from_sha256(digest: [u8; DIGEST_BYTES]) -> Self {
         Self(encode_digest(CATALOGUE_FINGERPRINT_PREFIX, digest))
     }
@@ -383,26 +341,10 @@ impl fmt::Debug for CatalogueFingerprint {
 }
 
 /// Describes the terminal result without accepting raw error data.
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ToolCallTerminalOutcome {
     Success,
-    Failure {
-        code: StaticErrorCode,
-        class: StaticErrorClass,
-    },
-}
-
-impl fmt::Debug for ToolCallTerminalOutcome {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Success => formatter.write_str("Success"),
-            Self::Failure { code, class } => formatter
-                .debug_struct("Failure")
-                .field("code", code)
-                .field("class", class)
-                .finish(),
-        }
-    }
+    Failure { code: ToolCallErrorCode },
 }
 
 /// Carries one fixed-schema terminal diagnostic record.
@@ -415,8 +357,6 @@ impl fmt::Debug for ToolCallTerminalOutcome {
 #[derive(Eq, PartialEq)]
 pub struct ToolCallTerminalDiagnostic {
     request_id: RequestCorrelationId,
-    session_correlation: Option<SessionCorrelationDigest>,
-    principal_correlation: Option<PrincipalCorrelationDigest>,
     tool_name: DiagnosticToolName,
     duration: Duration,
     outcome: ToolCallTerminalOutcome,
@@ -432,8 +372,6 @@ impl ToolCallTerminalDiagnostic {
     ) -> Self {
         Self {
             request_id,
-            session_correlation: None,
-            principal_correlation: None,
             tool_name,
             duration,
             outcome: ToolCallTerminalOutcome::Success,
@@ -441,39 +379,25 @@ impl ToolCallTerminalDiagnostic {
         }
     }
 
-    /// Creates a failed terminal diagnostic from static error identifiers.
+    /// Creates a failed terminal diagnostic from closed error enums.
     ///
     /// # Security
-    /// This constructor intentionally accepts no error object or message. Map
-    /// failures to a documented static code and class before constructing the record.
+    /// This constructor intentionally accepts no error object, message, or
+    /// string identifier. Services map failures onto toolkit-owned variants
+    /// before constructing the record.
     pub fn failure(
         request_id: RequestCorrelationId,
         tool_name: DiagnosticToolName,
         duration: Duration,
-        code: StaticErrorCode,
-        class: StaticErrorClass,
+        code: ToolCallErrorCode,
     ) -> Self {
         Self {
             request_id,
-            session_correlation: None,
-            principal_correlation: None,
             tool_name,
             duration,
-            outcome: ToolCallTerminalOutcome::Failure { code, class },
+            outcome: ToolCallTerminalOutcome::Failure { code },
             catalogue_fingerprint: None,
         }
-    }
-
-    /// Adds an opaque session correlation digest.
-    pub fn with_session_correlation(mut self, digest: SessionCorrelationDigest) -> Self {
-        self.session_correlation = Some(digest);
-        self
-    }
-
-    /// Adds an opaque principal correlation digest.
-    pub fn with_principal_correlation(mut self, digest: PrincipalCorrelationDigest) -> Self {
-        self.principal_correlation = Some(digest);
-        self
     }
 
     /// Adds the schema or catalogue SHA-256 fingerprint used for this call.
@@ -489,31 +413,22 @@ impl ToolCallTerminalDiagnostic {
     ///
     /// # Security
     /// The event contains only the purpose-specific fields represented by this
-    /// type. It has no raw error, argument, body, token, or arbitrary-field path.
+    /// type. It has no raw error, argument, body, token, identity, or
+    /// arbitrary-field path.
     pub fn emit(self) {
         emit_tool_call_terminal(self);
     }
 
     fn snapshot(&self) -> ToolCallTerminalSnapshot<'_> {
-        let (outcome, error_code, error_class) = match &self.outcome {
+        let (outcome, error_code, error_class) = match self.outcome {
             ToolCallTerminalOutcome::Success => ("success", "", ""),
-            ToolCallTerminalOutcome::Failure { code, class } => {
-                ("failure", code.as_str(), class.as_str())
+            ToolCallTerminalOutcome::Failure { code } => {
+                ("failure", code.as_str(), code.class().as_str())
             }
         };
 
         ToolCallTerminalSnapshot {
             request_id: self.request_id.as_str(),
-            session_correlation: self
-                .session_correlation
-                .as_ref()
-                .map(SessionCorrelationDigest::as_str)
-                .unwrap_or(""),
-            principal_correlation: self
-                .principal_correlation
-                .as_ref()
-                .map(PrincipalCorrelationDigest::as_str)
-                .unwrap_or(""),
             tool_name: self.tool_name.as_str(),
             duration_ms: duration_millis(self.duration),
             outcome,
@@ -533,20 +448,6 @@ impl fmt::Debug for ToolCallTerminalDiagnostic {
         formatter
             .debug_struct("ToolCallTerminalDiagnostic")
             .field("request_id", &REDACTED_DEBUG_VALUE)
-            .field(
-                "session_correlation",
-                &self
-                    .session_correlation
-                    .as_ref()
-                    .map(|_| REDACTED_DEBUG_VALUE),
-            )
-            .field(
-                "principal_correlation",
-                &self
-                    .principal_correlation
-                    .as_ref()
-                    .map(|_| REDACTED_DEBUG_VALUE),
-            )
             .field("tool_name", &REDACTED_DEBUG_VALUE)
             .field("duration", &self.duration)
             .field("outcome", &self.outcome)
@@ -564,13 +465,11 @@ impl fmt::Debug for ToolCallTerminalDiagnostic {
 #[derive(Debug, Eq, PartialEq)]
 struct ToolCallTerminalSnapshot<'a> {
     request_id: &'a str,
-    session_correlation: &'a str,
-    principal_correlation: &'a str,
     tool_name: &'a str,
     duration_ms: u64,
     outcome: &'static str,
-    error_code: &'a str,
-    error_class: &'a str,
+    error_code: &'static str,
+    error_class: &'static str,
     catalogue_fingerprint: &'a str,
 }
 
@@ -580,8 +479,8 @@ struct ToolCallTerminalSnapshot<'a> {
 /// responsible for constructing one record for each real tool call.
 ///
 /// # Security
-/// The API accepts no raw error, arguments, body, token, claim set, or arbitrary
-/// field collection. Use static error vocabulary and opaque correlation digests.
+/// The API accepts no raw error, arguments, body, token, identity, claim set, or
+/// arbitrary field collection. Error values come only from closed enums.
 pub fn emit_tool_call_terminal(diagnostic: ToolCallTerminalDiagnostic) {
     let fields = diagnostic.snapshot();
     event!(
@@ -589,8 +488,6 @@ pub fn emit_tool_call_terminal(diagnostic: ToolCallTerminalDiagnostic) {
         Level::INFO,
         event = "mcp.tool_call.terminal",
         request_id = fields.request_id,
-        session_correlation = fields.session_correlation,
-        principal_correlation = fields.principal_correlation,
         tool_name = fields.tool_name,
         duration_ms = fields.duration_ms,
         outcome = fields.outcome,
@@ -612,24 +509,15 @@ mod tests {
 
     use tracing_subscriber::fmt::MakeWriter;
 
-    const PRINCIPAL_DIGEST: [u8; DIGEST_BYTES] = [0x11; DIGEST_BYTES];
-    const SESSION_DIGEST: [u8; DIGEST_BYTES] = [0x22; DIGEST_BYTES];
+    const REQUEST_ID: &str = "018f3f8e-7b9a-7d12-8c34-1234567890ab";
     const CATALOGUE_DIGEST: [u8; DIGEST_BYTES] = [0x33; DIGEST_BYTES];
 
     fn request_id() -> RequestCorrelationId {
-        RequestCorrelationId::new("request-123").expect("fixture request id is valid")
+        RequestCorrelationId::parse(REQUEST_ID).expect("fixture request id is valid")
     }
 
     fn tool_name() -> DiagnosticToolName {
         DiagnosticToolName::new("example.read").expect("fixture tool name is valid")
-    }
-
-    fn error_code() -> StaticErrorCode {
-        StaticErrorCode::from_static("request.invalid_shape").expect("valid static error code")
-    }
-
-    fn error_class() -> StaticErrorClass {
-        StaticErrorClass::from_static("invalid_request").expect("valid static error class")
     }
 
     #[test]
@@ -639,13 +527,7 @@ mod tests {
             tool_name(),
             Duration::from_millis(27),
         )
-        .with_session_correlation(SessionCorrelationDigest::from_keyed_digest(SESSION_DIGEST))
-        .with_principal_correlation(PrincipalCorrelationDigest::from_keyed_digest(
-            PRINCIPAL_DIGEST,
-        ))
         .with_catalogue_fingerprint(CatalogueFingerprint::from_sha256(CATALOGUE_DIGEST));
-        let expected_session = format!("{SESSION_DIGEST_PREFIX}{}", "22".repeat(DIGEST_BYTES));
-        let expected_principal = format!("{PRINCIPAL_DIGEST_PREFIX}{}", "11".repeat(DIGEST_BYTES));
         let expected_catalogue = format!(
             "{CATALOGUE_FINGERPRINT_PREFIX}{}",
             "33".repeat(DIGEST_BYTES)
@@ -654,9 +536,7 @@ mod tests {
         assert_eq!(
             diagnostic.snapshot(),
             ToolCallTerminalSnapshot {
-                request_id: "request-123",
-                session_correlation: &expected_session,
-                principal_correlation: &expected_principal,
+                request_id: REQUEST_ID,
                 tool_name: "example.read",
                 duration_ms: 27,
                 outcome: "success",
@@ -668,29 +548,46 @@ mod tests {
     }
 
     #[test]
-    fn failure_snapshot_uses_static_identifiers_and_has_no_error_text_field() {
+    fn failure_snapshot_uses_closed_enums_and_has_no_error_text_field() {
         let diagnostic = ToolCallTerminalDiagnostic::failure(
             request_id(),
             tool_name(),
             Duration::from_millis(31),
-            error_code(),
-            error_class(),
+            ToolCallErrorCode::InvalidArguments,
         );
 
         assert_eq!(
             diagnostic.snapshot(),
             ToolCallTerminalSnapshot {
-                request_id: "request-123",
-                session_correlation: "",
-                principal_correlation: "",
+                request_id: REQUEST_ID,
                 tool_name: "example.read",
                 duration_ms: 31,
                 outcome: "failure",
-                error_code: "request.invalid_shape",
+                error_code: "invalid_arguments",
                 error_class: "invalid_request",
                 catalogue_fingerprint: "",
             }
         );
+    }
+
+    #[test]
+    fn request_id_accepts_only_canonical_lowercase_uuid_text() {
+        for rejected in [
+            "request-123",
+            "018F3F8E-7B9A-7D12-8C34-1234567890AB",
+            "018f3f8e7b9a7d128c341234567890ab",
+            "018f3f8e-7b9a-7d12-8c34-1234567890ag",
+            "018f3f8e-7b9a-7d12-8c34-1234567890ab0",
+        ] {
+            let error = RequestCorrelationId::parse(rejected)
+                .expect_err("non-canonical request id must be rejected");
+            assert_eq!(error.field(), DiagnosticField::RequestId);
+            assert_eq!(
+                error.kind(),
+                DiagnosticValueErrorKind::InvalidCanonicalUuid
+            );
+            assert!(!error.to_string().contains(rejected));
+        }
     }
 
     #[test]
@@ -703,42 +600,106 @@ mod tests {
             }
         }
 
-        let oversized = "x".repeat(MAX_REQUEST_ID_LEN + 1);
-        let error = RequestCorrelationId::new(BorrowOnly(&oversized))
+        let oversized = "x".repeat(MAX_TOOL_NAME_LEN + 1);
+        let error = DiagnosticToolName::new(BorrowOnly(&oversized))
             .expect_err("oversized borrowed input must be rejected");
         assert_eq!(
             error.kind(),
             DiagnosticValueErrorKind::TooLong {
-                max_bytes: MAX_REQUEST_ID_LEN,
+                max_bytes: MAX_TOOL_NAME_LEN,
             }
+        );
+
+        let error = RequestCorrelationId::parse(BorrowOnly("not-a-uuid"))
+            .expect_err("invalid borrowed UUID must be rejected");
+        assert_eq!(
+            error.kind(),
+            DiagnosticValueErrorKind::InvalidCanonicalUuid
         );
     }
 
     #[test]
     fn value_errors_never_echo_the_rejected_value() {
         let rejected = "Bearer secret value";
-        let error = RequestCorrelationId::new(rejected).expect_err("spaces must be rejected");
+        let error = DiagnosticToolName::new(rejected).expect_err("spaces must be rejected");
 
-        assert_eq!(error.field(), DiagnosticField::RequestId);
+        assert_eq!(error.field(), DiagnosticField::ToolName);
         assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCharacter);
         assert!(!error.to_string().contains(rejected));
         assert!(!error.to_string().contains("secret"));
     }
 
     #[test]
-    fn static_error_identifiers_reject_invalid_vocabulary() {
+    fn error_code_and_derived_class_are_exhaustively_stable() {
         assert_eq!(
-            StaticErrorCode::from_static("")
-                .expect_err("empty values must be rejected")
-                .kind(),
-            DiagnosticValueErrorKind::Empty
+            [
+                (
+                    ToolCallErrorCode::InvalidArguments.as_str(),
+                    ToolCallErrorCode::InvalidArguments.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::Unauthenticated.as_str(),
+                    ToolCallErrorCode::Unauthenticated.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::PermissionDenied.as_str(),
+                    ToolCallErrorCode::PermissionDenied.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::NotFound.as_str(),
+                    ToolCallErrorCode::NotFound.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::Conflict.as_str(),
+                    ToolCallErrorCode::Conflict.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::RateLimited.as_str(),
+                    ToolCallErrorCode::RateLimited.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::Cancelled.as_str(),
+                    ToolCallErrorCode::Cancelled.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::Timeout.as_str(),
+                    ToolCallErrorCode::Timeout.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::DependencyUnavailable.as_str(),
+                    ToolCallErrorCode::DependencyUnavailable.class().as_str(),
+                ),
+                (
+                    ToolCallErrorCode::Internal.as_str(),
+                    ToolCallErrorCode::Internal.class().as_str(),
+                ),
+            ],
+            [
+                ("invalid_arguments", "invalid_request"),
+                ("unauthenticated", "authentication"),
+                ("permission_denied", "authorization"),
+                ("not_found", "not_found"),
+                ("conflict", "conflict"),
+                ("rate_limited", "resource_exhausted"),
+                ("cancelled", "cancellation"),
+                ("timeout", "deadline_exceeded"),
+                ("dependency_unavailable", "dependency"),
+                ("internal", "internal"),
+            ]
         );
+    }
+
+    #[test]
+    fn catalogue_fingerprint_has_fixed_width() {
+        let fingerprint = CatalogueFingerprint::from_sha256(CATALOGUE_DIGEST);
+
         assert_eq!(
-            StaticErrorClass::from_static("invalid request")
-                .expect_err("spaces must be rejected")
-                .kind(),
-            DiagnosticValueErrorKind::InvalidCharacter
+            fingerprint.as_str().len(),
+            CATALOGUE_FINGERPRINT_PREFIX.len() + (DIGEST_BYTES * 2)
         );
+        assert!(fingerprint
+            .as_str()
+            .starts_with(CATALOGUE_FINGERPRINT_PREFIX));
     }
 
     #[test]
@@ -747,32 +708,19 @@ mod tests {
             request_id(),
             tool_name(),
             Duration::from_millis(31),
-            error_code(),
-            error_class(),
+            ToolCallErrorCode::DependencyUnavailable,
         )
-        .with_session_correlation(SessionCorrelationDigest::from_keyed_digest(SESSION_DIGEST))
-        .with_principal_correlation(PrincipalCorrelationDigest::from_keyed_digest(
-            PRINCIPAL_DIGEST,
-        ))
         .with_catalogue_fingerprint(CatalogueFingerprint::from_sha256(CATALOGUE_DIGEST));
 
         let output = format!("{diagnostic:?}");
-        for forbidden in [
-            "request-123",
-            "example.read",
-            "request.invalid_shape",
-            "invalid_request",
-            "11111111",
-            "22222222",
-            "33333333",
-        ] {
+        for forbidden in [REQUEST_ID, "example.read", "33333333"] {
             assert!(!output.contains(forbidden), "debug leaked {forbidden}");
         }
         assert!(output.contains(REDACTED_DEBUG_VALUE));
     }
 
     #[test]
-    fn emit_produces_one_terminal_event_for_one_record() {
+    fn emit_produces_one_complete_terminal_event_for_one_record() {
         let sink = SharedSink::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(sink.clone())
@@ -788,9 +736,7 @@ mod tests {
                 request_id(),
                 tool_name(),
                 Duration::from_millis(42),
-                StaticErrorCode::from_static("db.unavailable").expect("valid static error code"),
-                StaticErrorClass::from_static("dependency_failure")
-                    .expect("valid static error class"),
+                ToolCallErrorCode::DependencyUnavailable,
             )
             .emit();
         });
@@ -800,14 +746,12 @@ mod tests {
             output,
             concat!(
                 "event=\"mcp.tool_call.terminal\" ",
-                "request_id=\"request-123\" ",
-                "session_correlation=\"\" ",
-                "principal_correlation=\"\" ",
+                "request_id=\"018f3f8e-7b9a-7d12-8c34-1234567890ab\" ",
                 "tool_name=\"example.read\" ",
                 "duration_ms=42 ",
                 "outcome=\"failure\" ",
-                "error_code=\"db.unavailable\" ",
-                "error_class=\"dependency_failure\" ",
+                "error_code=\"dependency_unavailable\" ",
+                "error_class=\"dependency\" ",
                 "catalogue_fingerprint=\"\"\n",
             )
         );

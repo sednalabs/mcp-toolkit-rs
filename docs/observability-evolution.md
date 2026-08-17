@@ -33,7 +33,7 @@ Toolkit-owned responsibilities:
 - safe label/value normalization for metrics;
 - redaction policy invariants and conformance tests.
 - a closed, typed terminal tool-call event that excludes raw payload and error data;
-- opaque keyed-digest correlation types and static error vocabulary boundaries.
+- canonical UUID request correlation and closed toolkit error vocabularies.
 
 Ecosystem-owned responsibilities:
 
@@ -75,11 +75,12 @@ Boundary rules:
 - error messages are sanitized and redacted before emission;
 - secret-bearing fields such as tokens, secrets, authorization headers, and
   database URLs are masked;
-- dynamic context identifiers are validated while borrowed and length-bounded;
-- principal and session correlation cross the boundary only as fixed-size,
-  caller-derived keyed digests, while catalogue revisions use SHA-256 fingerprints;
-- error code and class identifiers must be program-static and selected from a
-  documented or allowlisted service vocabulary;
+- request correlation crosses the boundary only as a canonical lowercase UUID;
+- registered tool names are validated while borrowed and length-bounded;
+- catalogue revisions cross only as fixed-width SHA-256 fingerprints;
+- error codes and classes are selected only from toolkit-owned finite enums;
+- principal and session correlation are outside v1 and require a separately
+  reviewed identity and cryptographic substrate before they can be added;
 - terminal records have no arguments, body, token, claim-set, raw-error, or
   arbitrary-field path;
 - consuming a record guarantees at-most-once emission for that instance, not

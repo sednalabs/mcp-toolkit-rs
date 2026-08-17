@@ -69,7 +69,7 @@ use mcp_toolkit_observability::{
 };
 
 ToolCallTerminalDiagnostic::success(
-    RequestCorrelationId::new("request-123")?,
+    RequestCorrelationId::parse("018f3f8e-7b9a-7d12-8c34-1234567890ab")?,
     DiagnosticToolName::new("example.search")?,
     Duration::from_millis(12),
 )
@@ -81,15 +81,17 @@ The typed terminal record is the preferred tool-call completion boundary. It
 emits one `mcp.tool_call.terminal` event with a fixed schema and consumes the
 record. This guarantees at-most-once emission for that record instance; the
 server lifecycle remains responsible for constructing one record per real tool
-call. Failure records accept only validated program-static error code and class
-identifiers. There is deliberately no API for arguments, request or response
-bodies, tokens, claims, or raw errors.
+call. Failure records accept only toolkit-owned error code and class enum
+variants. There is deliberately no API for arguments, request or response
+bodies, tokens, claims, raw errors, or dynamic error identifiers. Request
+correlation accepts only canonical lowercase UUIDs. Schema/catalogue revisions
+accept only a fixed-width SHA-256 fingerprint.
 
-Optional session and principal correlation values accept only fixed-size keyed
-digest output produced by the caller's identity boundary. Use distinct domain
-separators and a secret-keyed construction; an unkeyed hash of an enumerable
-identifier is insufficient. Schema/catalogue revisions accept only a SHA-256
-fingerprint. The toolkit does not accept raw session or principal identifiers.
+Principal and session correlation are intentionally outside this initial
+generic contract. Adding either requires a separately reviewed identity and
+cryptographic substrate that owns key management, domain separation, rotation,
+and correlation policy. Callers must not overload the request UUID, tool name,
+or catalogue fingerprint with principal or session data.
 
 ## Server Migration Checklist
 
@@ -109,7 +111,7 @@ Use this checklist per server.
    - Transport/session replay failures.
 4. Replace tool completion logs with one typed terminal record.
    - `mcp.tool_call.terminal` with `outcome=success`.
-   - `mcp.tool_call.terminal` with `outcome=failure` and static error identifiers.
+   - `mcp.tool_call.terminal` with `outcome=failure` and closed error enums.
    - Keep start/progress events separate and low-volume only when operationally required.
    - Make the server lifecycle construct and consume one terminal record on
      every success, denial, failure, cancellation, and panic-safe exit path.
@@ -144,8 +146,7 @@ After deploying a migrated server, verify:
      each call; the toolkit enforces only at-most-once emission per record.
    - Confirm the terminal event has the same request correlation identifier as
      the enclosing request path.
-   - Confirm session and principal fields contain opaque keyed digests rather
-     than raw identifiers or unkeyed hashes.
+   - Confirm no principal, session, or other identity value is present.
 3. Metrics health if `metrics-facade` is enabled.
    - Confirm metrics exist and labels are bounded.
 4. Redaction guarantees.
@@ -184,9 +185,10 @@ After deploying a migrated server, verify:
 - Map failures to a stable code and class.
 - Put high-volume debugging data behind a separately reviewed diagnostic path.
 
-`A dynamic error value needs to be recorded`
+`A service-specific error value needs to be recorded`
 
-- Map it onto a documented static code and class at the service boundary.
+- Map it onto the closest toolkit-owned code and class enum at the service boundary.
+- Propose an explicit enum extension when no existing code describes the failure.
 - Do not leak dynamic error text, tenant identifiers, or dependency payloads
   through error identifiers.
 
