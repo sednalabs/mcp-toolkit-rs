@@ -1,4 +1,7 @@
+use std::future::Future;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use super::*;
 use rmcp::model::{CallToolResult, ContentBlock, TaskStatus};
@@ -322,6 +325,57 @@ async fn asynchronous_operation_panic_is_contained_as_failed_task() {
     assert_eq!(authority.running_task_count(), 0);
 }
 
+struct ReadyDropPanicFuture;
+
+impl Future for ReadyDropPanicFuture {
+    type Output = Result<CallToolResult, TaskExit>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Ok(ok_result("would have succeeded")))
+    }
+}
+
+impl Drop for ReadyDropPanicFuture {
+    fn drop(&mut self) {
+        panic!("future destructor panic")
+    }
+}
+
+#[tokio::test]
+async fn operation_destructor_panic_is_contained_as_failed_task() {
+    let authority = TaskAuthority::new();
+    let owner = principal("owner-a");
+    let task = authority
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| Box::pin(ReadyDropPanicFuture),
+        )
+        .expect("spawn task");
+
+    let terminal = authority
+        .wait(
+            &owner,
+            &task.task_id,
+            None,
+            Duration::from_secs(2),
+            TaskWaitCondition::Terminal,
+        )
+        .await
+        .expect("wait result")
+        .expect("terminal snapshot");
+    assert_eq!(terminal.task.status(), TaskStatus::Failed);
+
+    let follow_up = authority
+        .spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("manager survived destructor panic")) })
+        })
+        .expect("manager should remain usable");
+    assert!(authority
+        .get_task_for_principal(&owner, &follow_up.task_id)
+        .is_ok());
+}
+
 struct PanicMessage;
 
 impl From<PanicMessage> for String {
@@ -392,6 +446,51 @@ async fn panicking_update_iterator_does_not_poison_rmcp_manager() {
     authority
         .cancel_task_for_principal(&owner, &task.task_id)
         .expect("cancel task");
+}
+
+struct DropSignalFuture {
+    dropped: Option<oneshot::Sender<()>>,
+}
+
+impl Future for DropSignalFuture {
+    type Output = Result<CallToolResult, TaskExit>;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+
+impl Drop for DropSignalFuture {
+    fn drop(&mut self) {
+        if let Some(dropped) = self.dropped.take() {
+            let _ = dropped.send(());
+        }
+    }
+}
+
+#[tokio::test]
+async fn dropping_last_authority_handle_aborts_unlimited_task() {
+    let (dropped_tx, dropped_rx) = oneshot::channel();
+    {
+        let authority = TaskAuthority::new();
+        let owner = principal("owner-a");
+        authority
+            .spawn_for_principal(
+                owner,
+                TaskOptions::new().with_ttl_ms(None),
+                move |_ctx| {
+                    Box::pin(DropSignalFuture {
+                        dropped: Some(dropped_tx),
+                    })
+                },
+            )
+            .expect("spawn task");
+    }
+
+    tokio::time::timeout(Duration::from_secs(2), dropped_rx)
+        .await
+        .expect("task future should be dropped after final authority handle")
+        .expect("drop signal");
 }
 
 #[tokio::test]
