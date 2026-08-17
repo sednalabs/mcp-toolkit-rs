@@ -130,10 +130,7 @@ impl TaskBinding {
         }
     }
 
-    fn observe(
-        &self,
-        task: DetailedTask,
-    ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+    fn observe(&self, task: DetailedTask) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let mut observed = self
             .observed
             .lock()
