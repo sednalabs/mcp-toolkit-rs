@@ -22,6 +22,19 @@ issued by their authentication/authorization authority, not a display name.
 Ordinary `Debug` formatting is redacted. Code that explicitly calls `as_str()`
 receives the exact identifier and must treat it as security-sensitive data.
 
+## Runtime contract
+
+RMCP 3.1.2 materializes task operations with `tokio::spawn`, so
+`TaskAuthority::spawn_for_principal` requires an entered Tokio runtime. Toolkit
+checks that requirement before entering RMCP and returns
+`TaskAuthorityError::RuntimeUnavailable` instead of allowing Tokio to panic or
+RMCP to partially materialize a task.
+
+`TaskAuthority::wait` uses Tokio timers for its timeout and bounded authoritative
+readback fallback. Custom Tokio runtimes that use this API must enable the time
+driver. Toolkit does not introduce a second executor or timer runtime around
+RMCP.
+
 ## Failure boundary
 
 RMCP 3.1.2 materializes a task before invoking the operation factory, and it
