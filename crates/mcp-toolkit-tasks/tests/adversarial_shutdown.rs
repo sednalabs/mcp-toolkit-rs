@@ -28,11 +28,9 @@ async fn explicit_shutdown_is_irreversible_across_clones() {
     authority.shutdown();
 
     assert!(matches!(
-        surviving_clone.spawn_for_principal(
-            principal("owner-a"),
-            TaskOptions::default(),
-            |_ctx| Box::pin(async { Ok(ok_result("must not run")) }),
-        ),
+        surviving_clone.spawn_for_principal(principal("owner-a"), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("must not run")) })
+        },),
         Err(TaskAuthorityError::Closed)
     ));
     assert!(matches!(
@@ -62,11 +60,9 @@ async fn shutdown_inside_factory_prevents_task_publication() {
     assert!(matches!(result, Err(TaskAuthorityError::Closed)));
     assert_eq!(authority.running_task_count(), 0);
     assert!(matches!(
-        authority.spawn_for_principal(
-            principal("owner-b"),
-            TaskOptions::default(),
-            |_ctx| Box::pin(async { Ok(ok_result("still closed")) }),
-        ),
+        authority.spawn_for_principal(principal("owner-b"), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("still closed")) })
+        },),
         Err(TaskAuthorityError::Closed)
     ));
 }
