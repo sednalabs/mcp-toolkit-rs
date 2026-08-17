@@ -99,7 +99,8 @@ async fn start_scripted_server(
         .expect("bind scripted token endpoint");
     let address = listener.local_addr().expect("scripted endpoint address");
     let handle = tokio::spawn(async move { axum::serve(listener, app).await });
-    let endpoint = Url::parse(&format!("http://{address}/token")).expect("token endpoint URL");
+    let endpoint = Url::parse(&format!("http://{address}/token")) // DevSkim: ignore DS137138 loopback test fixture
+        .expect("token endpoint URL");
     (endpoint, state, handle)
 }
 
@@ -191,7 +192,8 @@ fn signer_produces_verified_jwk_bound_ath_and_canonical_target() {
 
 #[test]
 fn canonical_target_rejects_non_loopback_cleartext() {
-    let target = Url::parse("http://resource.example/items").expect("resource URL");
+    let target = Url::parse("http://resource.example/items") // DevSkim: ignore DS137138 rejected negative test fixture
+        .expect("resource URL");
     assert_eq!(
         canonical_dpop_target(&target),
         Err(OutboundDpopError::InsecureEndpoint)
