@@ -16,8 +16,14 @@ use panic_future::contain_task_future;
 const OBSERVATION_TICK: Duration = Duration::from_millis(250);
 
 /// Stable opaque principal identifier used to bind an MCP task to its caller.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TaskPrincipal(String);
+
+impl fmt::Debug for TaskPrincipal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TaskPrincipal(<redacted>)")
+    }
+}
 
 impl TaskPrincipal {
     /// Creates an exact principal identifier.
@@ -26,6 +32,9 @@ impl TaskPrincipal {
     /// never trims or otherwise canonicalizes them because doing so could alias
     /// two identities that the upstream identity authority considers distinct.
     /// Surrounding Unicode whitespace is rejected instead of rewritten.
+    ///
+    /// `Debug` output is redacted so the opaque identity is not accidentally
+    /// copied into logs through ordinary diagnostic formatting.
     ///
     /// # Errors
     /// Returns [`TaskAuthorityError::InvalidPrincipal`] when the identifier is
@@ -40,6 +49,9 @@ impl TaskPrincipal {
     }
 
     /// Returns the exact principal identifier.
+    ///
+    /// Treat this value as security-sensitive. It is intentionally available to
+    /// authorization code, but Toolkit does not expose it through `Debug`.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -56,6 +68,8 @@ pub enum TaskAuthorityError {
     /// avoid turning task identifiers into a cross-principal enumeration
     /// oracle.
     TaskNotFound,
+    /// The authority has been shut down and cannot be reopened.
+    Closed,
     /// RMCP rejected an otherwise authorized task operation.
     Rmcp(rmcp::ErrorData),
     /// Internal task-authority state became unavailable.
@@ -67,6 +81,7 @@ impl fmt::Display for TaskAuthorityError {
         match self {
             Self::InvalidPrincipal => write!(f, "invalid task principal"),
             Self::TaskNotFound => write!(f, "task not found"),
+            Self::Closed => write!(f, "task authority is shut down"),
             Self::Rmcp(error) => write!(f, "RMCP task operation failed: {error}"),
             Self::StateUnavailable => write!(f, "task authority state unavailable"),
         }
@@ -144,6 +159,16 @@ struct AuthorityState {
     /// Entries removed through normal access are left in this queue lazily;
     /// probing skips them without touching RMCP.
     prune_queue: VecDeque<String>,
+}
+
+#[derive(Default)]
+struct AuthorityLifecycle {
+    /// Publication gate and irreversible closed bit.
+    ///
+    /// The mutex gives spawn publication and shutdown a single linearization
+    /// point without holding Toolkit state across caller-controlled factory
+    /// code. Once true, the authority never transitions back to open.
+    closed: Mutex<bool>,
 }
 
 struct NotifyOnDrop {
@@ -234,16 +259,16 @@ impl ManagedTaskContext {
 /// task id before the caller is allowed to return it to a client, and every
 /// subsequent get/update/cancel/wait path verifies that binding first.
 ///
-/// Dropping the last ordinary authority handle shuts the RMCP manager down.
-/// Call [`Self::shutdown`] explicitly when deterministic teardown ordering is
-/// required. As with other `Arc`-backed Rust runtimes, caller-created reference
-/// cycles can keep a deliberately retained authority clone alive; avoid storing
-/// an authority clone indefinitely inside its own unlimited-retention task.
+/// [`Self::shutdown`] is irreversible across every clone. Dropping the last
+/// ordinary authority handle also shuts the RMCP manager down. As with other
+/// `Arc`-backed Rust runtimes, caller-created reference cycles can keep a
+/// deliberately retained authority clone alive; avoid storing an authority
+/// clone indefinitely inside its own unlimited-retention task.
 #[derive(Clone, Default)]
 pub struct TaskAuthority {
     manager: TaskManager,
     state: Arc<Mutex<AuthorityState>>,
-    lifecycle: Arc<()>,
+    lifecycle: Arc<AuthorityLifecycle>,
 }
 
 impl Drop for TaskAuthority {
@@ -262,7 +287,7 @@ impl TaskAuthority {
 
     /// Spawns an RMCP task bound to `principal`.
     ///
-    /// The initial RMCP `DetailedTask` is read before the binding is installed,
+    /// The initial RMCP `DetailedTask` is read before the binding is published,
     /// so revision 1 always names a real RMCP snapshot. One existing binding is
     /// probed for RMCP liveness before each new task, amortizing stale cleanup
     /// without repeatedly sweeping the entire RMCP task set. If authority state
@@ -272,6 +297,11 @@ impl TaskAuthority {
     /// Panics from either the synchronous operation factory, polling the task
     /// future, or destroying that future are contained and converted into an
     /// RMCP `failed` task result where a task record still exists.
+    ///
+    /// Spawn publication and shutdown are linearized by the lifecycle gate. A
+    /// shutdown that wins that gate prevents the newly materialized task from
+    /// being published and RMCP is drained again to abort any task inserted
+    /// after an earlier RMCP shutdown call.
     pub fn spawn_for_principal<F>(
         &self,
         principal: TaskPrincipal,
@@ -281,7 +311,9 @@ impl TaskAuthority {
     where
         F: FnOnce(ManagedTaskContext) -> TaskFuture,
     {
+        self.ensure_open()?;
         self.prune_one_stale_binding()?;
+        self.ensure_open()?;
 
         let notify = Arc::new(Notify::new());
         let operation_notify = notify.clone();
@@ -308,23 +340,48 @@ impl TaskAuthority {
             })
         });
 
+        if self.is_closed()? {
+            self.manager.shutdown();
+            return Err(TaskAuthorityError::Closed);
+        }
+
         let initial = match self.manager.get_task(&task.task_id) {
             Ok(task) => task,
             Err(error) => {
+                if self.is_closed()? {
+                    self.manager.shutdown();
+                    return Err(TaskAuthorityError::Closed);
+                }
                 let _ = self.manager.cancel_task(&task.task_id);
                 return Err(TaskAuthorityError::Rmcp(error));
             }
         };
         let binding = Arc::new(TaskBinding::new(principal, initial, notify));
 
-        let mut state = self.lock_state()?;
+        let lifecycle = self.lock_lifecycle()?;
+        if *lifecycle {
+            drop(lifecycle);
+            self.manager.shutdown();
+            return Err(TaskAuthorityError::Closed);
+        }
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                drop(lifecycle);
+                self.force_close();
+                return Err(TaskAuthorityError::StateUnavailable);
+            }
+        };
         if state.bindings.contains_key(&task.task_id) {
             drop(state);
-            self.manager.shutdown();
+            drop(lifecycle);
+            self.force_close();
             return Err(TaskAuthorityError::StateUnavailable);
         }
         state.prune_queue.push_back(task.task_id.clone());
         state.bindings.insert(task.task_id.clone(), binding);
+        drop(state);
+        drop(lifecycle);
         Ok(task)
     }
 
@@ -337,9 +394,12 @@ impl TaskAuthority {
         let binding = self.binding_for(principal, task_id)?;
         let task = self.manager.get_task(task_id);
         if let Ok(task) = task {
-            return self.observe_or_shutdown(&binding, task);
+            return self.observe_or_close(&binding, task);
         }
         self.remove_binding(task_id);
+        if self.is_closed()? {
+            return Err(TaskAuthorityError::Closed);
+        }
         Err(TaskAuthorityError::TaskNotFound)
     }
 
@@ -358,6 +418,9 @@ impl TaskAuthority {
         let input_responses = input_responses.into_iter().collect::<Vec<_>>();
         if self.manager.update_task(task_id, input_responses).is_err() {
             self.remove_binding(task_id);
+            if self.is_closed()? {
+                return Err(TaskAuthorityError::Closed);
+            }
             return Err(TaskAuthorityError::TaskNotFound);
         }
         binding.hint();
@@ -373,6 +436,9 @@ impl TaskAuthority {
         let binding = self.binding_for(principal, task_id)?;
         if self.manager.cancel_task(task_id).is_err() {
             self.remove_binding(task_id);
+            if self.is_closed()? {
+                return Err(TaskAuthorityError::Closed);
+            }
             return Err(TaskAuthorityError::TaskNotFound);
         }
         binding.hint();
@@ -437,9 +503,20 @@ impl TaskAuthority {
         self.manager.running_task_count()
     }
 
-    /// Aborts all running RMCP tasks, clears principal bindings, and wakes local
-    /// waiters so they can promptly observe that their task is no longer known.
+    /// Irreversibly closes the authority, aborts all running RMCP tasks, clears
+    /// principal bindings, and wakes local waiters.
+    ///
+    /// Every clone shares the same closed state. Once this method begins, a
+    /// later spawn cannot reopen the underlying RMCP manager even though RMCP's
+    /// `TaskManager` itself is reusable after `shutdown()`.
     pub fn shutdown(&self) {
+        {
+            let mut closed = match self.lifecycle.closed.lock() {
+                Ok(closed) => closed,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *closed = true;
+        }
         self.manager.shutdown();
         let bindings = match self.state.lock() {
             Ok(mut state) => {
@@ -476,13 +553,16 @@ impl TaskAuthority {
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let task = self.manager.get_task(task_id);
         if let Ok(task) = task {
-            return self.observe_or_shutdown(binding, task);
+            return self.observe_or_close(binding, task);
         }
         self.remove_binding(task_id);
+        if self.is_closed()? {
+            return Err(TaskAuthorityError::Closed);
+        }
         Err(TaskAuthorityError::TaskNotFound)
     }
 
-    fn observe_or_shutdown(
+    fn observe_or_close(
         &self,
         binding: &TaskBinding,
         task: DetailedTask,
@@ -490,7 +570,7 @@ impl TaskAuthority {
         match binding.observe(task) {
             Ok(snapshot) => Ok(snapshot),
             Err(error) => {
-                self.manager.shutdown();
+                self.force_close();
                 Err(error)
             }
         }
@@ -501,6 +581,7 @@ impl TaskAuthority {
         principal: &TaskPrincipal,
         task_id: &str,
     ) -> Result<Arc<TaskBinding>, TaskAuthorityError> {
+        self.ensure_open()?;
         let state = self.lock_state()?;
         let binding = state
             .bindings
@@ -521,6 +602,7 @@ impl TaskAuthority {
     /// still eventually removing stale local authority records under continued
     /// task creation.
     fn prune_one_stale_binding(&self) -> Result<usize, TaskAuthorityError> {
+        self.ensure_open()?;
         let candidate = {
             let mut state = self.lock_state()?;
             loop {
@@ -557,7 +639,7 @@ impl TaskAuthority {
         let removed = match self.state.lock() {
             Ok(mut state) => state.bindings.remove(task_id),
             Err(_) => {
-                self.manager.shutdown();
+                self.force_close();
                 return;
             }
         };
@@ -566,14 +648,53 @@ impl TaskAuthority {
         }
     }
 
-    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, AuthorityState>, TaskAuthorityError> {
-        match self.state.lock() {
-            Ok(state) => Ok(state),
+    fn ensure_open(&self) -> Result<(), TaskAuthorityError> {
+        if self.is_closed()? {
+            Err(TaskAuthorityError::Closed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn is_closed(&self) -> Result<bool, TaskAuthorityError> {
+        match self.lifecycle.closed.lock() {
+            Ok(closed) => Ok(*closed),
             Err(_) => {
                 self.manager.shutdown();
                 Err(TaskAuthorityError::StateUnavailable)
             }
         }
+    }
+
+    fn lock_lifecycle(&self) -> Result<std::sync::MutexGuard<'_, bool>, TaskAuthorityError> {
+        match self.lifecycle.closed.lock() {
+            Ok(closed) => Ok(closed),
+            Err(_) => {
+                self.manager.shutdown();
+                Err(TaskAuthorityError::StateUnavailable)
+            }
+        }
+    }
+
+    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, AuthorityState>, TaskAuthorityError> {
+        match self.state.lock() {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                self.force_close();
+                Err(TaskAuthorityError::StateUnavailable)
+            }
+        }
+    }
+
+    fn force_close(&self) {
+        {
+            let mut closed = match self.lifecycle.closed.lock() {
+                Ok(closed) => closed,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *closed = true;
+        }
+        self.manager.shutdown();
     }
 }
 
