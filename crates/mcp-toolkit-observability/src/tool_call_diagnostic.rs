@@ -145,8 +145,8 @@ macro_rules! bounded_identifier {
     (
         $(#[$meta:meta])*
         $name:ident,
-        $field:expr,
-        $max:expr
+        $field:path,
+        $max:ident
     ) => {
         $(#[$meta])*
         #[derive(Debug, Eq, PartialEq)]
