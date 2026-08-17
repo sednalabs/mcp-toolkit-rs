@@ -139,7 +139,7 @@ pub enum OutboundDpopError {
         status: StatusCode,
         code: SafeOAuthErrorCode,
     },
-    /// A successful response was not valid RFC 8693 JSON.
+    /// A successful response was not a valid RFC 8693 response.
     #[error("outbound DPoP token response is malformed")]
     MalformedTokenResponse,
     /// A successful response did not use the required JSON media type.
@@ -1095,19 +1095,24 @@ impl DpopTokenExchangeClient {
         if issued_token_type != RFC8693_ACCESS_TOKEN_TYPE {
             return Err(OutboundDpopError::UnexpectedIssuedTokenType);
         }
-        if let Some(scope) = raw.scope.as_deref() {
-            let requested: HashSet<&str> = request.scopes.iter().map(String::as_str).collect();
-            if scope
-                .split_ascii_whitespace()
-                .any(|granted| !requested.contains(granted))
-            {
-                return Err(OutboundDpopError::BroadenedScopes);
+        let scope = match raw.scope {
+            Some(scope) => {
+                if !valid_scope_list(&scope) {
+                    return Err(OutboundDpopError::MalformedTokenResponse);
+                }
+                let requested: HashSet<&str> = request.scopes.iter().map(String::as_str).collect();
+                if scope.split(' ').any(|granted| !requested.contains(granted)) {
+                    return Err(OutboundDpopError::BroadenedScopes);
+                }
+                Some(scope)
             }
-        }
+            None if request.scopes.is_empty() => None,
+            None => Some(request.scopes.join(" ")),
+        };
         Ok(DpopBoundAccessToken {
             access_token: SecretString::new(access_token),
             expires_in: raw.expires_in,
-            scope: raw.scope,
+            scope,
             proof_thumbprint: self.signer.public_jwk.thumbprint.clone(),
         })
     }
@@ -1463,6 +1468,10 @@ fn valid_scope_token(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte == b'!' || (b'#'..=b'[').contains(&byte) || (b']'..=b'~').contains(&byte)
         })
+}
+
+fn valid_scope_list(value: &str) -> bool {
+    !value.is_empty() && value.split(' ').all(valid_scope_token)
 }
 
 fn validate_http_url(url: &Url, allow_loopback_http: bool) -> Result<(), OutboundDpopError> {

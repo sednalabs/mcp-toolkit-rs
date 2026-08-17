@@ -41,8 +41,9 @@ The client:
 10. represents only access-token-for-access-token RFC 8693 requests and requires
     a successful exchange to be HTTP `200` with one `application/json` media
     type, `token_type=DPoP`, and the exact access-token `issued_token_type`;
-11. rejects broadened returned scopes and refresh tokens outside this bounded
-    exchange profile;
+11. parses returned scope with RFC 6749's literal-space grammar, treats omission
+    as the requested scope, and rejects malformed or broadened scopes and refresh
+    tokens outside this bounded exchange profile;
 12. permits only an explicit standard OAuth error-code allowlist into formatted
     diagnostics; and
 13. never includes tokens, proofs, nonces, private keys, response bodies, or raw

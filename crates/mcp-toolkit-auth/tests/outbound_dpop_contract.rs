@@ -761,6 +761,67 @@ async fn token_exchange_fails_closed_on_unbound_broadened_or_refresh_results() {
 }
 
 #[tokio::test]
+async fn token_exchange_enforces_literal_space_scope_grammar_and_omission_semantics() {
+    for malformed_scope in [
+        "",
+        "read\twrite",
+        "read\nwrite",
+        "read\rwrite",
+        " read",
+        "read ",
+        "read  write",
+        "read\u{a0}write",
+        "read\"write",
+    ] {
+        let mut body = successful_token_response("issued");
+        body["scope"] = Value::String(malformed_scope.to_string());
+        let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+            StatusCode::OK,
+            Vec::new(),
+            body,
+        )])
+        .await;
+        let error = exchange_client(endpoint)
+            .exchange(&exchange_request())
+            .await
+            .expect_err("malformed response scope must fail closed");
+        assert_eq!(error, OutboundDpopError::MalformedTokenResponse);
+        server.abort();
+    }
+
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::OK,
+        Vec::new(),
+        successful_token_response("valid-scope-token"),
+    )])
+    .await;
+    let token = exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect("literal-SP-delimited multi-token scope");
+    assert_eq!(token.scope(), Some("read write"));
+    server.abort();
+
+    let mut omitted_scope = successful_token_response("omitted-scope-token");
+    omitted_scope
+        .as_object_mut()
+        .expect("token response object")
+        .remove("scope");
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::OK,
+        Vec::new(),
+        omitted_scope,
+    )])
+    .await;
+    let token = exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect("omitted response scope inherits the requested scope");
+    assert_eq!(token.scope(), Some("read write"));
+    server.abort();
+}
+
+#[tokio::test]
 async fn token_exchange_requires_exact_ok_status_and_json_media_type() {
     let success = successful_token_response("issued");
     let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
