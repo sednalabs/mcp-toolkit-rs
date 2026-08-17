@@ -15,9 +15,7 @@ use std::sync::Arc;
 use mcp_toolkit_policy_core::{Decision, DecisionCode};
 use serde::{Deserialize, Serialize};
 
-use crate::policy_authority::{
-    ClosurePolicyAuthority, PolicyRuntimeMode, SharedPolicyAuthority,
-};
+use crate::policy_authority::{ClosurePolicyAuthority, PolicyRuntimeMode, SharedPolicyAuthority};
 
 /// Default decision-source namespace for generic route/scope policy.
 pub const ROUTE_SCOPE_POLICY_DECISION_SOURCE: &str = "mcp_toolkit_policy_runtime.route_scope";
@@ -138,7 +136,11 @@ pub fn evaluate_route_scope(
         return Decision::deny(DecisionCode::MissingToken, Some("missing_auth_context"));
     }
 
-    if !config.allowed_paths.iter().any(|path| path == &request.path) {
+    if !config
+        .allowed_paths
+        .iter()
+        .any(|path| path == &request.path)
+    {
         return Decision::deny(DecisionCode::InvalidPath, Some("route_not_allowed"));
     }
 
@@ -200,7 +202,6 @@ fn normalize_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy_authority::PolicyAuthority;
 
     fn config() -> RouteScopePolicyConfig {
         RouteScopePolicyConfig::new(["/mcp"], ["POST"], ["example:run", "example:read"])
@@ -244,23 +245,13 @@ mod tests {
     fn rejects_unexpected_route_and_method() {
         let route = evaluate_route_scope(
             &config(),
-            &RouteScopePolicyRequest::new(
-                "POST",
-                "/other",
-                true,
-                ["example:run", "example:read"],
-            ),
+            &RouteScopePolicyRequest::new("POST", "/other", true, ["example:run", "example:read"]),
         );
         assert_eq!(route.code.as_deref(), Some("INVALID_PATH"));
 
         let method = evaluate_route_scope(
             &config(),
-            &RouteScopePolicyRequest::new(
-                "DELETE",
-                "/mcp",
-                true,
-                ["example:run", "example:read"],
-            ),
+            &RouteScopePolicyRequest::new("DELETE", "/mcp", true, ["example:run", "example:read"]),
         );
         assert_eq!(method.code.as_deref(), Some("INVALID_INPUT"));
     }
