@@ -64,7 +64,7 @@ jobs:
     steps:
       - name: Checkout repository
         # actions/checkout v6
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -75,7 +75,7 @@ jobs:
 
       - name: Cache cargo artifacts
         # swatinem/rust-cache v2
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        uses: swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
         with:
           shared-key: code-coverage-${{ runner.os }}-${{ matrix.target.cache_key }}
           workspaces: ${{ matrix.target.workspaces }}
@@ -85,7 +85,7 @@ jobs:
 
       - name: Install coverage tool
         # taiki-e/install-action v2
-        uses: taiki-e/install-action@b8cecb83565409bcc297b2df6e77f030b2a468d5
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1
         with:
           tool: cargo-llvm-cov
 
@@ -127,7 +127,7 @@ jobs:
         # from its availability; when explicitly enabled, upload failures
         # remain fatal to this lane.
         if: ${{ vars.CODE_QUALITY_UPLOAD_ENABLED == 'true' }}
-        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34
         with:
           file: ${{ matrix.target.coverage_file }}
           language: Rust
@@ -153,7 +153,7 @@ jobs:
     steps:
       - name: Checkout repository
         # actions/checkout v6
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
