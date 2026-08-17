@@ -45,7 +45,7 @@ policy-ffi = ["mcp-toolkit-policy-ffi"]
 process = ["mcp-toolkit-process"]
 scratchpad = ["mcp-toolkit-scratchpad"]
 scratchpad-tokio = ["scratchpad", "mcp-toolkit-scratchpad/tokio"]
-tasks = ["mcp-toolkit-tasks"]
+tasks = ["mcp-toolkit-tasks", "dep:rmcp", "rmcp/server"]
 server = [
   "mcp-toolkit-server",
   "mcp-toolkit-server/full",
