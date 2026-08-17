@@ -41,7 +41,7 @@ tower = "0.5.2"
 
 [dev-dependencies]
 mcp-toolkit-testing = { version = "0.1.0", path = "../mcp-toolkit-testing" }
-tokio = { version = "1.49.0", features = ["macros", "rt"] }
+tokio = { version = "1.49.0", features = ["macros", "rt", "rt-multi-thread"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
