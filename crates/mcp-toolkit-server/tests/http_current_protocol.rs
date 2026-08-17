@@ -72,6 +72,16 @@ fn current_get_request() -> Request<Body> {
         .expect("current MCP GET request")
 }
 
+fn current_delete_request() -> Request<Body> {
+    Request::builder()
+        .method("DELETE")
+        .uri("http://127.0.0.1/mcp")
+        .header(HOST, "127.0.0.1")
+        .header(HEADER_MCP_PROTOCOL_VERSION, CURRENT_PROTOCOL)
+        .body(Body::empty())
+        .expect("current MCP DELETE request")
+}
+
 fn decode_jsonrpc_payload(content_type: &str, body: &[u8]) -> Value {
     if content_type.starts_with("application/json") {
         return serde_json::from_slice(body).expect("JSON-RPC response JSON");
@@ -165,5 +175,25 @@ async fn current_protocol_get_bypasses_legacy_session_preflight() {
         response.status(),
         StatusCode::METHOD_NOT_ALLOWED,
         "RMCP should own current-protocol GET semantics instead of Toolkit returning a legacy-session 404"
+    );
+}
+
+#[tokio::test]
+async fn current_protocol_delete_bypasses_legacy_session_preflight() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["127.0.0.1", "localhost"])
+        .build(|| Ok(EmptyToolServer));
+    let state = runtime.into_state(false);
+    let mut request = current_delete_request();
+    request.headers_mut().insert(
+        HEADER_SESSION_ID,
+        HeaderValue::from_static("stale-legacy-session"),
+    );
+
+    let response = handle_mcp(State(state), request).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::METHOD_NOT_ALLOWED,
+        "RMCP should own current-protocol DELETE semantics instead of Toolkit returning a legacy-session 404"
     );
 }
