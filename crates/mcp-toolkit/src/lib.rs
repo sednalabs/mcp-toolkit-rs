@@ -52,14 +52,11 @@ pub use mcp_toolkit_policy_ffi as policy_ffi;
 #[cfg(feature = "process")]
 pub use mcp_toolkit_process as process;
 
-#[cfg(feature = "tasks")]
-pub use mcp_toolkit_tasks as tasks;
-
 #[cfg(feature = "scratchpad")]
 pub use mcp_toolkit_scratchpad as scratchpad;
 
-#[cfg(feature = "gemini")]
-pub use mcp_toolkit_gemini as gemini;
+#[cfg(feature = "tasks")]
+pub use mcp_toolkit_tasks as tasks;
 
 #[cfg(any(
     feature = "server",
