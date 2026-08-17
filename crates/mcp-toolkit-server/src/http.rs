@@ -338,7 +338,6 @@ impl fmt::Debug for LocalMcpHttpServerBuilder {
             .field("runtime", &self.runtime)
             .field("auth_enabled", &self.auth_enabled)
             .field("include_health", &self.include_health)
-            .field("include_host_guard", &self.include_host_guard)
             .field(
                 "include_oauth_not_configured",
                 &self.include_oauth_not_configured,
@@ -626,7 +625,7 @@ where
     match req.method().clone() {
         Method::POST => handle_post(state, req).await,
         Method::GET => handle_get(state, req).await,
-        Method::DELETE => handle_legacy_delete(state, req).await,
+        Method::DELETE => handle_delete(state, req).await,
         method => {
             log_route_rejection(
                 &method,
@@ -757,10 +756,16 @@ where
     }
 }
 
-async fn handle_legacy_delete<S>(state: LocalMcpHttpState<S>, req: Request) -> Response
+async fn handle_delete<S>(state: LocalMcpHttpState<S>, req: Request) -> Response
 where
     S: ServerHandler + Send + 'static,
 {
+    // Current MCP has no session to terminate. Delegate the request to RMCP so
+    // it owns the method-not-allowed response and protocol-version validation.
+    if declares_current_protocol(req.headers()) {
+        return forward_service(state.stateful_service, req, "current_stateless_delete").await;
+    }
+
     match resolve_mcp_session_route(req.headers(), state.session_manager.as_ref()).await {
         McpSessionRoute::Live(session_id) => {
             forward_live_service(state.stateful_service, req, session_id).await
