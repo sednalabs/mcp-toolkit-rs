@@ -68,6 +68,8 @@ pub enum TaskAuthorityError {
     /// avoid turning task identifiers into a cross-principal enumeration
     /// oracle.
     TaskNotFound,
+    /// Task spawning requires an entered Tokio runtime.
+    RuntimeUnavailable,
     /// The authority has been shut down and cannot be reopened.
     Closed,
     /// RMCP rejected an otherwise authorized task operation.
@@ -81,6 +83,7 @@ impl fmt::Display for TaskAuthorityError {
         match self {
             Self::InvalidPrincipal => write!(f, "invalid task principal"),
             Self::TaskNotFound => write!(f, "task not found"),
+            Self::RuntimeUnavailable => write!(f, "task spawning requires a Tokio runtime"),
             Self::Closed => write!(f, "task authority is shut down"),
             Self::Rmcp(error) => write!(f, "RMCP task operation failed: {error}"),
             Self::StateUnavailable => write!(f, "task authority state unavailable"),
@@ -287,6 +290,11 @@ impl TaskAuthority {
 
     /// Spawns an RMCP task bound to `principal`.
     ///
+    /// A current Tokio runtime is required because RMCP 3.1.2 materializes the
+    /// task operation with `tokio::spawn`. Toolkit checks that requirement before
+    /// entering RMCP so a synchronous caller gets [`TaskAuthorityError::RuntimeUnavailable`]
+    /// instead of a Tokio panic or partially materialized task.
+    ///
     /// The initial RMCP `DetailedTask` is read before the binding is published,
     /// so revision 1 always names a real RMCP snapshot. One existing binding is
     /// probed for RMCP liveness before each new task, amortizing stale cleanup
@@ -312,6 +320,9 @@ impl TaskAuthority {
         F: FnOnce(ManagedTaskContext) -> TaskFuture,
     {
         self.ensure_open()?;
+        if tokio::runtime::Handle::try_current().is_err() {
+            return Err(TaskAuthorityError::RuntimeUnavailable);
+        }
         self.prune_one_stale_binding()?;
         self.ensure_open()?;
 
