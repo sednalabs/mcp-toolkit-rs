@@ -5,7 +5,8 @@
 //! body, claim-set, identity-correlation, or error-message field.
 //!
 //! ## Security Boundaries
-//! * Request correlation is accepted only as a canonical lowercase UUID.
+//! * Request correlation is accepted only as a canonical lowercase RFC4122
+//!   UUID v4. The syntax check does not prove randomness or origin.
 //! * Tool names are validated while borrowed, then copied into a
 //!   purpose-specific length-bounded type.
 //! * Failure records accept only toolkit-owned error-code and error-class enums.
@@ -90,7 +91,7 @@ impl fmt::Display for DiagnosticValueError {
             ),
             DiagnosticValueErrorKind::InvalidCanonicalUuid => write!(
                 formatter,
-                "{} must be a canonical lowercase UUID",
+                "{} must be a canonical lowercase RFC4122 UUID v4",
                 self.field.as_str()
             ),
         }
@@ -111,20 +112,28 @@ fn redacted_wrapper_debug(
 
 /// Correlates the terminal diagnostic with its originating request.
 ///
-/// The value is restricted to the canonical lowercase textual UUID form so it
-/// is opaque, fixed-width, and non-semantic at this shared contract boundary.
+/// The value is restricted to canonical lowercase RFC4122 UUID v4 text so it
+/// is fixed-width and non-semantic at this shared contract boundary.
+///
+/// This type validates syntax, version, and variant only. It cannot prove that
+/// the caller used a cryptographically secure random source or that the value
+/// originated from a trusted component. A request correlation ID is for
+/// correlation only and must never grant identity, authentication,
+/// authorization, provenance, replay, or audit authority.
 #[derive(Eq, PartialEq)]
 pub struct RequestCorrelationId(String);
 
 impl RequestCorrelationId {
-    /// Parses a canonical lowercase UUID after validating the borrowed input.
+    /// Parses a canonical lowercase RFC4122 UUID v4 after validating the
+    /// borrowed input.
     ///
     /// # Errors
     /// Returns [`DiagnosticValueError`] unless `value` is exactly 36 ASCII
-    /// bytes with lowercase hexadecimal groups in `8-4-4-4-12` form.
+    /// bytes with lowercase hexadecimal groups in `8-4-4-4-12` form, version
+    /// nibble `4`, and RFC4122 variant bits `10`.
     pub fn parse(value: impl AsRef<str>) -> Result<Self, DiagnosticValueError> {
         let value = value.as_ref();
-        if !is_canonical_lowercase_uuid(value) {
+        if !is_canonical_lowercase_rfc4122_uuid_v4(value) {
             return Err(DiagnosticValueError {
                 field: DiagnosticField::RequestId,
                 kind: DiagnosticValueErrorKind::InvalidCanonicalUuid,
@@ -145,7 +154,7 @@ impl fmt::Debug for RequestCorrelationId {
     }
 }
 
-fn is_canonical_lowercase_uuid(value: &str) -> bool {
+fn is_canonical_lowercase_rfc4122_uuid_v4(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != CANONICAL_UUID_LEN {
         return false;
@@ -157,7 +166,8 @@ fn is_canonical_lowercase_uuid(value: &str) -> bool {
         } else {
             byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f')
         }
-    })
+    }) && bytes[14] == b'4'
+        && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
 }
 
 /// Identifies the invoked MCP tool using its registered catalogue name.
@@ -509,7 +519,7 @@ mod tests {
 
     use tracing_subscriber::fmt::MakeWriter;
 
-    const REQUEST_ID: &str = "018f3f8e-7b9a-7d12-8c34-1234567890ab";
+    const REQUEST_ID: &str = "018f3f8e-7b9a-4d12-8c34-1234567890ab";
     const CATALOGUE_DIGEST: [u8; DIGEST_BYTES] = [0x33; DIGEST_BYTES];
 
     fn request_id() -> RequestCorrelationId {
@@ -571,24 +581,51 @@ mod tests {
     }
 
     #[test]
-    fn request_id_accepts_only_canonical_lowercase_uuid_text() {
+    fn request_id_constructor_accepts_canonical_lowercase_rfc4122_uuid_v4() {
+        for accepted in [
+            REQUEST_ID,
+            "018f3f8e-7b9a-4d12-9c34-1234567890ab",
+            "018f3f8e-7b9a-4d12-ac34-1234567890ab",
+            "018f3f8e-7b9a-4d12-bc34-1234567890ab",
+        ] {
+            assert_eq!(
+                RequestCorrelationId::parse(accepted),
+                Ok(RequestCorrelationId(accepted.to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn request_id_constructor_rejects_non_v4_non_rfc4122_and_noncanonical_text() {
+        let expected = DiagnosticValueError {
+            field: DiagnosticField::RequestId,
+            kind: DiagnosticValueErrorKind::InvalidCanonicalUuid,
+        };
+
         for rejected in [
             "request-123",
-            "018F3F8E-7B9A-7D12-8C34-1234567890AB",
-            "018f3f8e-7b9a-7d12-8c34-1234567890ag",
-            "018f3f8e-7b9a-7d12-8c34-1234567890ab0",
+            "018F3F8E-7B9A-4D12-8C34-1234567890AB",
+            "018f3f8e-7b9a-4d12-8c34-1234567890ag",
+            "018f3f8e-7b9a-4d12-8c34-1234567890ab0",
+            "018f3f8e-7b9a-1d12-8c34-1234567890ab",
+            "018f3f8e-7b9a-2d12-8c34-1234567890ab",
+            "018f3f8e-7b9a-3d12-8c34-1234567890ab",
+            "018f3f8e-7b9a-5d12-8c34-1234567890ab",
+            "018f3f8e-7b9a-6d12-8c34-1234567890ab",
+            "018f3f8e-7b9a-7d12-8c34-1234567890ab",
+            "018f3f8e-7b9a-4d12-7c34-1234567890ab",
+            "018f3f8e-7b9a-4d12-cc34-1234567890ab",
         ] {
-            let error = RequestCorrelationId::parse(rejected)
-                .expect_err("non-canonical request id must be rejected");
-            assert_eq!(error.field(), DiagnosticField::RequestId);
-            assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCanonicalUuid);
+            let result = RequestCorrelationId::parse(rejected);
+            assert_eq!(result, Err(expected));
+            let error = result.unwrap_err();
             assert!(!error.to_string().contains(rejected));
         }
 
         let unhyphenated = "0".repeat(32);
-        let error = RequestCorrelationId::parse(&unhyphenated)
-            .expect_err("unhyphenated request id must be rejected");
-        assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCanonicalUuid);
+        let result = RequestCorrelationId::parse(&unhyphenated);
+        assert_eq!(result, Err(expected));
+        let error = result.unwrap_err();
         assert!(!error.to_string().contains(&unhyphenated));
     }
 
@@ -745,7 +782,7 @@ mod tests {
             output,
             concat!(
                 "event=\"mcp.tool_call.terminal\" ",
-                "request_id=\"018f3f8e-7b9a-7d12-8c34-1234567890ab\" ",
+                "request_id=\"018f3f8e-7b9a-4d12-8c34-1234567890ab\" ",
                 "tool_name=\"example.read\" ",
                 "duration_ms=42 ",
                 "outcome=\"failure\" ",

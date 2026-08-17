@@ -69,7 +69,7 @@ use mcp_toolkit_observability::{
 };
 
 ToolCallTerminalDiagnostic::success(
-    RequestCorrelationId::parse("018f3f8e-7b9a-7d12-8c34-1234567890ab")?,
+    RequestCorrelationId::parse("018f3f8e-7b9a-4d12-8c34-1234567890ab")?,
     DiagnosticToolName::new("example.search")?,
     Duration::from_millis(12),
 )
@@ -84,8 +84,19 @@ server lifecycle remains responsible for constructing one record per real tool
 call. Failure records accept only toolkit-owned error code and class enum
 variants. There is deliberately no API for arguments, request or response
 bodies, tokens, claims, raw errors, or dynamic error identifiers. Request
-correlation accepts only canonical lowercase UUIDs. Schema/catalogue revisions
-accept only a fixed-width SHA-256 fingerprint.
+correlation accepts only canonical lowercase RFC4122 UUID v4 values.
+Schema/catalogue revisions accept only a fixed-width SHA-256 fingerprint.
+
+UUID v4 validation checks syntax, version, and variant; it cannot prove that a
+caller used a secure random source or establish trusted origin. Generate the
+identifier with a cryptographically secure random source. Treat it only as a
+correlation value, never as identity, authentication, authorization,
+provenance, replay, or audit authority.
+
+`DiagnosticToolName` validates only the identifier alphabet and byte bound; it
+does not prove catalogue membership. Each server integration must source the
+value from its registered catalogue entry and prove that mapping in its own
+lifecycle tests.
 
 Principal and session correlation are intentionally outside this initial
 generic contract. Adding either requires a separately reviewed identity and
@@ -146,6 +157,8 @@ After deploying a migrated server, verify:
      each call; the toolkit enforces only at-most-once emission per record.
    - Confirm the terminal event has the same request correlation identifier as
      the enclosing request path.
+   - Confirm no identity, authorization, provenance, or replay decision relies
+     on the request correlation identifier.
    - Confirm no principal, session, or other identity value is present.
 3. Metrics health if `metrics-facade` is enabled.
    - Confirm metrics exist and labels are bounded.
