@@ -6,8 +6,8 @@ clients.
 `mcp-toolkit-rs` is an early public workspace for the shared substrate that
 keeps Rust MCP services consistent: auth discovery, HTTP/session support,
 policy primitives, tool inventory helpers, observability, process utilities,
-and test harnesses. It is pre-1.0 and the Rust crates are not published to
-crates.io yet, so adopters should consume it from Git for now.
+task authority, and test harnesses. It is pre-1.0 and the Rust crates are not
+published to crates.io yet, so adopters should consume it from Git for now.
 
 ## What Is Included
 
@@ -27,6 +27,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-process` | Process and signal helpers. |
 | `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions for large analytical result sets, bounded read-only SQL, table inventory, and evidence handles. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
+| `mcp-toolkit-tasks` | Principal-bound authority and race-safe observation around RMCP's native Tasks implementation. |
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract test helpers. |
 | `mcp-toolkit-docs` | Documentation and tool metadata helpers. |
 
@@ -170,7 +171,10 @@ mcp-toolkit = {
 ```
 
 Add `scratchpad` to the umbrella feature list only when the server needs local
-DuckDB sessions for large-result workflows.
+DuckDB sessions for large-result workflows. Add `tasks` when the server needs
+principal-bound production authority around RMCP's native Tasks lifecycle; the
+feature also exposes the Toolkit-coordinated RMCP facade so callers can use the
+matching task model types without selecting an independent RMCP version.
 
 Commit the consumer `Cargo.lock` after resolution. The lockfile records the
 exact toolkit SHA; manifest `rev` pins are only needed for special cases where a
