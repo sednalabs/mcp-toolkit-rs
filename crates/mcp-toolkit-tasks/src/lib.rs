@@ -12,7 +12,8 @@
 //! * fail-closed cross-principal access;
 //! * monotonic observed-state revisions;
 //! * race-safe wait-for-change and wait-for-terminal observation;
-//! * revision-aware wake-up hints around RMCP's task context.
+//! * revision-aware wake-up hints around RMCP's task context;
+//! * stale authority-binding cleanup after RMCP evicts task records.
 //!
 //! Revisions are observation generations, not a parallel task event log. They
 //! advance only when a `TaskManager::get_task` read returns a `DetailedTask`
@@ -151,6 +152,16 @@ impl TaskBinding {
     }
 }
 
+struct NotifyOnDrop {
+    notify: Arc<Notify>,
+}
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        self.notify.notify_waiters();
+    }
+}
+
 /// RMCP [`TaskContext`] wrapper that emits efficient observation wake-up hints.
 ///
 /// Hints never advance the local revision directly. [`TaskAuthority`] validates
@@ -234,9 +245,10 @@ impl TaskAuthority {
     /// Spawns an RMCP task bound to `principal`.
     ///
     /// The initial RMCP `DetailedTask` is read before the binding is installed,
-    /// so revision 1 always names a real RMCP snapshot. If authority binding
-    /// state is poisoned, the manager is shut down fail-closed rather than
-    /// leaving an unbound task running.
+    /// so revision 1 always names a real RMCP snapshot. Stale authority records
+    /// for tasks already evicted by RMCP are pruned before a new task is
+    /// created. If authority binding state is poisoned, the manager is shut
+    /// down fail-closed rather than leaving an unbound task running.
     pub fn spawn_for_principal<F>(
         &self,
         principal: TaskPrincipal,
@@ -246,12 +258,21 @@ impl TaskAuthority {
     where
         F: FnOnce(ManagedTaskContext) -> TaskFuture,
     {
+        self.prune_stale_bindings()?;
+
         let notify = Arc::new(Notify::new());
         let operation_notify = notify.clone();
         let task = self.manager.spawn(options, move |context| {
-            make_future(ManagedTaskContext {
+            let drop_hint = NotifyOnDrop {
+                notify: operation_notify.clone(),
+            };
+            let future = make_future(ManagedTaskContext {
                 inner: context,
                 notify: operation_notify,
+            });
+            Box::pin(async move {
+                let _drop_hint = drop_hint;
+                future.await
             })
         });
 
@@ -322,10 +343,12 @@ impl TaskAuthority {
 
     /// Waits for an observed newer revision or a terminal RMCP task state.
     ///
-    /// Wake-up hints cover Toolkit-controlled transitions immediately. A
-    /// bounded 250 ms observation tick covers RMCP-owned transitions, including
-    /// terminal completion and TTL expiry, without a tight polling loop.
-    /// Returns `Ok(None)` when the timeout expires.
+    /// Wake-up hints cover Toolkit-controlled transitions immediately. A drop
+    /// hint nudges observers when the operation future is cancelled, aborted,
+    /// panics, or otherwise leaves scope. A bounded 250 ms observation tick
+    /// remains the correctness fallback for RMCP-owned transitions, including
+    /// terminal completion and TTL expiry. Returns `Ok(None)` when the timeout
+    /// expires.
     pub async fn wait(
         &self,
         principal: &TaskPrincipal,
@@ -439,6 +462,37 @@ impl TaskAuthority {
         Ok(binding)
     }
 
+    fn prune_stale_bindings(&self) -> Result<usize, TaskAuthorityError> {
+        let task_ids = match self.bindings.lock() {
+            Ok(bindings) => bindings.keys().cloned().collect::<Vec<_>>(),
+            Err(_) => {
+                self.manager.shutdown();
+                return Err(TaskAuthorityError::StateUnavailable);
+            }
+        };
+
+        let stale = task_ids
+            .into_iter()
+            .filter(|task_id| self.manager.get_task(task_id).is_err())
+            .collect::<Vec<_>>();
+        if stale.is_empty() {
+            return Ok(0);
+        }
+
+        let mut bindings = match self.bindings.lock() {
+            Ok(bindings) => bindings,
+            Err(_) => {
+                self.manager.shutdown();
+                return Err(TaskAuthorityError::StateUnavailable);
+            }
+        };
+        let before = bindings.len();
+        for task_id in stale {
+            bindings.remove(&task_id);
+        }
+        Ok(before.saturating_sub(bindings.len()))
+    }
+
     fn remove_binding(&self, task_id: &str) {
         match self.bindings.lock() {
             Ok(mut bindings) => {
@@ -461,6 +515,22 @@ mod tests {
 
     fn ok_result(text: &str) -> CallToolResult {
         CallToolResult::success(vec![ContentBlock::text(text.to_string())])
+    }
+
+    fn input_request(message: &str) -> InputRequest {
+        serde_json::from_value(serde_json::json!({
+            "method": "elicitation/create",
+            "params": {
+                "message": message,
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "approved": {"type": "boolean"}
+                    }
+                }
+            }
+        }))
+        .expect("valid input request")
     }
 
     #[tokio::test]
@@ -566,6 +636,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn input_required_update_and_completion_are_observed_from_rmcp_state() {
+        let authority = Arc::new(TaskAuthority::new());
+        let owner = principal("owner-a");
+        let task = authority
+            .spawn_for_principal(owner.clone(), TaskOptions::default(), |ctx| {
+                Box::pin(async move {
+                    let response = ctx
+                        .request_input("approval", input_request("Approve this operation?"))
+                        .await?;
+                    if response.get("approved").and_then(|value| value.as_bool()) == Some(true) {
+                        Ok(ok_result("approved"))
+                    } else {
+                        Ok(ok_result("rejected"))
+                    }
+                })
+            })
+            .expect("spawn task");
+
+        let initial = authority
+            .get_task_for_principal(&owner, &task.task_id)
+            .expect("initial snapshot");
+        let input_snapshot = authority
+            .wait(
+                &owner,
+                &task.task_id,
+                Some(initial.revision),
+                Duration::from_secs(2),
+                TaskWaitCondition::RevisionChange,
+            )
+            .await
+            .expect("wait result")
+            .expect("input-required snapshot");
+        assert_eq!(input_snapshot.task.status(), TaskStatus::InputRequired);
+        assert!(input_snapshot.revision > initial.revision);
+
+        authority
+            .update_task_for_principal(
+                &owner,
+                &task.task_id,
+                [("approval".to_string(), serde_json::json!({"approved": true}))],
+            )
+            .expect("update task");
+
+        let terminal = authority
+            .wait(
+                &owner,
+                &task.task_id,
+                Some(input_snapshot.revision),
+                Duration::from_secs(2),
+                TaskWaitCondition::Terminal,
+            )
+            .await
+            .expect("terminal wait")
+            .expect("terminal snapshot");
+        assert_eq!(terminal.task.status(), TaskStatus::Completed);
+        assert!(terminal.revision > input_snapshot.revision);
+    }
+
+    #[tokio::test]
     async fn terminal_wait_observes_rmcp_owned_completion_without_completion_hint() {
         let authority = Arc::new(TaskAuthority::new());
         let owner = principal("owner-a");
@@ -648,5 +777,39 @@ mod tests {
             .expect("wait result")
             .expect("terminal snapshot");
         assert_eq!(observed.task.status(), TaskStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn new_spawn_prunes_binding_after_rmcp_ttl_eviction() {
+        let authority = TaskAuthority::new();
+        let owner = principal("owner-a");
+        let abandoned = authority
+            .spawn_for_principal(
+                owner.clone(),
+                TaskOptions::new().with_ttl_ms(10),
+                |_ctx| {
+                    Box::pin(async {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        Ok(ok_result("never"))
+                    })
+                },
+            )
+            .expect("spawn abandoned task");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(authority.prune_stale_bindings().expect("first prune"), 0);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let _replacement = authority
+            .spawn_for_principal(owner, TaskOptions::default(), |_ctx| {
+                Box::pin(async { Ok(ok_result("replacement")) })
+            })
+            .expect("spawn replacement");
+
+        let bindings = authority.bindings.lock().expect("bindings");
+        assert!(
+            !bindings.contains_key(&abandoned.task_id),
+            "binding should be removed once RMCP evicts the expired task"
+        );
     }
 }
