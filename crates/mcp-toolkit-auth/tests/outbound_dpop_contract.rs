@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
+use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -12,21 +14,23 @@ use base64::Engine;
 use jsonwebtoken::jwk::ThumbprintHash;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, TokenData, Validation};
 use mcp_toolkit_auth::outbound_dpop::{
-    canonical_dpop_target, DpopAuthorization, DpopSigner, DpopTokenExchangeClient,
+    canonical_dpop_target, DpopAuthorization, DpopNonceState, DpopSigner, DpopTokenExchangeClient,
     DpopTokenExchangeConfig, OutboundDpopError, Rfc8693TokenExchangeRequest,
     TokenExchangeAuditMetadata, RFC8693_ACCESS_TOKEN_TYPE, RFC8693_GRANT_TYPE,
 };
-use mcp_toolkit_auth::upstream_oauth::SecretString;
+use mcp_toolkit_auth::upstream_oauth::{OAuthClientAuthMethod, SecretString};
 use reqwest::Url;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 #[derive(Clone)]
 struct ScriptedResponse {
     status: StatusCode,
     headers: Vec<(&'static str, &'static str)>,
     body: String,
+    delay: Option<Duration>,
+    location: Option<String>,
 }
 
 impl ScriptedResponse {
@@ -35,6 +39,28 @@ impl ScriptedResponse {
             status,
             headers,
             body: body.to_string(),
+            delay: None,
+            location: None,
+        }
+    }
+
+    fn delayed_json(status: StatusCode, body: Value, delay: Duration) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: body.to_string(),
+            delay: Some(delay),
+            location: None,
+        }
+    }
+
+    fn redirect(location: String) -> Self {
+        Self {
+            status: StatusCode::FOUND,
+            headers: Vec::new(),
+            body: String::new(),
+            delay: None,
+            location: Some(location),
         }
     }
 }
@@ -48,6 +74,7 @@ struct RecordedRequest {
 struct ScriptState {
     responses: Mutex<VecDeque<ScriptedResponse>>,
     requests: Mutex<Vec<RecordedRequest>>,
+    request_seen: Notify,
 }
 
 async fn scripted_token_endpoint(
@@ -69,12 +96,24 @@ async fn scripted_token_endpoint(
             status: StatusCode::INTERNAL_SERVER_ERROR,
             headers: Vec::new(),
             body: "missing scripted response".to_string(),
+            delay: None,
+            location: None,
         });
+    state.request_seen.notify_one();
+    if let Some(delay) = scripted.delay {
+        tokio::time::sleep(delay).await;
+    }
     let mut response = (scripted.status, scripted.body).into_response();
     for (name, value) in scripted.headers {
-        response.headers_mut().insert(
+        response.headers_mut().append(
             http::header::HeaderName::from_static(name),
             HeaderValue::from_static(value),
+        );
+    }
+    if let Some(location) = scripted.location {
+        response.headers_mut().insert(
+            http::header::LOCATION,
+            HeaderValue::from_str(&location).expect("scripted redirect location"),
         );
     }
     response
@@ -90,6 +129,7 @@ async fn start_scripted_server(
     let state = Arc::new(ScriptState {
         responses: Mutex::new(responses.into()),
         requests: Mutex::new(Vec::new()),
+        request_seen: Notify::new(),
     });
     let app = Router::new()
         .route("/token", post(scripted_token_endpoint))
@@ -126,6 +166,31 @@ fn exchange_client(endpoint: Url) -> DpopTokenExchangeClient {
     .expect("token exchange config");
     DpopTokenExchangeClient::new(config, DpopSigner::generate().expect("DPoP signer"))
         .expect("token exchange client")
+}
+
+fn exchange_client_with_nonce_state(
+    endpoint: Url,
+    signer: DpopSigner,
+    nonces: DpopNonceState,
+) -> DpopTokenExchangeClient {
+    let config = DpopTokenExchangeConfig::new_allow_insecure_loopback(
+        endpoint,
+        "client-id",
+        Some(SecretString::new("client-secret")),
+    )
+    .expect("token exchange config");
+    DpopTokenExchangeClient::with_nonce_state(config, signer, nonces)
+        .expect("token exchange client")
+}
+
+fn successful_token_response(access_token: &str) -> Value {
+    json!({
+        "access_token": access_token,
+        "issued_token_type": RFC8693_ACCESS_TOKEN_TYPE,
+        "token_type": "DPoP",
+        "expires_in": 60,
+        "scope": "read write"
+    })
 }
 
 fn decode_proof(compact: &str) -> (jsonwebtoken::Header, Value) {
@@ -198,6 +263,25 @@ fn canonical_target_rejects_non_loopback_cleartext() {
         canonical_dpop_target(&target),
         Err(OutboundDpopError::InsecureEndpoint)
     );
+    assert_eq!(
+        canonical_dpop_target(&Url::parse("ftp://resource.example/items").expect("FTP URL")),
+        Err(OutboundDpopError::InvalidUrl)
+    );
+
+    for endpoint in [
+        "https://user:password@issuer.example/token",
+        "https://issuer.example/token?credential=value",
+        "https://issuer.example/token#fragment",
+    ] {
+        assert!(matches!(
+            DpopTokenExchangeConfig::new(
+                Url::parse(endpoint).expect("token endpoint URL"),
+                "client-id",
+                None,
+            ),
+            Err(OutboundDpopError::InvalidUrl)
+        ));
+    }
 }
 
 #[test]
@@ -220,6 +304,20 @@ fn exchange_request_requires_complete_audit_metadata_and_redacts_subject() {
     assert!(rendered.contains("<redacted>"));
     assert!(!rendered.contains("subject-token-secret"));
     assert!(!rendered.contains("subject-1"));
+
+    for invalid in [
+        "relative/resource",
+        "https://resource.example/items#fragment",
+        "://missing-scheme",
+    ] {
+        assert!(matches!(
+            exchange_request().with_resource(invalid),
+            Err(OutboundDpopError::InvalidField("resource"))
+        ));
+    }
+    exchange_request()
+        .with_resource("urn:example:resource")
+        .expect("absolute fragment-free resource URI");
 }
 
 #[tokio::test]
@@ -250,7 +348,7 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
         .expect("DPoP token exchange");
 
     assert_eq!(token.access_token().expose_secret(), "issued-access-secret");
-    assert_eq!(token.issued_token_type(), Some(RFC8693_ACCESS_TOKEN_TYPE));
+    assert_eq!(token.issued_token_type(), RFC8693_ACCESS_TOKEN_TYPE);
     assert_eq!(token.expires_in(), Some(60));
     assert_eq!(token.scope(), Some("read write"));
     assert_eq!(token.proof_thumbprint(), client.public_jwk().thumbprint());
@@ -341,6 +439,172 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
 }
 
 #[tokio::test]
+async fn token_endpoint_nonces_are_isolated_by_endpoint_under_concurrency() {
+    let responses = |nonce: &'static str, access_token: &'static str| {
+        vec![
+            ScriptedResponse::json(
+                StatusCode::BAD_REQUEST,
+                vec![("dpop-nonce", nonce)],
+                json!({"error": "use_dpop_nonce"}),
+            ),
+            ScriptedResponse::json(
+                StatusCode::OK,
+                Vec::new(),
+                successful_token_response(access_token),
+            ),
+            ScriptedResponse::json(
+                StatusCode::OK,
+                Vec::new(),
+                successful_token_response(access_token),
+            ),
+        ]
+    };
+    let (endpoint_a, state_a, server_a) =
+        start_scripted_server(responses("endpoint-a-nonce", "token-a")).await;
+    let (endpoint_b, state_b, server_b) =
+        start_scripted_server(responses("endpoint-b-nonce", "token-b")).await;
+    let signer = DpopSigner::generate().expect("shared DPoP signer");
+    let nonces = DpopNonceState::default();
+    let client_a = exchange_client_with_nonce_state(endpoint_a, signer.clone(), nonces.clone());
+    let client_b = exchange_client_with_nonce_state(endpoint_b, signer, nonces);
+
+    let request_a = exchange_request();
+    let request_b = exchange_request();
+    let (seed_a, seed_b) =
+        tokio::join!(client_a.exchange(&request_a), client_b.exchange(&request_b));
+    seed_a.expect("endpoint A nonce exchange");
+    seed_b.expect("endpoint B nonce exchange");
+
+    let request_a = exchange_request();
+    let request_b = exchange_request();
+    let (reuse_a, reuse_b) =
+        tokio::join!(client_a.exchange(&request_a), client_b.exchange(&request_b));
+    reuse_a.expect("endpoint A nonce reuse");
+    reuse_b.expect("endpoint B nonce reuse");
+
+    for (state, expected_nonce) in [
+        (&state_a, "endpoint-a-nonce"),
+        (&state_b, "endpoint-b-nonce"),
+    ] {
+        let requests = state.requests.lock().await.clone();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            decode_proof(
+                requests[1]
+                    .headers
+                    .get("dpop")
+                    .and_then(|value| value.to_str().ok())
+                    .expect("nonce retry proof")
+            )
+            .1["nonce"],
+            expected_nonce
+        );
+        assert_eq!(
+            decode_proof(
+                requests[2]
+                    .headers
+                    .get("dpop")
+                    .and_then(|value| value.to_str().ok())
+                    .expect("stored nonce proof")
+            )
+            .1["nonce"],
+            expected_nonce
+        );
+    }
+
+    server_a.abort();
+    server_b.abort();
+}
+
+#[tokio::test]
+async fn basic_client_auth_uses_one_sensitive_header_and_no_body_credentials() {
+    let (endpoint, state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::OK,
+        Vec::new(),
+        successful_token_response("basic-token"),
+    )])
+    .await;
+    let config = DpopTokenExchangeConfig::new_allow_insecure_loopback(
+        endpoint,
+        "client-id",
+        Some(SecretString::new("client-secret")),
+    )
+    .expect("token exchange config")
+    .with_client_auth_method(OAuthClientAuthMethod::Basic);
+    let client = DpopTokenExchangeClient::new(config, DpopSigner::generate().expect("DPoP signer"))
+        .expect("token exchange client");
+    client
+        .exchange(&exchange_request())
+        .await
+        .expect("Basic-auth exchange");
+
+    let requests = state.requests.lock().await.clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=")
+    );
+    assert!(!requests[0].body.contains("client_id="));
+    assert!(!requests[0].body.contains("client_secret="));
+    assert!(requests[0].headers.contains_key("dpop"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn malformed_or_duplicate_dpop_nonce_headers_fail_closed() {
+    for headers in [
+        vec![("dpop-nonce", " first-with-space ")],
+        vec![("dpop-nonce", "first"), ("dpop-nonce", "second")],
+    ] {
+        let (endpoint, state, server) = start_scripted_server(vec![ScriptedResponse::json(
+            StatusCode::BAD_REQUEST,
+            headers,
+            json!({"error": "use_dpop_nonce"}),
+        )])
+        .await;
+        let error = exchange_client(endpoint)
+            .exchange(&exchange_request())
+            .await
+            .expect_err("invalid nonce response must fail");
+        assert_eq!(error, OutboundDpopError::InvalidNonceHeader);
+        assert_eq!(state.requests.lock().await.len(), 1);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn token_endpoint_redirect_is_not_followed() {
+    let (destination, destination_state, destination_server) =
+        start_scripted_server(vec![ScriptedResponse::json(
+            StatusCode::OK,
+            Vec::new(),
+            successful_token_response("redirected-token"),
+        )])
+        .await;
+    let (endpoint, source_state, source_server) =
+        start_scripted_server(vec![ScriptedResponse::redirect(destination.to_string())]).await;
+
+    let error = exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect_err("token endpoint redirect must fail closed");
+    assert!(matches!(
+        error,
+        OutboundDpopError::TokenEndpointRejected {
+            status: StatusCode::FOUND,
+            ..
+        }
+    ));
+    assert_eq!(source_state.requests.lock().await.len(), 1);
+    assert_eq!(destination_state.requests.lock().await.len(), 0);
+    source_server.abort();
+    destination_server.abort();
+}
+
+#[tokio::test]
 async fn repeated_token_endpoint_nonce_challenge_fails_after_one_retry() {
     let challenge = || {
         ScriptedResponse::json(
@@ -371,11 +635,15 @@ async fn token_exchange_fails_closed_on_unbound_broadened_or_refresh_results() {
             OutboundDpopError::UnexpectedIssuedTokenType,
         ),
         (
-            json!({"access_token": "issued", "token_type": "DPoP", "scope": "read admin"}),
+            json!({"access_token": "issued", "token_type": "DPoP"}),
+            OutboundDpopError::UnexpectedIssuedTokenType,
+        ),
+        (
+            json!({"access_token": "issued", "issued_token_type": RFC8693_ACCESS_TOKEN_TYPE, "token_type": "DPoP", "scope": "read admin"}),
             OutboundDpopError::BroadenedScopes,
         ),
         (
-            json!({"access_token": "issued", "token_type": "DPoP", "refresh_token": "refresh-secret"}),
+            json!({"access_token": "issued", "issued_token_type": RFC8693_ACCESS_TOKEN_TYPE, "token_type": "DPoP", "refresh_token": "refresh-secret"}),
             OutboundDpopError::UnexpectedRefreshToken,
         ),
     ];
@@ -445,6 +713,128 @@ async fn token_exchange_errors_and_debug_output_do_not_expose_secrets() {
     }
     assert!(rendered.contains("token_endpoint_error"));
     server.abort();
+
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::BAD_REQUEST,
+        Vec::new(),
+        json!({"error": "invalid_scope"}),
+    )])
+    .await;
+    let error = exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect_err("standard OAuth error");
+    match error {
+        OutboundDpopError::TokenEndpointRejected { code, .. } => {
+            assert_eq!(code.as_str(), "invalid_scope");
+            assert_eq!(
+                format!("{code:?} {code}"),
+                "SafeOAuthErrorCode(\"invalid_scope\") invalid_scope"
+            );
+        }
+        other => panic!("unexpected endpoint error: {other:?}"),
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn cancelled_exchange_does_not_poison_later_requests() {
+    let (endpoint, state, server) = start_scripted_server(vec![
+        ScriptedResponse::delayed_json(
+            StatusCode::OK,
+            successful_token_response("cancelled-token"),
+            Duration::from_secs(30),
+        ),
+        ScriptedResponse::json(
+            StatusCode::OK,
+            Vec::new(),
+            successful_token_response("replacement-token"),
+        ),
+    ])
+    .await;
+    let client = exchange_client(endpoint);
+    let task_client = client.clone();
+    let task = tokio::spawn(async move { task_client.exchange(&exchange_request()).await });
+    state.request_seen.notified().await;
+    task.abort();
+    let cancellation = task.await.expect_err("exchange task must be cancelled");
+    assert!(cancellation.is_cancelled());
+
+    let token = client
+        .exchange(&exchange_request())
+        .await
+        .expect("replacement exchange after cancellation");
+    assert_eq!(token.access_token().expose_secret(), "replacement-token");
+    assert_eq!(state.requests.lock().await.len(), 2);
+    server.abort();
+}
+
+const PROXY_CHILD_MARKER: &str = "MCP_TOOLKIT_OUTBOUND_DPOP_PROXY_CHILD";
+const PROXY_CHILD_ENDPOINT: &str = "MCP_TOOLKIT_OUTBOUND_DPOP_DIRECT_ENDPOINT";
+
+#[tokio::test]
+async fn ambient_proxy_child() {
+    if std::env::var_os(PROXY_CHILD_MARKER).is_none() {
+        return;
+    }
+    let endpoint =
+        Url::parse(&std::env::var(PROXY_CHILD_ENDPOINT).expect("direct endpoint for proxy child"))
+            .expect("direct endpoint URL");
+    let token = exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect("ambient proxy must be ignored");
+    assert_eq!(token.access_token().expose_secret(), "direct-token");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ambient_proxy_is_ignored_for_credential_bearing_exchange() {
+    let (direct_endpoint, direct_state, direct_server) =
+        start_scripted_server(vec![ScriptedResponse::json(
+            StatusCode::OK,
+            Vec::new(),
+            successful_token_response("direct-token"),
+        )])
+        .await;
+    let (proxy_endpoint, proxy_state, proxy_server) =
+        start_scripted_server(vec![ScriptedResponse::json(
+            StatusCode::BAD_GATEWAY,
+            Vec::new(),
+            json!({"error": "server_error"}),
+        )])
+        .await;
+    let mut proxy_origin = proxy_endpoint;
+    proxy_origin.set_path("");
+    proxy_origin.set_query(None);
+    proxy_origin.set_fragment(None);
+
+    let output = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("--exact")
+        .arg("ambient_proxy_child")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(PROXY_CHILD_MARKER, "1")
+        .env(PROXY_CHILD_ENDPOINT, direct_endpoint.as_str())
+        .env("HTTP_PROXY", proxy_origin.as_str())
+        .env("HTTPS_PROXY", proxy_origin.as_str())
+        .env("ALL_PROXY", proxy_origin.as_str())
+        .env("http_proxy", proxy_origin.as_str())
+        .env("https_proxy", proxy_origin.as_str())
+        .env("all_proxy", proxy_origin.as_str())
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .output()
+        .expect("run isolated ambient-proxy child");
+    assert!(
+        output.status.success(),
+        "proxy child failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(direct_state.requests.lock().await.len(), 1);
+    assert_eq!(proxy_state.requests.lock().await.len(), 0);
+    direct_server.abort();
+    proxy_server.abort();
 }
 
 #[tokio::test]
@@ -453,6 +843,8 @@ async fn token_response_size_is_bounded() {
         status: StatusCode::OK,
         headers: Vec::new(),
         body: "x".repeat(64 * 1024 + 1),
+        delay: None,
+        location: None,
     }])
     .await;
     let error = exchange_client(endpoint)

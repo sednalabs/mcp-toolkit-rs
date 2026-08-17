@@ -24,19 +24,25 @@ implemented locally. Inbound verification remains exclusively in
 The client:
 
 1. requires HTTPS except for explicit loopback-only test/emulator configuration;
-2. disables redirects at the token endpoint;
+2. disables redirects and ambient proxy discovery at the token endpoint;
 3. canonicalizes proof targets without user information, query, or fragment;
 4. marks authorization and proof headers sensitive;
-5. keeps token-endpoint nonces separate from method/resource nonces;
-6. bounds nonce length, resource nonce cardinality, response size, and retry count;
+5. keys token-endpoint nonces by canonical endpoint and keeps them separate from
+   method/resource nonces;
+6. bounds nonce length, token and resource nonce cardinality, response size, and
+   retry count;
 7. retries a token request once only for an OAuth `use_dpop_nonce` response with
    a single valid `DPoP-Nonce` header;
 8. requires non-empty audit subject, actor-client, and exchange-id metadata before
    a token-exchange request can be constructed;
-9. requires a successful bound exchange to return `token_type=DPoP`;
-10. rejects broadened returned scopes, mismatched issued-token types, and refresh
-    tokens outside this bounded exchange profile; and
-11. never includes tokens, proofs, nonces, private keys, response bodies, or raw
+9. accepts RFC 8707 resource indicators only as absolute, fragment-free URIs;
+10. requires a successful bound exchange to return `token_type=DPoP` and the
+    exact requested `issued_token_type`;
+11. rejects broadened returned scopes and refresh tokens outside this bounded
+    exchange profile;
+12. permits only an explicit standard OAuth error-code allowlist into formatted
+    diagnostics; and
+13. never includes tokens, proofs, nonces, private keys, response bodies, or raw
     authorization-server descriptions in formatted diagnostics.
 
 Resource clients obtain a transaction object whose nonce-challenge method
@@ -80,6 +86,7 @@ JWS encoding or verification.
 ## Acceptance tests
 
 Hosted tests must prove signature and JWK binding, `ath`, canonical targets,
-nonce namespace isolation, one-retry behavior, DPoP token-type enforcement,
-scope and issued-token validation, response bounds, mandatory audit metadata,
-and secret-safe diagnostics.
+two-endpoint nonce isolation under concurrency, one-retry behavior, DPoP and
+issued-token-type enforcement, resource-indicator validation, response bounds,
+redirect and ambient-proxy denial, Basic client-auth shape, cancellation,
+mandatory audit metadata, and secret-safe diagnostics.

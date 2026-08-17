@@ -68,7 +68,7 @@ Auth/token mechanics must follow these rules:
 | DPoP sender constraints | `crates/mcp-toolkit-auth/src/dpop.rs` and `authenticator.rs` | Crate-backed atomic verification | `dpop-verifier` validates the full proof and toolkit immediately matches its JKT against `cnf.jkt`; see `docs/design/dpop-atomic-authentication-boundary.md`. Normal Bearer entrypoints reject every `cnf` claim. |
 | Outbound DPoP P-256 key generation | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Narrow `p256` production boundary | Generate P-256 key material only; use `jsonwebtoken` for JWK extraction, thumbprints, compact JWS encoding, and ES256 signing. Do not expand this boundary into proof verification or bespoke JOSE parsing. |
 | Test-only P-256 proof fixtures | `crates/mcp-toolkit-auth/src/internal_tests.rs` and integration tests | `p256` test use | Real signed DPoP fixtures only; production verification remains exclusively in `dpop-verifier`. |
-| RFC 8693 token exchange client | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Crate-backed HTTP, JOSE, URL, and typed local glue | Use the no-redirect client, mandatory audit metadata, isolated bounded nonce stores, one nonce retry, and fail-closed `token_type=DPoP` response validation documented in `docs/design/outbound-dpop-token-exchange.md`. |
+| RFC 8693 token exchange client | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Crate-backed HTTP, JOSE, URL, and typed local glue | Use the no-redirect/no-ambient-proxy client, mandatory audit metadata, endpoint-keyed bounded nonce stores, one nonce retry, and fail-closed `token_type=DPoP` plus required `issued_token_type` response validation documented in `docs/design/outbound-dpop-token-exchange.md`. |
 
 ## No-Go Patterns
 

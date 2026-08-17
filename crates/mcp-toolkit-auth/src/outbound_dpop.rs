@@ -85,6 +85,7 @@ const MAX_CREDENTIAL_BYTES: usize = 64 * 1024;
 const MAX_FIELD_BYTES: usize = 2048;
 const MAX_REQUEST_ITEMS: usize = 64;
 const MAX_NONCE_BYTES: usize = 1024;
+const DEFAULT_TOKEN_ENDPOINT_NONCE_CAPACITY: usize = 64;
 const DEFAULT_RESOURCE_NONCE_CAPACITY: usize = 256;
 
 /// Failures from outbound DPoP proof and token-exchange operations.
@@ -123,6 +124,9 @@ pub enum OutboundDpopError {
     /// The bounded resource-nonce store is full.
     #[error("outbound DPoP resource nonce capacity is exhausted")]
     ResourceNonceCapacityExceeded,
+    /// The bounded token-endpoint nonce store is full.
+    #[error("outbound DPoP token endpoint nonce capacity is exhausted")]
+    TokenEndpointNonceCapacityExceeded,
     /// A second nonce challenge attempted to exceed the one-retry contract.
     #[error("outbound DPoP nonce retry limit reached")]
     NonceRetryLimitReached,
@@ -187,11 +191,19 @@ pub struct SafeOAuthErrorCode(String);
 impl SafeOAuthErrorCode {
     fn from_untrusted(value: Option<&str>) -> Self {
         let value = value.filter(|candidate| {
-            !candidate.is_empty()
-                && candidate.len() <= 64
-                && candidate
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            matches!(
+                *candidate,
+                "invalid_request"
+                    | "invalid_client"
+                    | "invalid_grant"
+                    | "unauthorized_client"
+                    | "unsupported_grant_type"
+                    | "invalid_scope"
+                    | "invalid_target"
+                    | "use_dpop_nonce"
+                    | "temporarily_unavailable"
+                    | "server_error"
+            )
         });
         Self(value.unwrap_or("token_endpoint_error").to_string())
     }
@@ -562,12 +574,19 @@ impl Rfc8693TokenExchangeRequest {
     /// Adds one caller-authorized RFC 8707 resource indicator.
     ///
     /// # Errors
-    /// Returns [`OutboundDpopError::InvalidField`] when the value is blank.
+    /// Returns [`OutboundDpopError::InvalidField`] when the value is not an
+    /// absolute, fragment-free URI.
     pub fn with_resource(mut self, resource: impl Into<String>) -> Result<Self, OutboundDpopError> {
         if self.resources.len() >= MAX_REQUEST_ITEMS {
             return Err(OutboundDpopError::InvalidField("resource"));
         }
-        self.resources.push(required_field(resource, "resource")?);
+        let resource = required_field(resource, "resource")?;
+        let parsed =
+            Url::parse(&resource).map_err(|_| OutboundDpopError::InvalidField("resource"))?;
+        if parsed.fragment().is_some() {
+            return Err(OutboundDpopError::InvalidField("resource"));
+        }
+        self.resources.push(resource);
         Ok(self)
     }
 
@@ -743,12 +762,13 @@ impl DpopTokenExchangeConfig {
 #[derive(Clone)]
 pub struct DpopNonceState {
     inner: Arc<Mutex<NonceStateInner>>,
+    token_endpoint_capacity: usize,
     resource_capacity: usize,
 }
 
 #[derive(Default)]
 struct NonceStateInner {
-    token_endpoint: Option<String>,
+    token_endpoints: HashMap<String, String>,
     resources: HashMap<ResourceNonceKey, String>,
 }
 
@@ -762,6 +782,7 @@ impl Default for DpopNonceState {
     fn default() -> Self {
         Self {
             inner: Arc::new(Mutex::new(NonceStateInner::default())),
+            token_endpoint_capacity: DEFAULT_TOKEN_ENDPOINT_NONCE_CAPACITY,
             resource_capacity: DEFAULT_RESOURCE_NONCE_CAPACITY,
         }
     }
@@ -769,15 +790,16 @@ impl Default for DpopNonceState {
 
 impl fmt::Debug for DpopNonceState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (token_nonce_present, resource_nonce_count) = self
+        let (token_endpoint_nonce_count, resource_nonce_count) = self
             .inner
             .lock()
-            .map(|state| (state.token_endpoint.is_some(), state.resources.len()))
-            .unwrap_or((false, 0));
+            .map(|state| (state.token_endpoints.len(), state.resources.len()))
+            .unwrap_or((0, 0));
         formatter
             .debug_struct("DpopNonceState")
-            .field("token_endpoint_nonce_present", &token_nonce_present)
+            .field("token_endpoint_nonce_count", &token_endpoint_nonce_count)
             .field("resource_nonce_count", &resource_nonce_count)
+            .field("token_endpoint_capacity", &self.token_endpoint_capacity)
             .field("resource_capacity", &self.resource_capacity)
             .finish()
     }
@@ -794,6 +816,7 @@ impl DpopNonceState {
         }
         Ok(Self {
             inner: Arc::new(Mutex::new(NonceStateInner::default())),
+            token_endpoint_capacity: DEFAULT_TOKEN_ENDPOINT_NONCE_CAPACITY,
             resource_capacity: capacity,
         })
     }
@@ -804,12 +827,22 @@ impl DpopNonceState {
             .map_err(|_| OutboundDpopError::NonceStateUnavailable)
     }
 
-    fn token_endpoint_nonce(&self) -> Result<Option<String>, OutboundDpopError> {
-        Ok(self.lock()?.token_endpoint.clone())
+    fn token_endpoint_nonce(&self, endpoint: &str) -> Result<Option<String>, OutboundDpopError> {
+        Ok(self.lock()?.token_endpoints.get(endpoint).cloned())
     }
 
-    fn set_token_endpoint_nonce(&self, nonce: String) -> Result<(), OutboundDpopError> {
-        self.lock()?.token_endpoint = Some(nonce);
+    fn set_token_endpoint_nonce(
+        &self,
+        endpoint: String,
+        nonce: String,
+    ) -> Result<(), OutboundDpopError> {
+        let mut state = self.lock()?;
+        if !state.token_endpoints.contains_key(&endpoint)
+            && state.token_endpoints.len() >= self.token_endpoint_capacity
+        {
+            return Err(OutboundDpopError::TokenEndpointNonceCapacityExceeded);
+        }
+        state.token_endpoints.insert(endpoint, nonce);
         Ok(())
     }
 
@@ -835,6 +868,7 @@ impl DpopNonceState {
 #[derive(Clone)]
 pub struct DpopTokenExchangeClient {
     config: DpopTokenExchangeConfig,
+    token_endpoint_key: String,
     signer: DpopSigner,
     nonces: DpopNonceState,
     http: Client,
@@ -845,6 +879,7 @@ impl fmt::Debug for DpopTokenExchangeClient {
         formatter
             .debug_struct("DpopTokenExchangeClient")
             .field("config", &self.config)
+            .field("token_endpoint_key", &self.token_endpoint_key)
             .field("signer", &self.signer)
             .field("nonces", &self.nonces)
             .finish_non_exhaustive()
@@ -875,19 +910,22 @@ impl DpopTokenExchangeClient {
     ///
     /// # Security
     /// Share nonce state only between requests using the same signer and trust
-    /// boundary. Redirects remain disabled.
+    /// boundary. Redirects and ambient proxy discovery remain disabled.
     pub fn with_nonce_state(
         config: DpopTokenExchangeConfig,
         signer: DpopSigner,
         nonces: DpopNonceState,
     ) -> Result<Self, OutboundDpopError> {
+        let token_endpoint_key = canonical_dpop_target(&config.token_endpoint)?;
         let http = Client::builder()
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(config.timeout)
             .build()
             .map_err(|_| OutboundDpopError::HttpClientInitialization)?;
         Ok(Self {
             config,
+            token_endpoint_key,
             signer,
             nonces,
             http,
@@ -918,7 +956,7 @@ impl DpopTokenExchangeClient {
         for attempt in 0..=1 {
             let nonce = match nonce_override.as_ref() {
                 Some(value) => Some(value.clone()),
-                None => self.nonces.token_endpoint_nonce()?,
+                None => self.nonces.token_endpoint_nonce(&self.token_endpoint_key)?,
             };
             let proof = self
                 .signer
@@ -928,7 +966,8 @@ impl DpopTokenExchangeClient {
             let headers = response.headers().clone();
             let nonce_header = strict_nonce_header(&headers)?;
             if let Some(nonce) = nonce_header.as_ref() {
-                self.nonces.set_token_endpoint_nonce(nonce.clone())?;
+                self.nonces
+                    .set_token_endpoint_nonce(self.token_endpoint_key.clone(), nonce.clone())?;
             }
             let body = read_bounded_body(response, MAX_TOKEN_RESPONSE_BYTES).await?;
             if status.is_success() {
@@ -1013,11 +1052,10 @@ impl DpopTokenExchangeClient {
         {
             return Err(OutboundDpopError::UnexpectedTokenType);
         }
-        if raw
+        let issued_token_type = raw
             .issued_token_type
-            .as_deref()
-            .is_some_and(|value| value != request.requested_token_type)
-        {
+            .ok_or(OutboundDpopError::UnexpectedIssuedTokenType)?;
+        if issued_token_type != request.requested_token_type {
             return Err(OutboundDpopError::UnexpectedIssuedTokenType);
         }
         if let Some(scope) = raw.scope.as_deref() {
@@ -1031,7 +1069,7 @@ impl DpopTokenExchangeClient {
         }
         Ok(DpopBoundAccessToken {
             access_token: SecretString::new(access_token),
-            issued_token_type: raw.issued_token_type,
+            issued_token_type,
             expires_in: raw.expires_in,
             scope: raw.scope,
             proof_thumbprint: self.signer.public_jwk.thumbprint.clone(),
@@ -1074,7 +1112,7 @@ impl DpopTokenExchangeClient {
 #[derive(Clone)]
 pub struct DpopBoundAccessToken {
     access_token: SecretString,
-    issued_token_type: Option<String>,
+    issued_token_type: String,
     expires_in: Option<u64>,
     scope: Option<String>,
     proof_thumbprint: String,
@@ -1102,9 +1140,9 @@ impl DpopBoundAccessToken {
         &self.access_token
     }
 
-    /// Returns the RFC 8693 issued-token type when supplied.
-    pub fn issued_token_type(&self) -> Option<&str> {
-        self.issued_token_type.as_deref()
+    /// Returns the validated RFC 8693 issued-token type.
+    pub fn issued_token_type(&self) -> &str {
+        &self.issued_token_type
     }
 
     /// Returns the token lifetime in seconds when supplied.
