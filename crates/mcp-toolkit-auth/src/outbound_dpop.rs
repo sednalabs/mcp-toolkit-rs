@@ -142,6 +142,9 @@ pub enum OutboundDpopError {
     /// A successful response was not valid RFC 8693 JSON.
     #[error("outbound DPoP token response is malformed")]
     MalformedTokenResponse,
+    /// A successful response did not use the required JSON media type.
+    #[error("outbound DPoP token response did not use application/json")]
+    UnexpectedResponseContentType,
     /// A successful response omitted its access token.
     #[error("outbound DPoP token response omitted the access token")]
     MissingAccessToken,
@@ -308,7 +311,7 @@ impl DpopSigner {
         endpoint: &Url,
         nonce: Option<&str>,
     ) -> Result<OutboundDpopProof, OutboundDpopError> {
-        self.proof(Method::POST, endpoint, None, nonce)
+        self.proof(Method::POST, endpoint, None, nonce, false)
     }
 
     /// Constructs a proof bound to a resource method, target, and access token.
@@ -326,7 +329,7 @@ impl DpopSigner {
         access_token: &SecretString,
         nonce: Option<&str>,
     ) -> Result<OutboundDpopProof, OutboundDpopError> {
-        self.proof(method, target, Some(access_token), nonce)
+        self.proof(method, target, Some(access_token), nonce, false)
     }
 
     fn proof(
@@ -335,12 +338,21 @@ impl DpopSigner {
         target: &Url,
         access_token: Option<&SecretString>,
         nonce: Option<&str>,
+        allow_insecure_loopback: bool,
     ) -> Result<OutboundDpopProof, OutboundDpopError> {
         let iat = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| OutboundDpopError::ProofConstruction)?
             .as_secs();
-        self.proof_at(method, target, access_token, nonce, iat, Uuid::new_v4())
+        self.proof_at(
+            method,
+            target,
+            access_token,
+            nonce,
+            iat,
+            Uuid::new_v4(),
+            allow_insecure_loopback,
+        )
     }
 
     fn proof_at(
@@ -351,11 +363,12 @@ impl DpopSigner {
         nonce: Option<&str>,
         iat: u64,
         jti: Uuid,
+        allow_insecure_loopback: bool,
     ) -> Result<OutboundDpopProof, OutboundDpopError> {
         if nonce.is_some_and(|value| !valid_nonce(value)) {
             return Err(OutboundDpopError::InvalidNonceHeader);
         }
-        let htu = canonical_dpop_target(target)?;
+        let htu = canonical_dpop_target_with_policy(target, allow_insecure_loopback)?;
         let ath = access_token.map(|token| {
             base64::Engine::encode(
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -376,6 +389,32 @@ impl DpopSigner {
         let compact = jsonwebtoken::encode(&header, &claims, &self.encoding_key)
             .map_err(|_| OutboundDpopError::ProofConstruction)?;
         Ok(OutboundDpopProof(SecretString::new(compact)))
+    }
+
+    fn token_endpoint_proof_with_policy(
+        &self,
+        endpoint: &Url,
+        nonce: Option<&str>,
+        allow_insecure_loopback: bool,
+    ) -> Result<OutboundDpopProof, OutboundDpopError> {
+        self.proof(Method::POST, endpoint, None, nonce, allow_insecure_loopback)
+    }
+
+    fn resource_proof_with_policy(
+        &self,
+        method: Method,
+        target: &Url,
+        access_token: &SecretString,
+        nonce: Option<&str>,
+        allow_insecure_loopback: bool,
+    ) -> Result<OutboundDpopProof, OutboundDpopError> {
+        self.proof(
+            method,
+            target,
+            Some(access_token),
+            nonce,
+            allow_insecure_loopback,
+        )
     }
 }
 
@@ -419,9 +458,16 @@ impl OutboundDpopProof {
 ///
 /// # Security
 /// Removes user information, query, and fragment components before the target
-/// is signed. HTTP is accepted only for loopback hosts.
+/// is signed. The public default requires HTTPS.
 pub fn canonical_dpop_target(target: &Url) -> Result<String, OutboundDpopError> {
-    validate_http_url(target, true)?;
+    canonical_dpop_target_with_policy(target, false)
+}
+
+fn canonical_dpop_target_with_policy(
+    target: &Url,
+    allow_insecure_loopback: bool,
+) -> Result<String, OutboundDpopError> {
+    validate_http_url(target, allow_insecure_loopback)?;
     let mut canonical = target.clone();
     canonical
         .set_username("")
@@ -432,6 +478,22 @@ pub fn canonical_dpop_target(target: &Url) -> Result<String, OutboundDpopError> 
     canonical.set_query(None);
     canonical.set_fragment(None);
     Ok(canonical.to_string())
+}
+
+fn redacted_resource_for_debug(value: &str) -> String {
+    let Ok(mut resource) = Url::parse(value) else {
+        return "<invalid-resource>".to_string();
+    };
+    if resource.set_username("").is_err() || resource.set_password(None).is_err() {
+        return "<invalid-resource>".to_string();
+    }
+    let query_was_present = resource.query().is_some();
+    resource.set_query(None);
+    if query_was_present {
+        format!("{resource}?<redacted>")
+    } else {
+        resource.to_string()
+    }
 }
 
 /// Mandatory audit identity accompanying one token exchange.
@@ -497,8 +559,6 @@ impl TokenExchangeAuditMetadata {
 #[derive(Clone)]
 pub struct Rfc8693TokenExchangeRequest {
     subject_token: SecretString,
-    subject_token_type: String,
-    requested_token_type: String,
     resources: Vec<String>,
     audiences: Vec<String>,
     scopes: Vec<String>,
@@ -510,9 +570,16 @@ impl fmt::Debug for Rfc8693TokenExchangeRequest {
         formatter
             .debug_struct("Rfc8693TokenExchangeRequest")
             .field("subject_token", &"<redacted>")
-            .field("subject_token_type", &self.subject_token_type)
-            .field("requested_token_type", &self.requested_token_type)
-            .field("resources", &self.resources)
+            .field("subject_token_type", &RFC8693_ACCESS_TOKEN_TYPE)
+            .field("requested_token_type", &RFC8693_ACCESS_TOKEN_TYPE)
+            .field(
+                "resources",
+                &self
+                    .resources
+                    .iter()
+                    .map(|value| redacted_resource_for_debug(value))
+                    .collect::<Vec<_>>(),
+            )
             .field("audiences", &self.audiences)
             .field("scopes", &self.scopes)
             .field("audit", &self.audit)
@@ -538,37 +605,11 @@ impl Rfc8693TokenExchangeRequest {
         }
         Ok(Self {
             subject_token,
-            subject_token_type: RFC8693_ACCESS_TOKEN_TYPE.to_string(),
-            requested_token_type: RFC8693_ACCESS_TOKEN_TYPE.to_string(),
             resources: Vec::new(),
             audiences: Vec::new(),
             scopes: Vec::new(),
             audit,
         })
-    }
-
-    /// Sets the subject-token type.
-    ///
-    /// # Errors
-    /// Returns [`OutboundDpopError::InvalidField`] when the type is blank.
-    pub fn with_subject_token_type(
-        mut self,
-        token_type: impl Into<String>,
-    ) -> Result<Self, OutboundDpopError> {
-        self.subject_token_type = required_field(token_type, "subject_token_type")?;
-        Ok(self)
-    }
-
-    /// Sets the requested token type.
-    ///
-    /// # Errors
-    /// Returns [`OutboundDpopError::InvalidField`] when the type is blank.
-    pub fn with_requested_token_type(
-        mut self,
-        token_type: impl Into<String>,
-    ) -> Result<Self, OutboundDpopError> {
-        self.requested_token_type = required_field(token_type, "requested_token_type")?;
-        Ok(self)
     }
 
     /// Adds one caller-authorized RFC 8707 resource indicator.
@@ -583,7 +624,10 @@ impl Rfc8693TokenExchangeRequest {
         let resource = required_field(resource, "resource")?;
         let parsed =
             Url::parse(&resource).map_err(|_| OutboundDpopError::InvalidField("resource"))?;
-        if parsed.fragment().is_some() {
+        if parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
             return Err(OutboundDpopError::InvalidField("resource"));
         }
         self.resources.push(resource);
@@ -632,8 +676,11 @@ impl Rfc8693TokenExchangeRequest {
                 "subject_token",
                 self.subject_token.expose_secret().to_string(),
             ),
-            ("subject_token_type", self.subject_token_type.clone()),
-            ("requested_token_type", self.requested_token_type.clone()),
+            ("subject_token_type", RFC8693_ACCESS_TOKEN_TYPE.to_string()),
+            (
+                "requested_token_type",
+                RFC8693_ACCESS_TOKEN_TYPE.to_string(),
+            ),
         ];
         form.extend(
             self.resources
@@ -662,6 +709,7 @@ pub struct DpopTokenExchangeConfig {
     client_secret: Option<SecretString>,
     client_auth_method: OAuthClientAuthMethod,
     timeout: Duration,
+    allow_insecure_loopback: bool,
 }
 
 impl fmt::Debug for DpopTokenExchangeConfig {
@@ -673,6 +721,7 @@ impl fmt::Debug for DpopTokenExchangeConfig {
             .field("client_secret_present", &self.client_secret.is_some())
             .field("client_auth_method", &self.client_auth_method)
             .field("timeout", &self.timeout)
+            .field("allow_insecure_loopback", &self.allow_insecure_loopback)
             .finish()
     }
 }
@@ -736,6 +785,7 @@ impl DpopTokenExchangeConfig {
             client_secret,
             client_auth_method: OAuthClientAuthMethod::RequestBody,
             timeout: DEFAULT_REQUEST_TIMEOUT,
+            allow_insecure_loopback: allow_loopback_http,
         })
     }
 
@@ -916,7 +966,10 @@ impl DpopTokenExchangeClient {
         signer: DpopSigner,
         nonces: DpopNonceState,
     ) -> Result<Self, OutboundDpopError> {
-        let token_endpoint_key = canonical_dpop_target(&config.token_endpoint)?;
+        let token_endpoint_key = canonical_dpop_target_with_policy(
+            &config.token_endpoint,
+            config.allow_insecure_loopback,
+        )?;
         let http = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -958,9 +1011,11 @@ impl DpopTokenExchangeClient {
                 Some(value) => Some(value.clone()),
                 None => self.nonces.token_endpoint_nonce(&self.token_endpoint_key)?,
             };
-            let proof = self
-                .signer
-                .token_endpoint_proof(&self.config.token_endpoint, nonce.as_deref())?;
+            let proof = self.signer.token_endpoint_proof_with_policy(
+                &self.config.token_endpoint,
+                nonce.as_deref(),
+                self.config.allow_insecure_loopback,
+            )?;
             let response = self.send_exchange(request, &proof).await?;
             let status = response.status();
             let headers = response.headers().clone();
@@ -969,8 +1024,11 @@ impl DpopTokenExchangeClient {
                 self.nonces
                     .set_token_endpoint_nonce(self.token_endpoint_key.clone(), nonce.clone())?;
             }
+            if status == StatusCode::OK && !has_strict_json_content_type(&headers) {
+                return Err(OutboundDpopError::UnexpectedResponseContentType);
+            }
             let body = read_bounded_body(response, MAX_TOKEN_RESPONSE_BYTES).await?;
-            if status.is_success() {
+            if status == StatusCode::OK {
                 return self.validate_success(request, &body);
             }
 
@@ -1055,7 +1113,7 @@ impl DpopTokenExchangeClient {
         let issued_token_type = raw
             .issued_token_type
             .ok_or(OutboundDpopError::UnexpectedIssuedTokenType)?;
-        if issued_token_type != request.requested_token_type {
+        if issued_token_type != RFC8693_ACCESS_TOKEN_TYPE {
             return Err(OutboundDpopError::UnexpectedIssuedTokenType);
         }
         if let Some(scope) = raw.scope.as_deref() {
@@ -1069,7 +1127,6 @@ impl DpopTokenExchangeClient {
         }
         Ok(DpopBoundAccessToken {
             access_token: SecretString::new(access_token),
-            issued_token_type,
             expires_in: raw.expires_in,
             scope: raw.scope,
             proof_thumbprint: self.signer.public_jwk.thumbprint.clone(),
@@ -1092,7 +1149,8 @@ impl DpopTokenExchangeClient {
         if token.proof_thumbprint != self.signer.public_jwk.thumbprint {
             return Err(OutboundDpopError::SignerMismatch);
         }
-        let canonical_target = canonical_dpop_target(&target)?;
+        let canonical_target =
+            canonical_dpop_target_with_policy(&target, self.config.allow_insecure_loopback)?;
         let nonce_method = method.clone();
         Ok(DpopResourceRequest {
             client: self,
@@ -1112,7 +1170,6 @@ impl DpopTokenExchangeClient {
 #[derive(Clone)]
 pub struct DpopBoundAccessToken {
     access_token: SecretString,
-    issued_token_type: String,
     expires_in: Option<u64>,
     scope: Option<String>,
     proof_thumbprint: String,
@@ -1123,7 +1180,7 @@ impl fmt::Debug for DpopBoundAccessToken {
         formatter
             .debug_struct("DpopBoundAccessToken")
             .field("access_token", &"<redacted>")
-            .field("issued_token_type", &self.issued_token_type)
+            .field("issued_token_type", &RFC8693_ACCESS_TOKEN_TYPE)
             .field("expires_in", &self.expires_in)
             .field("scope", &self.scope)
             .field("proof_thumbprint", &self.proof_thumbprint)
@@ -1142,7 +1199,7 @@ impl DpopBoundAccessToken {
 
     /// Returns the validated RFC 8693 issued-token type.
     pub fn issued_token_type(&self) -> &str {
-        &self.issued_token_type
+        RFC8693_ACCESS_TOKEN_TYPE
     }
 
     /// Returns the token lifetime in seconds when supplied.
@@ -1193,11 +1250,12 @@ impl DpopResourceRequest<'_> {
     /// The returned headers contain credentials and redact formatted output.
     pub fn authorization(&self) -> Result<DpopAuthorization, OutboundDpopError> {
         let nonce = self.client.nonces.resource_nonce(&self.nonce_key)?;
-        let proof = self.client.signer.resource_proof(
+        let proof = self.client.signer.resource_proof_with_policy(
             self.method.clone(),
             &self.target,
             &self.token.access_token,
             nonce.as_deref(),
+            self.client.config.allow_insecure_loopback,
         )?;
         DpopAuthorization::new(&self.token.access_token, proof)
     }
@@ -1366,6 +1424,22 @@ fn strict_nonce_header(headers: &HeaderMap) -> Result<Option<String>, OutboundDp
     Ok(Some(value.to_string()))
 }
 
+fn has_strict_json_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(http::header::CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value.to_str().ok().is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
+    })
+}
+
 fn valid_nonce(value: &str) -> bool {
     if value.is_empty() || value.len() > MAX_NONCE_BYTES {
         return false;
@@ -1423,10 +1497,13 @@ fn validate_http_url(url: &Url, allow_loopback_http: bool) -> Result<(), Outboun
 
 fn is_loopback_url(url: &Url) -> bool {
     url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<IpAddr>()
-                .map(|address| address.is_loopback())
-                .unwrap_or(false)
+        let numeric_host = host
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(host);
+        numeric_host
+            .parse::<IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
     })
 }

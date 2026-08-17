@@ -34,7 +34,17 @@ struct ScriptedResponse {
 }
 
 impl ScriptedResponse {
-    fn json(status: StatusCode, headers: Vec<(&'static str, &'static str)>, body: Value) -> Self {
+    fn json(
+        status: StatusCode,
+        mut headers: Vec<(&'static str, &'static str)>,
+        body: Value,
+    ) -> Self {
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        {
+            headers.push(("content-type", "application/json"));
+        }
         Self {
             status,
             headers,
@@ -47,7 +57,7 @@ impl ScriptedResponse {
     fn delayed_json(status: StatusCode, body: Value, delay: Duration) -> Self {
         Self {
             status,
-            headers: Vec::new(),
+            headers: vec![("content-type", "application/json")],
             body: body.to_string(),
             delay: Some(delay),
             location: None,
@@ -104,6 +114,7 @@ async fn scripted_token_endpoint(
         tokio::time::sleep(delay).await;
     }
     let mut response = (scripted.status, scripted.body).into_response();
+    response.headers_mut().remove(http::header::CONTENT_TYPE);
     for (name, value) in scripted.headers {
         response.headers_mut().append(
             http::header::HeaderName::from_static(name),
@@ -256,13 +267,17 @@ fn signer_produces_verified_jwk_bound_ath_and_canonical_target() {
 }
 
 #[test]
-fn canonical_target_rejects_non_loopback_cleartext() {
-    let target = Url::parse("http://resource.example/items") // DevSkim: ignore DS137138 rejected negative test fixture
-        .expect("resource URL");
-    assert_eq!(
-        canonical_dpop_target(&target),
-        Err(OutboundDpopError::InsecureEndpoint)
-    );
+fn canonical_target_and_default_config_require_https() {
+    for target in [
+        "http://resource.example/items",
+        "http://127.0.0.1/items",
+        "http://localhost/items",
+    ] {
+        assert_eq!(
+            canonical_dpop_target(&Url::parse(target).expect("resource URL")),
+            Err(OutboundDpopError::InsecureEndpoint)
+        );
+    }
     assert_eq!(
         canonical_dpop_target(&Url::parse("ftp://resource.example/items").expect("FTP URL")),
         Err(OutboundDpopError::InvalidUrl)
@@ -282,6 +297,21 @@ fn canonical_target_rejects_non_loopback_cleartext() {
             Err(OutboundDpopError::InvalidUrl)
         ));
     }
+
+    assert!(matches!(
+        DpopTokenExchangeConfig::new_allow_insecure_loopback(
+            Url::parse("http://localhost/token").expect("localhost token endpoint"),
+            "client-id",
+            None,
+        ),
+        Err(OutboundDpopError::InsecureEndpoint)
+    ));
+    DpopTokenExchangeConfig::new_allow_insecure_loopback(
+        Url::parse("http://127.0.0.1/token").expect("numeric loopback token endpoint"),
+        "client-id",
+        None,
+    )
+    .expect("numeric loopback is the explicit local-development exception");
 }
 
 #[test]
@@ -308,6 +338,8 @@ fn exchange_request_requires_complete_audit_metadata_and_redacts_subject() {
     for invalid in [
         "relative/resource",
         "https://resource.example/items#fragment",
+        "https://user@resource.example/items",
+        "https://user:password@resource.example/items",
         "://missing-scheme",
     ] {
         assert!(matches!(
@@ -318,6 +350,13 @@ fn exchange_request_requires_complete_audit_metadata_and_redacts_subject() {
     exchange_request()
         .with_resource("urn:example:resource")
         .expect("absolute fragment-free resource URI");
+
+    let request = exchange_request()
+        .with_resource("https://resource.example/items?access_token=resource-query-secret")
+        .expect("query-bearing resource URI");
+    let rendered = format!("{request:?}");
+    assert!(rendered.contains("?<redacted>"));
+    assert!(!rendered.contains("resource-query-secret"));
 }
 
 #[tokio::test]
@@ -342,8 +381,11 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     ];
     let (endpoint, state, server) = start_scripted_server(responses).await;
     let client = exchange_client(endpoint.clone());
+    let request = exchange_request()
+        .with_resource("https://resource.example/items?access_token=resource-query-secret")
+        .expect("query-bearing resource indicator");
     let token = client
-        .exchange(&exchange_request())
+        .exchange(&request)
         .await
         .expect("DPoP token exchange");
 
@@ -361,6 +403,17 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     assert!(requests[0]
         .body
         .contains("subject_token=subject-token-secret"));
+    assert!(requests[0].body.contains(&format!(
+        "subject_token_type={}",
+        urlencoding(RFC8693_ACCESS_TOKEN_TYPE)
+    )));
+    assert!(requests[0].body.contains(&format!(
+        "requested_token_type={}",
+        urlencoding(RFC8693_ACCESS_TOKEN_TYPE)
+    )));
+    assert!(requests[0].body.contains(
+        "resource=https%3A%2F%2Fresource.example%2Fitems%3Faccess_token%3Dresource-query-secret"
+    ));
     assert!(!requests[0].body.contains("exchange-1"));
     assert!(!requests[0].body.contains("subject-1"));
     let first_proof = requests[0]
@@ -435,6 +488,47 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
         None
     );
 
+    server.abort();
+}
+
+#[tokio::test]
+async fn resource_http_policy_matches_the_client_loopback_exception() {
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::OK,
+        Vec::new(),
+        successful_token_response("loopback-policy-token"),
+    )])
+    .await;
+    let signer = DpopSigner::generate().expect("DPoP signer");
+    let loopback_config = DpopTokenExchangeConfig::new_allow_insecure_loopback(
+        endpoint,
+        "client-id",
+        Some(SecretString::new("client-secret")),
+    )
+    .expect("loopback token config");
+    let loopback_client =
+        DpopTokenExchangeClient::new(loopback_config, signer.clone()).expect("loopback client");
+    let token = loopback_client
+        .exchange(&exchange_request())
+        .await
+        .expect("loopback token exchange");
+    let resource = Url::parse("http://127.0.0.1/resource") // DevSkim: ignore DS137138 loopback test fixture
+        .expect("loopback resource URL");
+    loopback_client
+        .resource_request(&token, Method::GET, resource.clone())
+        .expect("explicit loopback policy applies to resource authorization");
+
+    let strict_config = DpopTokenExchangeConfig::new(
+        Url::parse("https://issuer.example/token").expect("strict token endpoint"),
+        "client-id",
+        Some(SecretString::new("client-secret")),
+    )
+    .expect("strict token config");
+    let strict_client = DpopTokenExchangeClient::new(strict_config, signer).expect("strict client");
+    let error = strict_client
+        .resource_request(&token, Method::GET, resource)
+        .expect_err("strict client must reject cleartext resource authorization");
+    assert_eq!(error, OutboundDpopError::InsecureEndpoint);
     server.abort();
 }
 
@@ -665,6 +759,83 @@ async fn token_exchange_fails_closed_on_unbound_broadened_or_refresh_results() {
 }
 
 #[tokio::test]
+async fn token_exchange_requires_exact_ok_status_and_json_media_type() {
+    let success = successful_token_response("issued");
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::CREATED,
+        Vec::new(),
+        success.clone(),
+    )])
+    .await;
+    let error = exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect_err("non-200 2xx response must fail closed");
+    match error {
+        OutboundDpopError::TokenEndpointRejected { status, code } => {
+            assert_eq!(status, StatusCode::CREATED);
+            assert_eq!(code.as_str(), "token_endpoint_error");
+        }
+        other => panic!("unexpected non-200 response error: {other:?}"),
+    }
+    server.abort();
+
+    let cases = vec![
+        (
+            ScriptedResponse {
+                status: StatusCode::OK,
+                headers: Vec::new(),
+                body: success.to_string(),
+                delay: None,
+                location: None,
+            },
+            OutboundDpopError::UnexpectedResponseContentType,
+        ),
+        (
+            ScriptedResponse::json(
+                StatusCode::OK,
+                vec![("content-type", "text/plain")],
+                success.clone(),
+            ),
+            OutboundDpopError::UnexpectedResponseContentType,
+        ),
+        (
+            ScriptedResponse::json(
+                StatusCode::OK,
+                vec![
+                    ("content-type", "application/json"),
+                    ("content-type", "application/json"),
+                ],
+                success.clone(),
+            ),
+            OutboundDpopError::UnexpectedResponseContentType,
+        ),
+    ];
+
+    for (response, expected) in cases {
+        let (endpoint, _state, server) = start_scripted_server(vec![response]).await;
+        let actual = exchange_client(endpoint)
+            .exchange(&exchange_request())
+            .await
+            .expect_err("invalid HTTP success contract must fail closed");
+        assert_eq!(actual, expected);
+        server.abort();
+    }
+
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::OK,
+        vec![("content-type", "Application/JSON; charset=utf-8")],
+        success,
+    )])
+    .await;
+    exchange_client(endpoint)
+        .exchange(&exchange_request())
+        .await
+        .expect("case-insensitive JSON media type with parameters");
+    server.abort();
+}
+
+#[tokio::test]
 async fn token_exchange_errors_and_debug_output_do_not_expose_secrets() {
     let leaked_body = json!({
         "error": "client_secret=client-secret",
@@ -678,7 +849,10 @@ async fn token_exchange_errors_and_debug_output_do_not_expose_secrets() {
     .await;
     let signer = DpopSigner::generate().expect("DPoP signer");
     let proof = signer
-        .token_endpoint_proof(&endpoint, Some("retry-nonce"))
+        .token_endpoint_proof(
+            &Url::parse("https://issuer.example/token").expect("HTTPS proof endpoint"),
+            Some("retry-nonce"),
+        )
         .expect("token endpoint proof");
     let config = DpopTokenExchangeConfig::new_allow_insecure_loopback(
         endpoint,
@@ -841,7 +1015,7 @@ async fn ambient_proxy_is_ignored_for_credential_bearing_exchange() {
 async fn token_response_size_is_bounded() {
     let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse {
         status: StatusCode::OK,
-        headers: Vec::new(),
+        headers: vec![("content-type", "application/json")],
         body: "x".repeat(64 * 1024 + 1),
         delay: None,
         location: None,

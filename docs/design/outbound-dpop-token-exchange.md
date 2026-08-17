@@ -23,7 +23,8 @@ implemented locally. Inbound verification remains exclusively in
 
 The client:
 
-1. requires HTTPS except for explicit loopback-only test/emulator configuration;
+1. requires HTTPS except for explicit numeric-loopback-only test/emulator
+   configuration, and applies that same policy to resource authorization;
 2. disables redirects and ambient proxy discovery at the token endpoint;
 3. canonicalizes proof targets without user information, query, or fragment;
 4. marks authorization and proof headers sensitive;
@@ -35,9 +36,11 @@ The client:
    a single RFC 9449 `b64token` `DPoP-Nonce` header;
 8. requires non-empty audit subject, actor-client, and exchange-id metadata before
    a token-exchange request can be constructed;
-9. accepts RFC 8707 resource indicators only as absolute, fragment-free URIs;
-10. requires a successful bound exchange to return `token_type=DPoP` and the
-    exact requested `issued_token_type`;
+9. accepts RFC 8707 resource indicators only as absolute, fragment-free URIs,
+   rejects user information, and redacts query components from diagnostics;
+10. represents only access-token-for-access-token RFC 8693 requests and requires
+    a successful exchange to be HTTP `200` with one `application/json` media
+    type, `token_type=DPoP`, and the exact access-token `issued_token_type`;
 11. rejects broadened returned scopes and refresh tokens outside this bounded
     exchange profile;
 12. permits only an explicit standard OAuth error-code allowlist into formatted
@@ -54,7 +57,8 @@ interpretation, and service-specific availability policy.
 
 Before exchange, a service must:
 
-- authorize the subject, audience, resource, scopes, and requested token type;
+- authorize the subject, audience, resource, and scopes for the fixed
+  access-token-for-access-token profile;
 - bind `TokenExchangeAuditMetadata` to its policy decision and durable audit path;
 - configure the authorization server and client credentials from a trusted source;
 - retain any service capability matrix or old-generation behavior downstream; and
@@ -87,6 +91,8 @@ JWS encoding or verification.
 
 Hosted tests must prove signature and JWK binding, `ath`, canonical targets,
 two-endpoint nonce isolation under concurrency, one-retry behavior, DPoP and
-issued-token-type enforcement, resource-indicator validation, response bounds,
-redirect and ambient-proxy denial, Basic client-auth shape, cancellation,
-mandatory audit metadata, and secret-safe diagnostics.
+fixed issued-token-type enforcement, exact HTTP-success and JSON-media-type
+handling, resource-indicator validation and diagnostic redaction, strict HTTPS
+with a numeric-loopback-only development exception, response bounds, redirect
+and ambient-proxy denial, Basic client-auth shape, cancellation, mandatory audit
+metadata, and secret-safe diagnostics.
