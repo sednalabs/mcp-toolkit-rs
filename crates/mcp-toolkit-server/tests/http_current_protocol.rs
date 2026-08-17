@@ -61,12 +61,35 @@ fn current_request() -> Request<Body> {
         .expect("current MCP request")
 }
 
+fn decode_jsonrpc_payload(content_type: &str, body: &[u8]) -> Value {
+    if content_type.starts_with("application/json") {
+        return serde_json::from_slice(body).expect("JSON-RPC response JSON");
+    }
+
+    assert!(
+        content_type.starts_with("text/event-stream"),
+        "unexpected MCP response content type: {content_type}"
+    );
+    let body_text = std::str::from_utf8(body).expect("SSE response UTF-8");
+    let data = body_text
+        .lines()
+        .find_map(|line| line.strip_prefix("data:").map(str::trim_start))
+        .expect("SSE JSON-RPC data line");
+    serde_json::from_str(data).expect("SSE JSON-RPC response JSON")
+}
+
 async fn assert_current_tools_list_response(response: axum::response::Response) {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         !response.headers().contains_key(HEADER_SESSION_ID),
         "MCP 2026-07-28 requests must not create legacy session state"
     );
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
 
     let body = response
         .into_body()
@@ -74,7 +97,7 @@ async fn assert_current_tools_list_response(response: axum::response::Response) 
         .await
         .expect("collect response body")
         .to_bytes();
-    let payload: Value = serde_json::from_slice(&body).expect("JSON-RPC response JSON");
+    let payload = decode_jsonrpc_payload(&content_type, &body);
     assert_eq!(payload["jsonrpc"], json!("2.0"));
     assert_eq!(payload["id"], json!(1));
     assert!(
