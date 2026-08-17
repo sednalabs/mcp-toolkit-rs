@@ -722,6 +722,13 @@ async fn handle_get<S>(state: LocalMcpHttpState<S>, req: Request) -> Response
 where
     S: ServerHandler + Send + 'static,
 {
+    // MCP 2026-07-28 GET is stateless and may be used by RMCP for retained-event
+    // replay. Do not apply legacy session preflight to current requests, even if
+    // they also carry a stale legacy session header.
+    if declares_current_protocol(req.headers()) {
+        return forward_service(state.stateful_service, req, "current_stateless_get").await;
+    }
+
     if !req.headers().contains_key(HEADER_SESSION_ID) {
         if !state.auth_enabled {
             return endpoint_ready_hint();
@@ -729,7 +736,7 @@ where
         return session_error(
             StatusCode::BAD_REQUEST,
             "Missing legacy session ID.",
-            "MCP 2026-07-28 uses POST requests; legacy GET streams require a live session.",
+            "MCP 2026-07-28 uses stateless routing; legacy GET streams require a live session.",
         );
     }
 
