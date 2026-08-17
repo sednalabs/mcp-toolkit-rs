@@ -11,6 +11,19 @@ fn ok_result(text: &str) -> CallToolResult {
 }
 
 #[test]
+fn spawn_without_tokio_runtime_returns_typed_error() {
+    let authority = TaskAuthority::new();
+    let result = authority.spawn_for_principal(
+        principal("owner-a"),
+        TaskOptions::default(),
+        |_ctx| Box::pin(async { Ok(ok_result("must not run")) }),
+    );
+
+    assert!(matches!(result, Err(TaskAuthorityError::RuntimeUnavailable)));
+    assert_eq!(authority.running_task_count(), 0);
+}
+
+#[test]
 fn principal_debug_is_redacted() {
     let principal = principal("tenant-secret-identity");
     let debug = format!("{principal:?}");
