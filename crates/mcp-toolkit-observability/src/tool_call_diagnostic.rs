@@ -644,28 +644,25 @@ mod tests {
             PRINCIPAL_DIGEST,
         ))
         .with_catalogue_fingerprint(CatalogueFingerprint::from_sha256(CATALOGUE_DIGEST));
+        let expected_session = format!("{SESSION_DIGEST_PREFIX}{}", "22".repeat(DIGEST_BYTES));
+        let expected_principal = format!("{PRINCIPAL_DIGEST_PREFIX}{}", "11".repeat(DIGEST_BYTES));
+        let expected_catalogue = format!(
+            "{CATALOGUE_FINGERPRINT_PREFIX}{}",
+            "33".repeat(DIGEST_BYTES)
+        );
 
         assert_eq!(
             diagnostic.snapshot(),
             ToolCallTerminalSnapshot {
                 request_id: "request-123",
-                session_correlation: concat!(
-                    "session-keyed256:",
-                    "2222222222222222222222222222222222222222222222222222222222222222"
-                ),
-                principal_correlation: concat!(
-                    "principal-keyed256:",
-                    "1111111111111111111111111111111111111111111111111111111111111111"
-                ),
+                session_correlation: &expected_session,
+                principal_correlation: &expected_principal,
                 tool_name: "example.read",
                 duration_ms: 27,
                 outcome: "success",
                 error_code: "",
                 error_class: "",
-                catalogue_fingerprint: concat!(
-                    "sha256:",
-                    "3333333333333333333333333333333333333333333333333333333333333333"
-                ),
+                catalogue_fingerprint: &expected_catalogue,
             }
         );
     }
