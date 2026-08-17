@@ -6,9 +6,12 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
 
-use rmcp::model::{CallToolResult, DetailedTask, InputRequest, Task};
+use rmcp::model::{DetailedTask, InputRequest, Task};
 use rmcp::task_manager::{TaskContext, TaskExit, TaskFuture, TaskManager, TaskOptions};
 use tokio::sync::Notify;
+
+mod panic_future;
+use panic_future::contain_task_future;
 
 const OBSERVATION_TICK: Duration = Duration::from_millis(250);
 
@@ -157,16 +160,6 @@ fn panic_task_exit(message: &'static str) -> TaskExit {
     TaskExit::Error(rmcp::ErrorData::internal_error(message.to_string(), None))
 }
 
-async fn catch_task_future_panic(mut future: TaskFuture) -> Result<CallToolResult, TaskExit> {
-    poll_fn(
-        move |cx| match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
-            Ok(poll) => poll,
-            Err(_panic) => Poll::Ready(Err(panic_task_exit("task operation panicked"))),
-        },
-    )
-    .await
-}
-
 /// RMCP [`TaskContext`] wrapper that emits efficient observation wake-up hints.
 ///
 /// Hints never advance the local revision directly. [`TaskAuthority`] validates
@@ -240,10 +233,25 @@ impl ManagedTaskContext {
 /// All task protocol semantics remain delegated to RMCP. The authority binds a
 /// task id before the caller is allowed to return it to a client, and every
 /// subsequent get/update/cancel/wait path verifies that binding first.
+///
+/// Dropping the last ordinary authority handle shuts the RMCP manager down.
+/// Call [`Self::shutdown`] explicitly when deterministic teardown ordering is
+/// required. As with other `Arc`-backed Rust runtimes, caller-created reference
+/// cycles can keep a deliberately retained authority clone alive; avoid storing
+/// an authority clone indefinitely inside its own unlimited-retention task.
 #[derive(Clone, Default)]
 pub struct TaskAuthority {
     manager: TaskManager,
     state: Arc<Mutex<AuthorityState>>,
+    lifecycle: Arc<()>,
+}
+
+impl Drop for TaskAuthority {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.lifecycle) == 1 {
+            self.shutdown();
+        }
+    }
 }
 
 impl TaskAuthority {
@@ -261,8 +269,9 @@ impl TaskAuthority {
     /// is poisoned, the manager is shut down fail-closed rather than leaving an
     /// unbound task running.
     ///
-    /// Panics from either the synchronous operation factory or polling the task
-    /// future are contained and converted into an RMCP `failed` task result.
+    /// Panics from either the synchronous operation factory, polling the task
+    /// future, or destroying that future are contained and converted into an
+    /// RMCP `failed` task result where a task record still exists.
     pub fn spawn_for_principal<F>(
         &self,
         principal: TaskPrincipal,
@@ -285,7 +294,7 @@ impl TaskAuthority {
                 notify: operation_notify,
             };
             let future: TaskFuture = match catch_unwind(AssertUnwindSafe(|| make_future(managed))) {
-                Ok(future) => future,
+                Ok(future) => contain_task_future(future),
                 Err(_panic) => {
                     Box::pin(async { Err(panic_task_exit("task operation factory panicked")) })
                 }
@@ -293,7 +302,7 @@ impl TaskAuthority {
 
             Box::pin(async move {
                 let drop_hint = drop_hint;
-                let result = catch_task_future_panic(future).await;
+                let result = future.await;
                 drop(drop_hint);
                 result
             })
