@@ -575,19 +575,21 @@ mod tests {
         for rejected in [
             "request-123",
             "018F3F8E-7B9A-7D12-8C34-1234567890AB",
-            "018f3f8e7b9a7d128c341234567890ab",
             "018f3f8e-7b9a-7d12-8c34-1234567890ag",
             "018f3f8e-7b9a-7d12-8c34-1234567890ab0",
         ] {
             let error = RequestCorrelationId::parse(rejected)
                 .expect_err("non-canonical request id must be rejected");
             assert_eq!(error.field(), DiagnosticField::RequestId);
-            assert_eq!(
-                error.kind(),
-                DiagnosticValueErrorKind::InvalidCanonicalUuid
-            );
+            assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCanonicalUuid);
             assert!(!error.to_string().contains(rejected));
         }
+
+        let unhyphenated = "0".repeat(32);
+        let error = RequestCorrelationId::parse(&unhyphenated)
+            .expect_err("unhyphenated request id must be rejected");
+        assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCanonicalUuid);
+        assert!(!error.to_string().contains(&unhyphenated));
     }
 
     #[test]
@@ -612,10 +614,7 @@ mod tests {
 
         let error = RequestCorrelationId::parse(BorrowOnly("not-a-uuid"))
             .expect_err("invalid borrowed UUID must be rejected");
-        assert_eq!(
-            error.kind(),
-            DiagnosticValueErrorKind::InvalidCanonicalUuid
-        );
+        assert_eq!(error.kind(), DiagnosticValueErrorKind::InvalidCanonicalUuid);
     }
 
     #[test]
