@@ -269,9 +269,9 @@ fn signer_produces_verified_jwk_bound_ath_and_canonical_target() {
 #[test]
 fn canonical_target_and_default_config_require_https() {
     for target in [
-        "http://resource.example/items",
-        "http://127.0.0.1/items",
-        "http://localhost/items",
+        "http://resource.example/items", // DevSkim: ignore DS137138 rejected negative test fixture
+        "http://127.0.0.1/items",        // DevSkim: ignore DS137138 rejected negative test fixture
+        "http://localhost/items",        // DevSkim: ignore DS137138 rejected negative test fixture
     ] {
         assert_eq!(
             canonical_dpop_target(&Url::parse(target).expect("resource URL")),
@@ -300,14 +300,16 @@ fn canonical_target_and_default_config_require_https() {
 
     assert!(matches!(
         DpopTokenExchangeConfig::new_allow_insecure_loopback(
-            Url::parse("http://localhost/token").expect("localhost token endpoint"),
+            Url::parse("http://localhost/token") // DevSkim: ignore DS137138 rejected negative test fixture
+                .expect("localhost token endpoint"),
             "client-id",
             None,
         ),
         Err(OutboundDpopError::InsecureEndpoint)
     ));
     DpopTokenExchangeConfig::new_allow_insecure_loopback(
-        Url::parse("http://127.0.0.1/token").expect("numeric loopback token endpoint"),
+        Url::parse("http://127.0.0.1/token") // DevSkim: ignore DS137138 loopback test fixture
+            .expect("numeric loopback token endpoint"),
         "client-id",
         None,
     )

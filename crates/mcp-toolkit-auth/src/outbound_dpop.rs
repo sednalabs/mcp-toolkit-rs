@@ -344,27 +344,6 @@ impl DpopSigner {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| OutboundDpopError::ProofConstruction)?
             .as_secs();
-        self.proof_at(
-            method,
-            target,
-            access_token,
-            nonce,
-            iat,
-            Uuid::new_v4(),
-            allow_insecure_loopback,
-        )
-    }
-
-    fn proof_at(
-        &self,
-        method: Method,
-        target: &Url,
-        access_token: Option<&SecretString>,
-        nonce: Option<&str>,
-        iat: u64,
-        jti: Uuid,
-        allow_insecure_loopback: bool,
-    ) -> Result<OutboundDpopProof, OutboundDpopError> {
         if nonce.is_some_and(|value| !valid_nonce(value)) {
             return Err(OutboundDpopError::InvalidNonceHeader);
         }
@@ -378,7 +357,7 @@ impl DpopSigner {
         let claims = DpopProofClaims {
             htu: &htu,
             htm: method.as_str(),
-            jti: jti.to_string(),
+            jti: Uuid::new_v4().to_string(),
             iat,
             ath: ath.as_deref(),
             nonce,
