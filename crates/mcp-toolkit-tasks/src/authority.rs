@@ -174,6 +174,54 @@ struct AuthorityLifecycle {
     closed: Mutex<bool>,
 }
 
+/// Arc-owned teardown guard.
+///
+/// `Arc` runs this destructor exactly once when the last authority clone drops,
+/// including when the final handles are dropped concurrently. This avoids the
+/// racy `Arc::strong_count == 1` heuristic that can miss teardown when two final
+/// owners both observe a count greater than one before either decrement lands.
+struct LastHandleGuard {
+    manager: TaskManager,
+    state: Arc<Mutex<AuthorityState>>,
+    lifecycle: Arc<AuthorityLifecycle>,
+}
+
+impl Drop for LastHandleGuard {
+    fn drop(&mut self) {
+        close_and_drain(&self.manager, &self.state, &self.lifecycle);
+    }
+}
+
+fn close_and_drain(
+    manager: &TaskManager,
+    state: &Arc<Mutex<AuthorityState>>,
+    lifecycle: &Arc<AuthorityLifecycle>,
+) {
+    {
+        let mut closed = match lifecycle.closed.lock() {
+            Ok(closed) => closed,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *closed = true;
+    }
+    manager.shutdown();
+    let bindings = match state.lock() {
+        Ok(mut state) => {
+            let bindings = state
+                .bindings
+                .drain()
+                .map(|(_, binding)| binding)
+                .collect::<Vec<_>>();
+            state.prune_queue.clear();
+            bindings
+        }
+        Err(_) => return,
+    };
+    for binding in bindings {
+        binding.hint();
+    }
+}
+
 struct NotifyOnDrop {
     notify: Arc<Notify>,
 }
@@ -263,21 +311,35 @@ impl ManagedTaskContext {
 /// subsequent get/update/cancel/wait path verifies that binding first.
 ///
 /// [`Self::shutdown`] is irreversible across every clone. Dropping the last
-/// ordinary authority handle also shuts the RMCP manager down. As with other
-/// `Arc`-backed Rust runtimes, caller-created reference cycles can keep a
-/// deliberately retained authority clone alive; avoid storing an authority
-/// clone indefinitely inside its own unlimited-retention task.
-#[derive(Clone, Default)]
+/// ordinary authority handle also shuts the RMCP manager down. Last-handle
+/// teardown is owned by an Arc destructor rather than an observed strong count,
+/// so concurrent final drops cannot skip shutdown. As with other `Arc`-backed
+/// Rust runtimes, caller-created reference cycles can keep a deliberately
+/// retained authority clone alive; avoid storing an authority clone indefinitely
+/// inside its own unlimited-retention task.
+#[derive(Clone)]
 pub struct TaskAuthority {
     manager: TaskManager,
     state: Arc<Mutex<AuthorityState>>,
     lifecycle: Arc<AuthorityLifecycle>,
+    _last_handle: Arc<LastHandleGuard>,
 }
 
-impl Drop for TaskAuthority {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.lifecycle) == 1 {
-            self.shutdown();
+impl Default for TaskAuthority {
+    fn default() -> Self {
+        let manager = TaskManager::new();
+        let state = Arc::new(Mutex::new(AuthorityState::default()));
+        let lifecycle = Arc::new(AuthorityLifecycle::default());
+        let last_handle = Arc::new(LastHandleGuard {
+            manager: manager.clone(),
+            state: state.clone(),
+            lifecycle: lifecycle.clone(),
+        });
+        Self {
+            manager,
+            state,
+            lifecycle,
+            _last_handle: last_handle,
         }
     }
 }
@@ -521,29 +583,7 @@ impl TaskAuthority {
     /// later spawn cannot reopen the underlying RMCP manager even though RMCP's
     /// `TaskManager` itself is reusable after `shutdown()`.
     pub fn shutdown(&self) {
-        {
-            let mut closed = match self.lifecycle.closed.lock() {
-                Ok(closed) => closed,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            *closed = true;
-        }
-        self.manager.shutdown();
-        let bindings = match self.state.lock() {
-            Ok(mut state) => {
-                let bindings = state
-                    .bindings
-                    .drain()
-                    .map(|(_, binding)| binding)
-                    .collect::<Vec<_>>();
-                state.prune_queue.clear();
-                bindings
-            }
-            Err(_) => return,
-        };
-        for binding in bindings {
-            binding.hint();
-        }
+        close_and_drain(&self.manager, &self.state, &self.lifecycle);
     }
 
     fn wait_condition_ready(
@@ -698,14 +738,7 @@ impl TaskAuthority {
     }
 
     fn force_close(&self) {
-        {
-            let mut closed = match self.lifecycle.closed.lock() {
-                Ok(closed) => closed,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            *closed = true;
-        }
-        self.manager.shutdown();
+        close_and_drain(&self.manager, &self.state, &self.lifecycle);
     }
 }
 
