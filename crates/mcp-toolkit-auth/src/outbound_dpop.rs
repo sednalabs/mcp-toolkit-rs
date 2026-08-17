@@ -1277,7 +1277,11 @@ async fn read_bounded_body(
 ) -> Result<Vec<u8>, OutboundDpopError> {
     let mut stream = response.bytes_stream();
     let mut body = Vec::new();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let next_chunk = stream.next().await;
+        let Some(chunk) = next_chunk else {
+            break;
+        };
         let chunk = chunk.map_err(|error| {
             OutboundDpopError::Http(if error.is_timeout() {
                 HttpFailureKind::Timeout
