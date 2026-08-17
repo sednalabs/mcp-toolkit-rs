@@ -540,20 +540,21 @@ mod tests {
         });
 
         let output = sink.contents();
-        assert_eq!(output.matches("mcp.tool_call.terminal").count(), 1);
-        for expected in [
-            "request_id=request-123",
-            "session_id=\"\"",
-            "principal_id=\"\"",
-            "tool_name=work_item.read",
-            "duration_ms=42",
-            "outcome=\"failure\"",
-            "error_code=db.unavailable",
-            "error_class=dependency_failure",
-            "catalogue_fingerprint=\"\"",
-        ] {
-            assert!(output.contains(expected), "missing {expected} in {output}");
-        }
+        assert_eq!(
+            output,
+            concat!(
+                "event=\"mcp.tool_call.terminal\" ",
+                "request_id=\"request-123\" ",
+                "session_id=\"\" ",
+                "principal_id=\"\" ",
+                "tool_name=\"work_item.read\" ",
+                "duration_ms=42 ",
+                "outcome=\"failure\" ",
+                "error_code=\"db.unavailable\" ",
+                "error_class=\"dependency_failure\" ",
+                "catalogue_fingerprint=\"\"\n",
+            )
+        );
     }
 
     #[derive(Clone, Default)]
