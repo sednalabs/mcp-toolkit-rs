@@ -475,15 +475,11 @@ async fn dropping_last_authority_handle_aborts_unlimited_task() {
         let authority = TaskAuthority::new();
         let owner = principal("owner-a");
         authority
-            .spawn_for_principal(
-                owner,
-                TaskOptions::new().with_ttl_ms(None),
-                move |_ctx| {
-                    Box::pin(DropSignalFuture {
-                        dropped: Some(dropped_tx),
-                    })
-                },
-            )
+            .spawn_for_principal(owner, TaskOptions::new().with_ttl_ms(None), move |_ctx| {
+                Box::pin(DropSignalFuture {
+                    dropped: Some(dropped_tx),
+                })
+            })
             .expect("spawn task");
     }
 
