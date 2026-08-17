@@ -914,7 +914,7 @@ impl DpopTokenExchangeClient {
         &self,
         request: &Rfc8693TokenExchangeRequest,
     ) -> Result<DpopBoundAccessToken, OutboundDpopError> {
-        let mut nonce_override = None;
+        let mut nonce_override: Option<String> = None;
         for attempt in 0..=1 {
             let nonce = match nonce_override.as_ref() {
                 Some(value) => Some(value.clone()),
