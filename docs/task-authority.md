@@ -19,6 +19,9 @@ identifiers with surrounding Unicode whitespace, and identifiers longer than
 256 Unicode scalar values are rejected. Callers should pass the stable identity
 issued by their authentication/authorization authority, not a display name.
 
+Ordinary `Debug` formatting is redacted. Code that explicitly calls `as_str()`
+receives the exact identifier and must treat it as security-sensitive data.
+
 ## Failure boundary
 
 RMCP 3.1.2 materializes a task before invoking the operation factory, and it
@@ -59,9 +62,22 @@ to invent a second task state machine.
 
 ## Shutdown
 
+`TaskAuthority::shutdown` is an irreversible authority transition shared by all
+clones. It marks the Toolkit authority closed before asking RMCP to abort and
+drain current tasks. Later get/update/cancel/wait/spawn operations fail with
+`TaskAuthorityError::Closed`; Toolkit never relies on RMCP's otherwise reusable
+`TaskManager::shutdown()` as the authority lifecycle itself.
+
+Spawn publication and shutdown share a small lifecycle gate. Caller-controlled
+operation-factory code runs outside that gate, so a factory may itself trigger
+shutdown without deadlocking. If shutdown occurs after RMCP materializes the
+record but before Toolkit publishes the principal binding, publication is
+rejected and RMCP is drained again so the operation cannot escape the closed
+authority.
+
 Call `TaskAuthority::shutdown` for deterministic server teardown. Dropping the
-last ordinary authority handle also shuts down the RMCP task manager. A task
-that deliberately retains a clone of its own authority is deliberately
+last ordinary authority handle performs the same close-and-drain transition. A
+task that deliberately retains a clone of its own authority is deliberately
 retaining an authority handle as well; avoid self-retaining reference cycles,
 especially with `ttl_ms: None`.
 
