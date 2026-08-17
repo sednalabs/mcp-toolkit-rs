@@ -67,6 +67,7 @@ pub use mcp_toolkit_tasks as tasks;
 pub use mcp_toolkit_server as server;
 
 #[cfg(any(
+    feature = "tasks",
     feature = "server",
     feature = "server-stdio",
     feature = "server-http",
