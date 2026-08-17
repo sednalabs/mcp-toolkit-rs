@@ -56,7 +56,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::IpAddr;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -917,8 +916,8 @@ impl DpopTokenExchangeClient {
     ) -> Result<DpopBoundAccessToken, OutboundDpopError> {
         let mut nonce_override = None;
         for attempt in 0..=1 {
-            let nonce = match nonce_override.as_deref() {
-                Some(value) => Some(value),
+            let nonce = match nonce_override.as_ref() {
+                Some(value) => Some(value.clone()),
                 None => self.nonces.token_endpoint_nonce()?,
             };
             let proof = self
