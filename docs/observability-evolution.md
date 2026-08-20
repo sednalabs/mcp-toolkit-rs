@@ -32,6 +32,9 @@ Toolkit-owned responsibilities:
 - stable APIs for safe event/span context;
 - safe label/value normalization for metrics;
 - redaction policy invariants and conformance tests.
+- a closed, typed terminal tool-call event that excludes raw payload and error data;
+- canonical RFC4122 UUID v4 request correlation and closed toolkit error
+  vocabularies.
 
 Ecosystem-owned responsibilities:
 
@@ -73,7 +76,21 @@ Boundary rules:
 - error messages are sanitized and redacted before emission;
 - secret-bearing fields such as tokens, secrets, authorization headers, and
   database URLs are masked;
-- context identifiers are sanitized and length-bounded.
+- request correlation crosses the boundary only as a canonical lowercase
+  RFC4122 UUID v4 generated from a secure random source;
+- request correlation carries no identity, authentication, authorization,
+  provenance, replay, or audit authority;
+- registered tool names are validated while borrowed and length-bounded;
+- catalogue membership for a validated tool name remains a downstream server
+  integration and lifecycle-test obligation;
+- catalogue revisions cross only as fixed-width SHA-256 fingerprints;
+- error codes and classes are selected only from toolkit-owned finite enums;
+- principal and session correlation are outside v1 and require a separately
+  reviewed identity and cryptographic substrate before they can be added;
+- terminal records have no arguments, body, token, claim-set, raw-error, or
+  arbitrary-field path;
+- consuming a record guarantees at-most-once emission for that instance, not
+  exactly-once coverage of an external lifecycle.
 
 ## Migration Expectations
 
