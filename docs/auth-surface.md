@@ -99,6 +99,12 @@ issuer, and published authorization endpoints remain the public values from that
 validated document. Do not publish the private transport URL in PRM or authorization-
 server metadata.
 
+Callers can apply `OidcDiscoveryRequirements` to fetched `OidcDiscovery` before
+enabling a flow. The requirements object binds metadata to an expected issuer and
+can require selected endpoints, grant types, response types, and PKCE methods.
+Endpoint same-origin enforcement is explicit caller policy because valid OAuth
+deployments may place endpoints on a different origin from the issuer.
+
 ### PRM Endpoints
 PRM metadata is served per RFC 9728 using a canonical resource URL plus `authorization_servers`.
 Root aliases are only served if there is a single resource entry (or the resource itself is `/`).
@@ -107,6 +113,12 @@ The `resource` value should normally be the externally reachable MCP URL, not an
 loopback origin. For example, if a server listens on `127.0.0.1:8000` behind Cloudflare Tunnel but
 is published at `https://example-mcp.example.com/mcp`, the PRM `resource` should be
 `https://example-mcp.example.com/mcp`.
+
+Clients that fetch PRM from an external server can validate the decoded
+`ResourceMetadata` with `ResourceMetadataRequirements`. Resource identity is exact;
+authorization-server entries must be canonical absolute URLs; and each list can use
+non-empty, required-subset, or exact ordered-equality policy. Scope and bearer-method
+values are also checked for the RFC token shape before caller policy is evaluated.
 
 ### Resource URL Audience Migration
 
