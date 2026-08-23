@@ -19,6 +19,13 @@ use std::fmt;
 use std::net::SocketAddr;
 use url::Url;
 
+mod metadata_validation;
+
+pub use metadata_validation::{
+    MetadataListRequirements, ResourceMetadataListField, ResourceMetadataRequirements,
+    ResourceMetadataValidationError,
+};
+
 pub const PRM_WELL_KNOWN_PATH: &str = "/.well-known/oauth-protected-resource";
 pub const OAUTH_AUTHZ_WELL_KNOWN_PATH: &str = "/.well-known/oauth-authorization-server";
 pub const OIDC_WELL_KNOWN_PATH: &str = "/.well-known/openid-configuration";
