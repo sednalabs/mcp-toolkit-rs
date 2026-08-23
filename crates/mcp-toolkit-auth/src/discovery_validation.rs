@@ -372,12 +372,14 @@ fn validate_capability_requirements(
         return Ok(());
     };
     let mut exact_seen = HashSet::new();
-    if exact
+    for value in exact {
+        if !valid_capability(value) || !exact_seen.insert(value.as_str()) {
+            return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+        }
+    }
+    if required
         .iter()
-        .any(|value| !valid_capability(value) || !exact_seen.insert(value.as_str()))
-        || required
-            .iter()
-            .any(|value| !exact_seen.contains(value.as_str()))
+        .any(|value| !exact_seen.contains(value.as_str()))
     {
         return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
     }
