@@ -21,7 +21,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -125,18 +125,23 @@ struct TokenRecord<T> {
     payload: T,
     binding: TokenBinding,
     expires_at: Instant,
+    generation: u64,
 }
 
 struct StoreState<T> {
     entries: HashMap<String, TokenRecord<T>>,
-    order: VecDeque<String>,
+    expirations: BTreeSet<(Instant, u64, String)>,
+    capacity_order: BTreeSet<(u64, String)>,
+    next_generation: u64,
 }
 
 impl<T> Default for StoreState<T> {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
-            order: VecDeque::new(),
+            expirations: BTreeSet::new(),
+            capacity_order: BTreeSet::new(),
+            next_generation: 1,
         }
     }
 }
@@ -174,15 +179,18 @@ impl<T> OpaqueTokenStore<T> {
             .map_err(|_| OpaqueTokenError::Unavailable)?;
         sweep_expired(&mut state);
         let token = next_token(&state);
+        let generation = take_generation(&mut state)?;
+        let expires_at = Instant::now() + self.ttl;
         state.entries.insert(
             token.clone(),
             TokenRecord {
                 payload,
                 binding,
-                expires_at: Instant::now() + self.ttl,
+                expires_at,
+                generation,
             },
         );
-        state.order.push_back(token.clone());
+        index_record(&mut state, token.clone(), generation, expires_at);
         trim_to_capacity(&mut state, self.max_entries);
         Ok(token)
     }
@@ -234,7 +242,7 @@ impl<T> OpaqueTokenStore<T> {
             .entries
             .remove(token)
             .ok_or(OpaqueTokenError::Unavailable)?;
-        remove_from_order(&mut state.order, token);
+        remove_record_indexes(&mut state, token, record.generation, record.expires_at);
         Ok(ConsumedOpaqueToken {
             token: token.to_owned(),
             record,
@@ -264,9 +272,13 @@ impl<T> OpaqueTokenStore<T> {
         {
             return Ok(false);
         }
+        let generation = take_generation(&mut state)?;
         let token = consumed.token;
-        state.entries.insert(token.clone(), consumed.record);
-        state.order.push_back(token);
+        let mut record = consumed.record;
+        record.generation = generation;
+        let expires_at = record.expires_at;
+        state.entries.insert(token.clone(), record);
+        index_record(&mut state, token, generation, expires_at);
         trim_to_capacity(&mut state, self.max_entries);
         Ok(true)
     }
@@ -277,7 +289,7 @@ impl<T: Clone> OpaqueTokenStore<T> {
     ///
     /// # Errors
     /// Returns a closed error for missing, expired, mismatched, or unavailable
-    /// state. Successful resolution refreshes only eviction order, not expiry.
+    /// state. Successful resolution changes neither expiry nor capacity order.
     ///
     /// # Security
     /// Exact binding equality is checked before the payload is cloned.
@@ -287,7 +299,7 @@ impl<T: Clone> OpaqueTokenStore<T> {
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
         sweep_expired(&mut state);
-        let payload = {
+        {
             let record = state
                 .entries
                 .get(token)
@@ -295,10 +307,8 @@ impl<T: Clone> OpaqueTokenStore<T> {
             if record.binding != *binding {
                 return Err(OpaqueTokenError::BindingMismatch);
             }
-            record.payload.clone()
-        };
-        touch_order(&mut state.order, token);
-        Ok(payload)
+            Ok(record.payload.clone())
+        }
     }
 }
 
@@ -318,31 +328,71 @@ fn next_token<T>(state: &StoreState<T>) -> String {
     }
 }
 
+fn take_generation<T>(state: &mut StoreState<T>) -> Result<u64, OpaqueTokenError> {
+    let generation = state.next_generation;
+    state.next_generation = state
+        .next_generation
+        .checked_add(1)
+        .ok_or(OpaqueTokenError::Unavailable)?;
+    Ok(generation)
+}
+
+fn index_record<T>(state: &mut StoreState<T>, token: String, generation: u64, expires_at: Instant) {
+    state
+        .expirations
+        .insert((expires_at, generation, token.clone()));
+    state.capacity_order.insert((generation, token));
+}
+
+fn remove_record_indexes<T>(
+    state: &mut StoreState<T>,
+    token: &str,
+    generation: u64,
+    expires_at: Instant,
+) {
+    state
+        .expirations
+        .remove(&(expires_at, generation, token.to_owned()));
+    state.capacity_order.remove(&(generation, token.to_owned()));
+}
+
 fn sweep_expired<T>(state: &mut StoreState<T>) {
     let now = Instant::now();
-    state.entries.retain(|_, record| record.expires_at > now);
-    state
-        .order
-        .retain(|token| state.entries.contains_key(token));
+    while let Some((expires_at, _, _)) = state.expirations.first() {
+        if *expires_at > now {
+            break;
+        }
+        let Some((_, generation, token)) = state.expirations.pop_first() else {
+            break;
+        };
+        if state
+            .entries
+            .get(&token)
+            .is_some_and(|record| record.generation == generation)
+        {
+            state.entries.remove(&token);
+            state.capacity_order.remove(&(generation, token));
+        }
+    }
 }
 
 fn trim_to_capacity<T>(state: &mut StoreState<T>, max_entries: usize) {
     while state.entries.len() > max_entries {
-        let Some(oldest) = state.order.pop_front() else {
+        let Some((generation, token)) = state.capacity_order.pop_first() else {
             break;
         };
-        state.entries.remove(&oldest);
-    }
-}
-
-fn touch_order(order: &mut VecDeque<String>, token: &str) {
-    remove_from_order(order, token);
-    order.push_back(token.to_owned());
-}
-
-fn remove_from_order(order: &mut VecDeque<String>, token: &str) {
-    if let Some(position) = order.iter().position(|item| item == token) {
-        order.remove(position);
+        if state
+            .entries
+            .get(&token)
+            .is_some_and(|record| record.generation == generation)
+        {
+            let Some(record) = state.entries.remove(&token) else {
+                break;
+            };
+            state
+                .expirations
+                .remove(&(record.expires_at, generation, token));
+        }
     }
 }
 
@@ -406,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn capacity_evicts_least_recently_used_token() {
+    fn capacity_evicts_oldest_live_token_without_resolve_extending_retention() {
         let store = OpaqueTokenStore::new(Duration::from_secs(60), 2)
             .unwrap_or_else(|error| panic!("store should be valid: {error}"));
         let binding = TokenBinding::default();
@@ -422,11 +472,34 @@ mod tests {
             .unwrap_or_else(|error| panic!("third create should succeed: {error}"));
 
         assert_eq!(
-            store.resolve(&second, &binding),
+            store.resolve(&first, &binding),
             Err(OpaqueTokenError::InvalidOrExpired)
         );
-        assert_eq!(store.resolve(&first, &binding), Ok(1));
+        assert_eq!(store.resolve(&second, &binding), Ok(2));
         assert_eq!(store.resolve(&third, &binding), Ok(3));
+    }
+
+    #[test]
+    fn consuming_tokens_removes_all_auxiliary_index_state() {
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        for value in 0..100 {
+            let token = store
+                .create(value, binding.clone())
+                .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+            store
+                .consume(&token, &binding)
+                .unwrap_or_else(|error| panic!("consume should succeed: {error}"));
+        }
+
+        let state = store
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(state.entries.is_empty());
+        assert!(state.expirations.is_empty());
+        assert!(state.capacity_order.is_empty());
     }
 
     #[test]
