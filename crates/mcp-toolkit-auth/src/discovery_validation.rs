@@ -162,7 +162,9 @@ impl OidcDiscoveryRequirements {
     }
 
     /// Requires the advertised response-type list to contain exactly these
-    /// values, compared as an order-independent set.
+    /// values, compared as an order-independent set. Each response type may
+    /// contain a space-delimited set of response names; names within one value
+    /// are also compared without regard to order.
     ///
     /// An empty list explicitly requires an advertised, empty list; an omitted
     /// metadata field does not satisfy this policy. Values are validated when
@@ -366,25 +368,29 @@ fn validate_capability_requirements(
     exact: Option<&[String]>,
 ) -> Result<(), OidcDiscoveryValidationError> {
     let mut seen = HashSet::new();
-    if required
-        .iter()
-        .any(|value| !valid_capability(value) || !seen.insert(value.as_str()))
-    {
-        return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+    for value in required {
+        let Some(canonical) = canonical_capability(field, value) else {
+            return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+        };
+        if !seen.insert(canonical) {
+            return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+        }
     }
     let Some(exact) = exact else {
         return Ok(());
     };
     let mut exact_seen = HashSet::new();
     for value in exact {
-        if !valid_capability(value) || !exact_seen.insert(value.as_str()) {
+        let Some(canonical) = canonical_capability(field, value) else {
+            return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+        };
+        if !exact_seen.insert(canonical) {
             return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
         }
     }
-    if let Some(value) = required
-        .iter()
-        .find(|value| !exact_seen.contains(value.as_str()))
-    {
+    if let Some(value) = required.iter().find(|value| {
+        canonical_capability(field, value).is_some_and(|canonical| !exact_seen.contains(&canonical))
+    }) {
         return Err(
             OidcDiscoveryValidationError::RequiredCapabilityExcludedByExactPolicy {
                 field,
@@ -410,15 +416,18 @@ fn validate_capabilities(
     };
     let mut seen = HashSet::new();
     for (index, value) in advertised.iter().enumerate() {
-        if !valid_capability(value) {
+        let Some(canonical) = canonical_capability(field, value) else {
             return Err(OidcDiscoveryValidationError::InvalidCapabilityValue { field, index });
-        }
-        if !seen.insert(value.as_str()) {
+        };
+        if !seen.insert(canonical) {
             return Err(OidcDiscoveryValidationError::DuplicateCapabilityValue { field, index });
         }
     }
     for required_value in required {
-        if !seen.contains(required_value.as_str()) {
+        let Some(canonical) = canonical_capability(field, required_value) else {
+            return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+        };
+        if !seen.contains(&canonical) {
             return Err(OidcDiscoveryValidationError::MissingRequiredCapability {
                 field,
                 value: required_value.clone(),
@@ -426,17 +435,25 @@ fn validate_capabilities(
         }
     }
     if let Some(exact) = exact {
-        let exact_seen: HashSet<&str> = exact.iter().map(String::as_str).collect();
-        if let Some(value) = advertised
-            .iter()
-            .find(|value| !exact_seen.contains(value.as_str()))
-        {
+        let mut exact_seen = HashSet::new();
+        for value in exact {
+            let Some(canonical) = canonical_capability(field, value) else {
+                return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+            };
+            exact_seen.insert(canonical);
+        }
+        if let Some(value) = advertised.iter().find(|value| {
+            canonical_capability(field, value)
+                .is_some_and(|canonical| !exact_seen.contains(&canonical))
+        }) {
             return Err(OidcDiscoveryValidationError::UnexpectedCapability {
                 field,
                 value: value.clone(),
             });
         }
-        if let Some(value) = exact.iter().find(|value| !seen.contains(value.as_str())) {
+        if let Some(value) = exact.iter().find(|value| {
+            canonical_capability(field, value).is_some_and(|canonical| !seen.contains(&canonical))
+        }) {
             return Err(OidcDiscoveryValidationError::MissingRequiredCapability {
                 field,
                 value: value.clone(),
@@ -444,6 +461,25 @@ fn validate_capabilities(
         }
     }
     Ok(())
+}
+
+fn canonical_capability(field: &'static str, value: &str) -> Option<String> {
+    if field == "response_types_supported" {
+        return canonical_response_type(value);
+    }
+    valid_capability(value).then(|| value.to_string())
+}
+
+fn canonical_response_type(value: &str) -> Option<String> {
+    let mut tokens = value.split(' ').collect::<Vec<_>>();
+    if tokens.is_empty() || tokens.iter().any(|token| !valid_capability(token)) {
+        return None;
+    }
+    tokens.sort_unstable();
+    if tokens.windows(2).any(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+    Some(tokens.join(" "))
 }
 
 fn valid_capability(value: &str) -> bool {
@@ -622,6 +658,108 @@ mod tests {
             requirements().validate(&malformed),
             Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
                 field: "response_types_supported",
+                index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn response_type_composites_compare_without_inner_order() {
+        let mut advertised = metadata();
+        advertised.response_types_supported = Some(vec!["id_token token".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_response_types(["token id_token"]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
+    }
+
+    #[test]
+    fn exact_response_type_policy_compares_canonical_composites() {
+        let mut advertised = metadata();
+        advertised.response_types_supported = Some(vec!["id_token token".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_response_types(["token id_token"]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
+    }
+
+    #[test]
+    fn response_type_policy_rejects_duplicate_canonical_composites() {
+        let mut advertised = metadata();
+        advertised.response_types_supported = Some(vec![
+            "id_token token".to_string(),
+            "token id_token".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_response_types(["id_token token"]);
+
+        assert_eq!(
+            requirements.validate(&advertised),
+            Err(OidcDiscoveryValidationError::DuplicateCapabilityValue {
+                field: "response_types_supported",
+                index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn response_type_policy_rejects_duplicate_canonical_requirements() {
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_response_types(["id_token token", "token id_token"]);
+
+        assert_eq!(
+            requirements.validate(&metadata()),
+            Err(OidcDiscoveryValidationError::InvalidRequirements(
+                "response_types_supported"
+            ))
+        );
+    }
+
+    #[test]
+    fn response_type_policy_rejects_malformed_composite_spacing_and_tokens() {
+        for malformed in [
+            "",
+            " id_token token",
+            "id_token token ",
+            "id_token  token",
+            "id_token\ttoken",
+            "id_token\u{00a0}token",
+            "id_token token token",
+        ] {
+            let mut advertised = metadata();
+            advertised.response_types_supported = Some(vec![malformed.to_string()]);
+            let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+                .with_required_response_types(["id_token token"]);
+
+            assert_eq!(
+                requirements.validate(&advertised),
+                Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
+                    field: "response_types_supported",
+                    index: 0,
+                }),
+                "malformed response type: {malformed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_and_pkce_capabilities_retain_scalar_whitespace_rejection() {
+        let mut grant = metadata();
+        grant.grant_types_supported = Some(vec!["authorization_code device_code".to_string()]);
+        assert_eq!(
+            requirements().validate(&grant),
+            Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
+                field: "grant_types_supported",
+                index: 0,
+            })
+        );
+
+        let mut pkce = metadata();
+        pkce.code_challenge_methods_supported = Some(vec!["S256 plain".to_string()]);
+        assert_eq!(
+            requirements().validate(&pkce),
+            Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
+                field: "code_challenge_methods_supported",
                 index: 0,
             })
         );
