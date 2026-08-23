@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -38,7 +38,8 @@ pub struct TokenBinding {
 impl TokenBinding {
     /// Creates a binding from optional session and principal identifiers.
     ///
-    /// Blank identifiers are normalized to absent bindings.
+    /// Empty identifiers are normalized to absent bindings. Non-empty values,
+    /// including leading or trailing whitespace, are preserved exactly.
     #[must_use]
     pub fn new(session_id: Option<&str>, principal: Option<&str>) -> Self {
         Self {
@@ -98,6 +99,7 @@ pub struct OpaqueTokenStats {
 pub struct ConsumedOpaqueToken<T> {
     token: String,
     record: TokenRecord<T>,
+    origin: Arc<()>,
 }
 
 impl<T> ConsumedOpaqueToken<T> {
@@ -118,6 +120,7 @@ impl<T> ConsumedOpaqueToken<T> {
 pub struct OpaqueTokenStore<T> {
     ttl: Duration,
     max_entries: usize,
+    origin: Arc<()>,
     inner: Mutex<StoreState<T>>,
 }
 
@@ -159,6 +162,7 @@ impl<T> OpaqueTokenStore<T> {
         Ok(Self {
             ttl,
             max_entries,
+            origin: Arc::new(()),
             inner: Mutex::new(StoreState::default()),
         })
     }
@@ -167,7 +171,9 @@ impl<T> OpaqueTokenStore<T> {
     ///
     /// # Errors
     /// Returns [`OpaqueTokenError::Unavailable`] if synchronized state is
-    /// poisoned.
+    /// poisoned or secure randomness is unavailable. Returns
+    /// [`OpaqueTokenError::InvalidConfiguration`] when the configured TTL
+    /// cannot be represented from the current monotonic instant.
     ///
     /// # Security
     /// The returned token carries no payload or binding data. Callers must avoid
@@ -178,9 +184,11 @@ impl<T> OpaqueTokenStore<T> {
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
         sweep_expired(&mut state);
-        let token = next_token(&state);
+        let token = next_token(&state)?;
         let generation = take_generation(&mut state)?;
-        let expires_at = Instant::now() + self.ttl;
+        let expires_at = Instant::now()
+            .checked_add(self.ttl)
+            .ok_or(OpaqueTokenError::InvalidConfiguration)?;
         state.entries.insert(
             token.clone(),
             TokenRecord {
@@ -246,13 +254,14 @@ impl<T> OpaqueTokenStore<T> {
         Ok(ConsumedOpaqueToken {
             token: token.to_owned(),
             record,
+            origin: Arc::clone(&self.origin),
         })
     }
 
     /// Restores a consumed reservation if its original lifetime remains valid.
     ///
-    /// Returns `false` if the token expired or another record already occupies
-    /// the same token identity.
+    /// Returns `false` if the token expired, came from a different store, or
+    /// another record already occupies the same token identity.
     ///
     /// # Errors
     /// Returns [`OpaqueTokenError::Unavailable`] if synchronized state is
@@ -267,7 +276,8 @@ impl<T> OpaqueTokenStore<T> {
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
         sweep_expired(&mut state);
-        if consumed.record.expires_at <= Instant::now()
+        if !Arc::ptr_eq(&consumed.origin, &self.origin)
+            || consumed.record.expires_at <= Instant::now()
             || state.entries.contains_key(&consumed.token)
         {
             return Ok(false);
@@ -314,16 +324,19 @@ impl<T: Clone> OpaqueTokenStore<T> {
 
 fn normalize_binding(value: Option<&str>) -> Option<String> {
     value
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
 
-fn next_token<T>(state: &StoreState<T>) -> String {
+fn next_token<T>(state: &StoreState<T>) -> Result<String, OpaqueTokenError> {
     loop {
-        let token = Uuid::new_v4().to_string();
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).map_err(|_| OpaqueTokenError::Unavailable)?;
+        random[6] = (random[6] & 0x0f) | 0x40;
+        random[8] = (random[8] & 0x3f) | 0x80;
+        let token = Uuid::from_bytes(random).to_string();
         if !state.entries.contains_key(&token) {
-            return token;
+            return Ok(token);
         }
     }
 }
@@ -401,6 +414,7 @@ mod tests {
     use super::{OpaqueTokenError, OpaqueTokenStore, TokenBinding};
     use std::thread;
     use std::time::Duration;
+    use uuid::Uuid;
 
     #[test]
     fn token_is_bound_and_consumed_once() {
@@ -426,6 +440,30 @@ mod tests {
             store.consume(&token, &owner),
             Err(OpaqueTokenError::InvalidOrExpired)
         ));
+        assert_eq!(
+            Uuid::parse_str(&token)
+                .expect("token should be a UUID")
+                .get_version_num(),
+            4
+        );
+    }
+
+    #[test]
+    fn binding_preserves_nonempty_identifiers_exactly() {
+        let spaced = TokenBinding::new(Some("session-a "), Some(" principal-a"));
+        let unspaced = TokenBinding::new(Some("session-a"), Some("principal-a"));
+        assert_ne!(spaced, unspaced);
+
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let token = store
+            .create("payload", spaced.clone())
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        assert_eq!(
+            store.consume(&token, &unspaced).err(),
+            Some(OpaqueTokenError::BindingMismatch)
+        );
+        assert!(store.consume(&token, &spaced).is_ok());
     }
 
     #[test]
@@ -451,6 +489,27 @@ mod tests {
         thread::sleep(Duration::from_millis(35));
         assert_eq!(
             store.resolve(&token, &owner),
+            Err(OpaqueTokenError::InvalidOrExpired)
+        );
+    }
+
+    #[test]
+    fn restoration_is_bound_to_the_originating_store() {
+        let first = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("first store should be valid: {error}"));
+        let second = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("second store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        let token = first
+            .create(7, binding.clone())
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        let consumed = first
+            .consume(&token, &binding)
+            .unwrap_or_else(|error| panic!("consume should succeed: {error}"));
+
+        assert!(!second.restore(consumed).unwrap_or(true));
+        assert_eq!(
+            second.resolve(&token, &binding),
             Err(OpaqueTokenError::InvalidOrExpired)
         );
     }
@@ -510,6 +569,12 @@ mod tests {
         );
         assert_eq!(
             OpaqueTokenStore::<()>::new(Duration::from_secs(1), 0).err(),
+            Some(OpaqueTokenError::InvalidConfiguration)
+        );
+        let store = OpaqueTokenStore::<()>::new(Duration::MAX, 1)
+            .unwrap_or_else(|error| panic!("nonzero limit is accepted initially: {error}"));
+        assert_eq!(
+            store.create((), TokenBinding::default()).err(),
             Some(OpaqueTokenError::InvalidConfiguration)
         );
     }
