@@ -183,7 +183,7 @@ impl<T> OpaqueTokenStore<T> {
             .inner
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
-        sweep_expired(&mut state);
+        sweep_expired(&mut state, Instant::now());
         let token = next_token(&state)?;
         let generation = take_generation(&mut state)?;
         let expires_at = Instant::now()
@@ -213,7 +213,7 @@ impl<T> OpaqueTokenStore<T> {
             .inner
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
-        sweep_expired(&mut state);
+        sweep_expired(&mut state, Instant::now());
         Ok(OpaqueTokenStats {
             entries: state.entries.len(),
             max_entries: self.max_entries,
@@ -238,7 +238,10 @@ impl<T> OpaqueTokenStore<T> {
             .inner
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
-        sweep_expired(&mut state);
+        sweep_expired(&mut state, Instant::now());
+        if remove_target_if_expired(&mut state, token, Instant::now()) {
+            return Err(OpaqueTokenError::InvalidOrExpired);
+        }
         let record = state
             .entries
             .get(token)
@@ -275,7 +278,7 @@ impl<T> OpaqueTokenStore<T> {
             .inner
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
-        sweep_expired(&mut state);
+        sweep_expired(&mut state, Instant::now());
         if !Arc::ptr_eq(&consumed.origin, &self.origin)
             || consumed.record.expires_at <= Instant::now()
             || state.entries.contains_key(&consumed.token)
@@ -308,7 +311,10 @@ impl<T: Clone> OpaqueTokenStore<T> {
             .inner
             .lock()
             .map_err(|_| OpaqueTokenError::Unavailable)?;
-        sweep_expired(&mut state);
+        sweep_expired(&mut state, Instant::now());
+        if remove_target_if_expired(&mut state, token, Instant::now()) {
+            return Err(OpaqueTokenError::InvalidOrExpired);
+        }
         {
             let record = state
                 .entries
@@ -369,8 +375,7 @@ fn remove_record_indexes<T>(
     state.capacity_order.remove(&(generation, token.to_owned()));
 }
 
-fn sweep_expired<T>(state: &mut StoreState<T>) {
-    let now = Instant::now();
+fn sweep_expired<T>(state: &mut StoreState<T>, now: Instant) {
     while let Some((expires_at, _, _)) = state.expirations.first() {
         if *expires_at > now {
             break;
@@ -387,6 +392,20 @@ fn sweep_expired<T>(state: &mut StoreState<T>) {
             state.capacity_order.remove(&(generation, token));
         }
     }
+}
+
+fn remove_target_if_expired<T>(state: &mut StoreState<T>, token: &str, now: Instant) -> bool {
+    let Some((generation, expires_at)) = state
+        .entries
+        .get(token)
+        .filter(|record| record.expires_at <= now)
+        .map(|record| (record.generation, record.expires_at))
+    else {
+        return false;
+    };
+    state.entries.remove(token);
+    remove_record_indexes(state, token, generation, expires_at);
+    true
 }
 
 fn trim_to_capacity<T>(state: &mut StoreState<T>, max_entries: usize) {
@@ -411,7 +430,9 @@ fn trim_to_capacity<T>(state: &mut StoreState<T>, max_entries: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpaqueTokenError, OpaqueTokenStore, TokenBinding};
+    use super::{
+        remove_target_if_expired, sweep_expired, OpaqueTokenError, OpaqueTokenStore, TokenBinding,
+    };
     use std::thread;
     use std::time::Duration;
     use uuid::Uuid;
@@ -556,6 +577,31 @@ mod tests {
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(state.entries.is_empty());
+        assert!(state.expirations.is_empty());
+        assert!(state.capacity_order.is_empty());
+    }
+
+    #[test]
+    fn target_expiry_is_rechecked_after_an_earlier_sweep_boundary() {
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        let token = store
+            .create(7, binding)
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        let mut state = store
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let expires_at = state.entries[&token].expires_at;
+        let before_expiry = expires_at
+            .checked_sub(Duration::from_nanos(1))
+            .expect("expiry should have a preceding instant");
+
+        sweep_expired(&mut state, before_expiry);
+        assert!(state.entries.contains_key(&token));
+        assert!(remove_target_if_expired(&mut state, &token, expires_at));
         assert!(state.entries.is_empty());
         assert!(state.expirations.is_empty());
         assert!(state.capacity_order.is_empty());
