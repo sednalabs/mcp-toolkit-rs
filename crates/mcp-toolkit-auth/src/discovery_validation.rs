@@ -271,9 +271,7 @@ fn validate_url(
 }
 
 fn same_origin(left: &Url, right: &Url) -> bool {
-    left.scheme() == right.scheme()
-        && left.host_str() == right.host_str()
-        && left.port_or_known_default() == right.port_or_known_default()
+    left.origin() == right.origin()
 }
 
 fn validate_requirement_values(
