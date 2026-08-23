@@ -313,6 +313,10 @@ pub enum OidcDiscoveryValidationError {
     MissingCapabilityField(&'static str),
     #[error("OIDC discovery metadata field {field} is missing required value {value}")]
     MissingRequiredCapability { field: &'static str, value: String },
+    #[error(
+        "OIDC discovery requirement for {field} excludes required value {value} from its exact set"
+    )]
+    RequiredCapabilityExcludedByExactPolicy { field: &'static str, value: String },
     #[error("OIDC discovery metadata field {field} contains unexpected value {value}")]
     UnexpectedCapability { field: &'static str, value: String },
 }
@@ -377,11 +381,16 @@ fn validate_capability_requirements(
             return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
         }
     }
-    if required
+    if let Some(value) = required
         .iter()
-        .any(|value| !exact_seen.contains(value.as_str()))
+        .find(|value| !exact_seen.contains(value.as_str()))
     {
-        return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+        return Err(
+            OidcDiscoveryValidationError::RequiredCapabilityExcludedByExactPolicy {
+                field,
+                value: value.clone(),
+            },
+        );
     }
     Ok(())
 }
@@ -702,6 +711,133 @@ mod tests {
     }
 
     #[test]
+    fn exact_policy_reports_required_values_excluded_by_exact_set() {
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_grant_types(["authorization_code"])
+            .with_exact_grant_types(["urn:ietf:params:oauth:grant-type:device_code"]);
+
+        assert_eq!(
+            requirements.validate(&metadata()),
+            Err(
+                OidcDiscoveryValidationError::RequiredCapabilityExcludedByExactPolicy {
+                    field: "grant_types_supported",
+                    value: "authorization_code".to_string(),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn exact_policy_rejects_duplicate_requirements_for_every_capability_field() {
+        fn with_exact_grant_types(
+            requirements: OidcDiscoveryRequirements,
+            values: Vec<&'static str>,
+        ) -> OidcDiscoveryRequirements {
+            requirements.with_exact_grant_types(values)
+        }
+
+        fn with_exact_response_types(
+            requirements: OidcDiscoveryRequirements,
+            values: Vec<&'static str>,
+        ) -> OidcDiscoveryRequirements {
+            requirements.with_exact_response_types(values)
+        }
+
+        fn with_exact_code_challenge_methods(
+            requirements: OidcDiscoveryRequirements,
+            values: Vec<&'static str>,
+        ) -> OidcDiscoveryRequirements {
+            requirements.with_exact_code_challenge_methods(values)
+        }
+
+        let cases: [
+            (
+                &str,
+                fn(OidcDiscoveryRequirements, Vec<&'static str>) -> OidcDiscoveryRequirements,
+            );
+            3
+        ] = [
+            ("grant_types_supported", with_exact_grant_types),
+            ("response_types_supported", with_exact_response_types),
+            (
+                "code_challenge_methods_supported",
+                with_exact_code_challenge_methods,
+            ),
+        ];
+
+        for (field, setter) in cases {
+            assert_eq!(
+                setter(
+                    OidcDiscoveryRequirements::new("https://issuer.example/tenant"),
+                    vec!["authorization_code", "authorization_code"],
+                )
+                .validate(&metadata()),
+                Err(OidcDiscoveryValidationError::InvalidRequirements(field))
+            );
+        }
+    }
+
+    #[test]
+    fn exact_policy_rejects_malformed_requirements_for_every_capability_field() {
+        fn with_exact_grant_types(
+            requirements: OidcDiscoveryRequirements,
+            values: Vec<&'static str>,
+        ) -> OidcDiscoveryRequirements {
+            requirements.with_exact_grant_types(values)
+        }
+
+        fn with_exact_response_types(
+            requirements: OidcDiscoveryRequirements,
+            values: Vec<&'static str>,
+        ) -> OidcDiscoveryRequirements {
+            requirements.with_exact_response_types(values)
+        }
+
+        fn with_exact_code_challenge_methods(
+            requirements: OidcDiscoveryRequirements,
+            values: Vec<&'static str>,
+        ) -> OidcDiscoveryRequirements {
+            requirements.with_exact_code_challenge_methods(values)
+        }
+
+        let cases: [
+            (
+                &str,
+                fn(OidcDiscoveryRequirements, Vec<&'static str>) -> OidcDiscoveryRequirements,
+            );
+            3
+        ] = [
+            ("grant_types_supported", with_exact_grant_types),
+            ("response_types_supported", with_exact_response_types),
+            (
+                "code_challenge_methods_supported",
+                with_exact_code_challenge_methods,
+            ),
+        ];
+
+        for (field, setter) in cases {
+            assert_eq!(
+                setter(
+                    OidcDiscoveryRequirements::new("https://issuer.example/tenant"),
+                    vec!["authorization_code", " invalid"],
+                )
+                .validate(&metadata()),
+                Err(OidcDiscoveryValidationError::InvalidRequirements(field))
+            );
+        }
+    }
+
+    #[test]
+    fn required_subset_policy_accepts_surplus_capabilities_without_exact_policy() {
+        let mut metadata = metadata();
+        metadata.response_types_supported = Some(vec!["code".to_string(), "token".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_response_types(["code"]);
+
+        assert_eq!(requirements.validate(&metadata), Ok(()));
+    }
+
+    #[test]
     fn exact_capability_policy_keeps_duplicate_rejection() {
         let mut duplicate = metadata();
         duplicate.grant_types_supported = Some(vec![
@@ -728,9 +864,12 @@ mod tests {
 
         assert_eq!(
             requirements.validate(&metadata()),
-            Err(OidcDiscoveryValidationError::InvalidRequirements(
-                "grant_types_supported"
-            ))
+            Err(
+                OidcDiscoveryValidationError::RequiredCapabilityExcludedByExactPolicy {
+                    field: "grant_types_supported",
+                    value: "authorization_code".to_string(),
+                }
+            )
         );
     }
 
