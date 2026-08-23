@@ -467,6 +467,9 @@ fn canonical_capability(field: &'static str, value: &str) -> Option<String> {
     if field == "response_types_supported" {
         return canonical_response_type(value);
     }
+    if field == "grant_types_supported" {
+        return valid_grant_type(value).then(|| value.to_string());
+    }
     valid_capability(value).then(|| value.to_string())
 }
 
@@ -490,6 +493,79 @@ fn valid_response_name(value: &str) -> bool {
                 b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'
             )
         })
+}
+
+fn valid_grant_type(value: &str) -> bool {
+    valid_grant_name(value) || valid_uri_reference(value)
+}
+
+fn valid_grant_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'
+            )
+        })
+}
+
+fn valid_uri_reference(value: &str) -> bool {
+    if value.is_empty() || !valid_uri_reference_bytes(value.as_bytes()) {
+        return false;
+    }
+    let Ok(base) = Url::parse("https://grant-type.invalid/") else {
+        return false;
+    };
+    base.join(value).is_ok()
+}
+
+fn valid_uri_reference_bytes(value: &[u8]) -> bool {
+    let mut index = 0;
+    while index < value.len() {
+        let byte = value[index];
+        if byte == b'%' {
+            if index + 2 >= value.len()
+                || !value[index + 1].is_ascii_hexdigit()
+                || !value[index + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            index += 3;
+            continue;
+        }
+        if !matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'.'
+                | b'_'
+                | b'~'
+                | b':'
+                | b'/'
+                | b'?'
+                | b'#'
+                | b'['
+                | b']'
+                | b'@'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+        ) {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }
 
 fn valid_capability(value: &str) -> bool {
@@ -794,6 +870,90 @@ mod tests {
         advertised.response_types_supported = Some(vec!["token custom_2".to_string()]);
         let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
             .with_exact_response_types(["custom_2 token"]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
+    }
+
+    #[test]
+    fn grant_type_requirements_reject_malformed_uri_reference() {
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types(["grant<script>"]);
+
+        assert_eq!(
+            requirements.validate(&metadata()),
+            Err(OidcDiscoveryValidationError::InvalidRequirements(
+                "grant_types_supported"
+            ))
+        );
+    }
+
+    #[test]
+    fn advertised_grant_types_reject_malformed_surplus_at_index() {
+        let mut advertised = metadata();
+        advertised.grant_types_supported = Some(vec![
+            "authorization_code".to_string(),
+            "grant<script>".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_grant_types(["authorization_code"]);
+
+        assert_eq!(
+            requirements.validate(&advertised),
+            Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
+                field: "grant_types_supported",
+                index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn grant_type_names_accept_standard_and_punctuation_forms() {
+        let mut advertised = metadata();
+        advertised.grant_types_supported = Some(vec![
+            "authorization_code".to_string(),
+            "client_credentials".to_string(),
+            "refresh_token".to_string(),
+            "custom-grant.v1".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types([
+                "refresh_token",
+                "custom-grant.v1",
+                "authorization_code",
+                "client_credentials",
+            ]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
+    }
+
+    #[test]
+    fn grant_type_uri_references_accept_absolute_urn_and_relative_forms() {
+        let mut advertised = metadata();
+        advertised.grant_types_supported = Some(vec![
+            "https://example.com/grants/custom".to_string(),
+            "urn:example:grant:custom".to_string(),
+            "../custom-grant".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types([
+                "../custom-grant",
+                "urn:example:grant:custom",
+                "https://example.com/grants/custom",
+            ]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
+    }
+
+    #[test]
+    fn grant_type_validation_is_isolated_from_response_and_pkce_fields() {
+        let mut advertised = metadata();
+        advertised.grant_types_supported = Some(vec!["custom-grant.v1".to_string()]);
+        advertised.response_types_supported = Some(vec!["token custom_2".to_string()]);
+        advertised.code_challenge_methods_supported = Some(vec!["S256".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types(["custom-grant.v1"])
+            .with_exact_response_types(["custom_2 token"])
+            .with_required_code_challenge_methods(["S256"]);
 
         assert_eq!(requirements.validate(&advertised), Ok(()));
     }
