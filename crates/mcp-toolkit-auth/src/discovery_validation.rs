@@ -39,7 +39,7 @@ impl OidcDiscoveryEndpoint {
         }
     }
 
-    fn value<'a>(self, metadata: &'a OidcDiscovery) -> Option<&'a str> {
+    fn value(self, metadata: &OidcDiscovery) -> Option<&str> {
         match self {
             Self::Authorization => metadata.authorization_endpoint.as_deref(),
             Self::Token => metadata.token_endpoint.as_deref(),
@@ -463,19 +463,19 @@ mod tests {
             })
         );
 
-        let mut metadata = metadata();
-        metadata.response_types_supported = None;
+        let mut missing_response = metadata();
+        missing_response.response_types_supported = None;
         assert_eq!(
-            requirements().validate(&metadata),
+            requirements().validate(&missing_response),
             Err(OidcDiscoveryValidationError::MissingCapabilityField(
                 "response_types_supported"
             ))
         );
 
-        let mut metadata = metadata();
-        metadata.code_challenge_methods_supported = Some(vec!["plain".to_string()]);
+        let mut missing_pkce = metadata();
+        missing_pkce.code_challenge_methods_supported = Some(vec!["plain".to_string()]);
         assert_eq!(
-            requirements().validate(&metadata),
+            requirements().validate(&missing_pkce),
             Err(OidcDiscoveryValidationError::MissingRequiredCapability {
                 field: "code_challenge_methods_supported",
                 value: "S256".to_string(),
