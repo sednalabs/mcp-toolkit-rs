@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 
+use iri_string::types::UriReferenceStr;
 use mcp_toolkit_http::oauth::{validate_absolute_url, UrlValidationError};
 use reqwest::Url;
 use thiserror::Error;
@@ -510,62 +511,7 @@ fn valid_grant_name(value: &str) -> bool {
 }
 
 fn valid_uri_reference(value: &str) -> bool {
-    if value.is_empty() || !valid_uri_reference_bytes(value.as_bytes()) {
-        return false;
-    }
-    let Ok(base) = Url::parse("https://grant-type.invalid/") else {
-        return false;
-    };
-    base.join(value).is_ok()
-}
-
-fn valid_uri_reference_bytes(value: &[u8]) -> bool {
-    let mut index = 0;
-    while index < value.len() {
-        let byte = value[index];
-        if byte == b'%' {
-            if index + 2 >= value.len()
-                || !value[index + 1].is_ascii_hexdigit()
-                || !value[index + 2].is_ascii_hexdigit()
-            {
-                return false;
-            }
-            index += 3;
-            continue;
-        }
-        if !matches!(
-            byte,
-            b'A'..=b'Z'
-                | b'a'..=b'z'
-                | b'0'..=b'9'
-                | b'-'
-                | b'.'
-                | b'_'
-                | b'~'
-                | b':'
-                | b'/'
-                | b'?'
-                | b'#'
-                | b'['
-                | b']'
-                | b'@'
-                | b'!'
-                | b'$'
-                | b'&'
-                | b'\''
-                | b'('
-                | b')'
-                | b'*'
-                | b'+'
-                | b','
-                | b';'
-                | b'='
-        ) {
-            return false;
-        }
-        index += 1;
-    }
-    true
+    !value.is_empty() && UriReferenceStr::new(value).is_ok()
 }
 
 fn valid_capability(value: &str) -> bool {
@@ -876,34 +822,54 @@ mod tests {
 
     #[test]
     fn grant_type_requirements_reject_malformed_uri_reference() {
-        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
-            .with_exact_grant_types(["grant<script>"]);
+        for malformed in [
+            "grant<script>",
+            ":foo",
+            "1foo:bar/second",
+            "custom[grant]",
+            "foo#bar#baz",
+            "//[::1",
+        ] {
+            let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+                .with_exact_grant_types([malformed]);
 
-        assert_eq!(
-            requirements.validate(&metadata()),
-            Err(OidcDiscoveryValidationError::InvalidRequirements(
-                "grant_types_supported"
-            ))
-        );
+            assert_eq!(
+                requirements.validate(&metadata()),
+                Err(OidcDiscoveryValidationError::InvalidRequirements(
+                    "grant_types_supported"
+                )),
+                "malformed grant URI-reference: {malformed:?}"
+            );
+        }
     }
 
     #[test]
     fn advertised_grant_types_reject_malformed_surplus_at_index() {
-        let mut advertised = metadata();
-        advertised.grant_types_supported = Some(vec![
-            "authorization_code".to_string(),
-            "grant<script>".to_string(),
-        ]);
-        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
-            .with_required_grant_types(["authorization_code"]);
+        for malformed in [
+            "grant<script>",
+            ":foo",
+            "1foo:bar/second",
+            "custom[grant]",
+            "foo#bar#baz",
+            "//[::1",
+        ] {
+            let mut advertised = metadata();
+            advertised.grant_types_supported = Some(vec![
+                "authorization_code".to_string(),
+                malformed.to_string(),
+            ]);
+            let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+                .with_required_grant_types(["authorization_code"]);
 
-        assert_eq!(
-            requirements.validate(&advertised),
-            Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
-                field: "grant_types_supported",
-                index: 1,
-            })
-        );
+            assert_eq!(
+                requirements.validate(&advertised),
+                Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
+                    field: "grant_types_supported",
+                    index: 1,
+                }),
+                "malformed advertised grant URI-reference: {malformed:?}"
+            );
+        }
     }
 
     #[test]
@@ -933,11 +899,17 @@ mod tests {
             "https://example.com/grants/custom".to_string(),
             "urn:example:grant:custom".to_string(),
             "../custom-grant".to_string(),
+            "./this:that".to_string(),
+            "//[v1.fe]/grant".to_string(),
+            "https://example.com:999999999999999999999/grant".to_string(),
         ]);
         let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
             .with_exact_grant_types([
                 "../custom-grant",
                 "urn:example:grant:custom",
+                "./this:that",
+                "//[v1.fe]/grant",
+                "https://example.com:999999999999999999999/grant",
                 "https://example.com/grants/custom",
             ]);
 
