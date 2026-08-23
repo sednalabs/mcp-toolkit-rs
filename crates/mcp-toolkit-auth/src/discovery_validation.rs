@@ -472,7 +472,7 @@ fn canonical_capability(field: &'static str, value: &str) -> Option<String> {
 
 fn canonical_response_type(value: &str) -> Option<String> {
     let mut tokens = value.split(' ').collect::<Vec<_>>();
-    if tokens.is_empty() || tokens.iter().any(|token| !valid_capability(token)) {
+    if tokens.is_empty() || tokens.iter().any(|token| !valid_response_name(token)) {
         return None;
     }
     tokens.sort_unstable();
@@ -480,6 +480,16 @@ fn canonical_response_type(value: &str) -> Option<String> {
         return None;
     }
     Some(tokens.join(" "))
+}
+
+fn valid_response_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'
+            )
+        })
 }
 
 fn valid_capability(value: &str) -> bool {
@@ -740,6 +750,64 @@ mod tests {
                 "malformed response type: {malformed:?}"
             );
         }
+    }
+
+    #[test]
+    fn response_type_requirements_reject_rfc6749_invalid_response_names() {
+        for punctuation in ["+", "%", "!", "/", "-", "."] {
+            let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+                .with_exact_response_types([format!("custom{punctuation}2")]);
+
+            assert_eq!(
+                requirements.validate(&metadata()),
+                Err(OidcDiscoveryValidationError::InvalidRequirements(
+                    "response_types_supported"
+                )),
+                "invalid response name punctuation: {punctuation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn advertised_response_types_reject_rfc6749_invalid_response_names_at_index() {
+        for punctuation in ["+", "%", "!", "/", "-", "."] {
+            let mut advertised = metadata();
+            advertised.response_types_supported =
+                Some(vec!["code".to_string(), format!("custom{punctuation}2")]);
+            let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+                .with_required_response_types(["code"]);
+
+            assert_eq!(
+                requirements.validate(&advertised),
+                Err(OidcDiscoveryValidationError::InvalidCapabilityValue {
+                    field: "response_types_supported",
+                    index: 1,
+                }),
+                "invalid response name punctuation: {punctuation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_custom_response_names_and_reordered_composites_are_accepted() {
+        let mut advertised = metadata();
+        advertised.response_types_supported = Some(vec!["token custom_2".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_response_types(["custom_2 token"]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
+    }
+
+    #[test]
+    fn grant_type_urn_punctuation_remains_accepted() {
+        let mut advertised = metadata();
+        advertised.grant_types_supported = Some(vec![
+            "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_grant_types(["urn:ietf:params:oauth:grant-type:device_code"]);
+
+        assert_eq!(requirements.validate(&advertised), Ok(()));
     }
 
     #[test]
