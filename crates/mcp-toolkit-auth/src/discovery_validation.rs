@@ -750,13 +750,10 @@ mod tests {
             requirements.with_exact_code_challenge_methods(values)
         }
 
-        let cases: [
-            (
-                &str,
-                fn(OidcDiscoveryRequirements, Vec<&'static str>) -> OidcDiscoveryRequirements,
-            );
-            3
-        ] = [
+        let cases: [(
+            &str,
+            fn(OidcDiscoveryRequirements, Vec<&'static str>) -> OidcDiscoveryRequirements,
+        ); 3] = [
             ("grant_types_supported", with_exact_grant_types),
             ("response_types_supported", with_exact_response_types),
             (
@@ -800,13 +797,10 @@ mod tests {
             requirements.with_exact_code_challenge_methods(values)
         }
 
-        let cases: [
-            (
-                &str,
-                fn(OidcDiscoveryRequirements, Vec<&'static str>) -> OidcDiscoveryRequirements,
-            );
-            3
-        ] = [
+        let cases: [(
+            &str,
+            fn(OidcDiscoveryRequirements, Vec<&'static str>) -> OidcDiscoveryRequirements,
+        ); 3] = [
             ("grant_types_supported", with_exact_grant_types),
             ("response_types_supported", with_exact_response_types),
             (
