@@ -67,6 +67,15 @@ impl OidcDiscoveryEndpoint {
 ///     .with_required_code_challenge_methods(["S256"]);
 /// let _ = requirements;
 /// ```
+///
+/// Exact policies are opt-in and compare each capability list as a set:
+/// ```
+/// use mcp_toolkit_auth::OidcDiscoveryRequirements;
+///
+/// let requirements = OidcDiscoveryRequirements::new("https://issuer.example")
+///     .with_exact_grant_types(["authorization_code"]);
+/// let _ = requirements;
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OidcDiscoveryRequirements {
     expected_issuer: String,
@@ -74,6 +83,9 @@ pub struct OidcDiscoveryRequirements {
     required_grant_types: Vec<String>,
     required_response_types: Vec<String>,
     required_code_challenge_methods: Vec<String>,
+    exact_grant_types: Option<Vec<String>>,
+    exact_response_types: Option<Vec<String>>,
+    exact_code_challenge_methods: Option<Vec<String>>,
     require_endpoint_origin_match: bool,
     allow_insecure_http: bool,
 }
@@ -87,6 +99,9 @@ impl OidcDiscoveryRequirements {
             required_grant_types: Vec::new(),
             required_response_types: Vec::new(),
             required_code_challenge_methods: Vec::new(),
+            exact_grant_types: None,
+            exact_response_types: None,
+            exact_code_challenge_methods: None,
             require_endpoint_origin_match: false,
             allow_insecure_http: false,
         }
@@ -131,6 +146,51 @@ impl OidcDiscoveryRequirements {
         self
     }
 
+    /// Requires the advertised grant-type list to contain exactly these values.
+    ///
+    /// The list is compared as a set, so its order does not matter. An empty
+    /// list explicitly requires an advertised, empty list; an omitted metadata
+    /// field does not satisfy this policy. Values are validated when
+    /// [`Self::validate`] is called.
+    pub fn with_exact_grant_types<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.exact_grant_types = Some(values.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Requires the advertised response-type list to contain exactly these
+    /// values, compared as an order-independent set.
+    ///
+    /// An empty list explicitly requires an advertised, empty list; an omitted
+    /// metadata field does not satisfy this policy. Values are validated when
+    /// [`Self::validate`] is called.
+    pub fn with_exact_response_types<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.exact_response_types = Some(values.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Requires the advertised PKCE method list to contain exactly these
+    /// values, compared as an order-independent set.
+    ///
+    /// An empty list explicitly requires an advertised, empty list; an omitted
+    /// metadata field does not satisfy this policy. Values are validated when
+    /// [`Self::validate`] is called.
+    pub fn with_exact_code_challenge_methods<I, S>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.exact_code_challenge_methods = Some(values.into_iter().map(Into::into).collect());
+        self
+    }
+
     /// Requires each advertised endpoint to share the issuer's origin.
     ///
     /// This policy is opt-in because OAuth deployments may deliberately use
@@ -156,14 +216,20 @@ impl OidcDiscoveryRequirements {
     /// Validate metadata before using its endpoints or enabling an OAuth flow.
     pub fn validate(&self, metadata: &OidcDiscovery) -> Result<(), OidcDiscoveryValidationError> {
         validate_requirement_values("required_endpoints", &self.required_endpoints)?;
-        validate_capability_requirements("grant_types_supported", &self.required_grant_types)?;
+        validate_capability_requirements(
+            "grant_types_supported",
+            &self.required_grant_types,
+            self.exact_grant_types.as_deref(),
+        )?;
         validate_capability_requirements(
             "response_types_supported",
             &self.required_response_types,
+            self.exact_response_types.as_deref(),
         )?;
         validate_capability_requirements(
             "code_challenge_methods_supported",
             &self.required_code_challenge_methods,
+            self.exact_code_challenge_methods.as_deref(),
         )?;
 
         validate_url(
@@ -201,16 +267,19 @@ impl OidcDiscoveryRequirements {
             "grant_types_supported",
             metadata.grant_types_supported.as_deref(),
             &self.required_grant_types,
+            self.exact_grant_types.as_deref(),
         )?;
         validate_capabilities(
             "response_types_supported",
             metadata.response_types_supported.as_deref(),
             &self.required_response_types,
+            self.exact_response_types.as_deref(),
         )?;
         validate_capabilities(
             "code_challenge_methods_supported",
             metadata.code_challenge_methods_supported.as_deref(),
             &self.required_code_challenge_methods,
+            self.exact_code_challenge_methods.as_deref(),
         )?;
         Ok(())
     }
@@ -244,6 +313,8 @@ pub enum OidcDiscoveryValidationError {
     MissingCapabilityField(&'static str),
     #[error("OIDC discovery metadata field {field} is missing required value {value}")]
     MissingRequiredCapability { field: &'static str, value: String },
+    #[error("OIDC discovery metadata field {field} contains unexpected value {value}")]
+    UnexpectedCapability { field: &'static str, value: String },
 }
 
 fn validate_url(
@@ -287,12 +358,26 @@ fn validate_requirement_values(
 
 fn validate_capability_requirements(
     field: &'static str,
-    values: &[String],
+    required: &[String],
+    exact: Option<&[String]>,
 ) -> Result<(), OidcDiscoveryValidationError> {
     let mut seen = HashSet::new();
-    if values
+    if required
         .iter()
         .any(|value| !valid_capability(value) || !seen.insert(value.as_str()))
+    {
+        return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
+    }
+    let Some(exact) = exact else {
+        return Ok(());
+    };
+    let mut exact_seen = HashSet::new();
+    if exact
+        .iter()
+        .any(|value| !valid_capability(value) || !exact_seen.insert(value.as_str()))
+        || required
+            .iter()
+            .any(|value| !exact_seen.contains(value.as_str()))
     {
         return Err(OidcDiscoveryValidationError::InvalidRequirements(field));
     }
@@ -303,9 +388,10 @@ fn validate_capabilities(
     field: &'static str,
     advertised: Option<&[String]>,
     required: &[String],
+    exact: Option<&[String]>,
 ) -> Result<(), OidcDiscoveryValidationError> {
     let Some(advertised) = advertised else {
-        return if required.is_empty() {
+        return if required.is_empty() && exact.is_none() {
             Ok(())
         } else {
             Err(OidcDiscoveryValidationError::MissingCapabilityField(field))
@@ -325,6 +411,24 @@ fn validate_capabilities(
             return Err(OidcDiscoveryValidationError::MissingRequiredCapability {
                 field,
                 value: required_value.clone(),
+            });
+        }
+    }
+    if let Some(exact) = exact {
+        let exact_seen: HashSet<&str> = exact.iter().map(String::as_str).collect();
+        if let Some(value) = advertised
+            .iter()
+            .find(|value| !exact_seen.contains(value.as_str()))
+        {
+            return Err(OidcDiscoveryValidationError::UnexpectedCapability {
+                field,
+                value: value.clone(),
+            });
+        }
+        if let Some(value) = exact.iter().find(|value| !seen.contains(value.as_str())) {
+            return Err(OidcDiscoveryValidationError::MissingRequiredCapability {
+                field,
+                value: value.clone(),
             });
         }
     }
@@ -506,6 +610,125 @@ mod tests {
                 field: "response_types_supported",
                 index: 0,
             })
+        );
+    }
+
+    #[test]
+    fn exact_capability_policy_accepts_the_same_sets_in_a_different_order() {
+        let mut reordered = metadata();
+        reordered.grant_types_supported = Some(vec![
+            "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+            "authorization_code".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types([
+                "authorization_code",
+                "urn:ietf:params:oauth:grant-type:device_code",
+            ])
+            .with_exact_response_types(["code"])
+            .with_exact_code_challenge_methods(["S256"]);
+
+        assert_eq!(requirements.validate(&reordered), Ok(()));
+    }
+
+    #[test]
+    fn exact_capability_policy_rejects_surplus_values() {
+        let mut extra = metadata();
+        extra.response_types_supported = Some(vec!["code".to_string(), "token".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_response_types(["code"]);
+
+        assert_eq!(
+            requirements.validate(&extra),
+            Err(OidcDiscoveryValidationError::UnexpectedCapability {
+                field: "response_types_supported",
+                value: "token".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn exact_capability_policy_rejects_missing_values() {
+        let mut missing = metadata();
+        missing.grant_types_supported = Some(vec!["authorization_code".to_string()]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types([
+                "authorization_code",
+                "urn:ietf:params:oauth:grant-type:device_code",
+            ]);
+
+        assert_eq!(
+            requirements.validate(&missing),
+            Err(OidcDiscoveryValidationError::MissingRequiredCapability {
+                field: "grant_types_supported",
+                value: "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn exact_capability_policy_distinguishes_empty_from_absent() {
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_response_types([] as [&str; 0]);
+
+        let mut empty = metadata();
+        empty.response_types_supported = Some(Vec::new());
+        assert_eq!(requirements.validate(&empty), Ok(()));
+
+        let mut absent = metadata();
+        absent.response_types_supported = None;
+        assert_eq!(
+            requirements.validate(&absent),
+            Err(OidcDiscoveryValidationError::MissingCapabilityField(
+                "response_types_supported"
+            ))
+        );
+    }
+
+    #[test]
+    fn exact_capability_policy_rejects_empty_list_with_advertised_value() {
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_code_challenge_methods([] as [&str; 0]);
+
+        assert_eq!(
+            requirements.validate(&metadata()),
+            Err(OidcDiscoveryValidationError::UnexpectedCapability {
+                field: "code_challenge_methods_supported",
+                value: "S256".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn exact_capability_policy_keeps_duplicate_rejection() {
+        let mut duplicate = metadata();
+        duplicate.grant_types_supported = Some(vec![
+            "authorization_code".to_string(),
+            "authorization_code".to_string(),
+        ]);
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_exact_grant_types(["authorization_code"]);
+
+        assert_eq!(
+            requirements.validate(&duplicate),
+            Err(OidcDiscoveryValidationError::DuplicateCapabilityValue {
+                field: "grant_types_supported",
+                index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_exact_requirement_is_rejected_before_metadata_validation() {
+        let requirements = OidcDiscoveryRequirements::new("https://issuer.example/tenant")
+            .with_required_grant_types(["authorization_code"])
+            .with_exact_grant_types(["urn:ietf:params:oauth:grant-type:device_code"]);
+
+        assert_eq!(
+            requirements.validate(&metadata()),
+            Err(OidcDiscoveryValidationError::InvalidRequirements(
+                "grant_types_supported"
+            ))
         );
     }
 
