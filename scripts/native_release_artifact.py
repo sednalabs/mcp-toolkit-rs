@@ -732,6 +732,8 @@ def verify(
     manifest: Path,
     lockfile: Path,
 ) -> dict[str, object]:
+    if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe"):
+        binary_name += ".exe"
     require_candidate(candidate)
     require_source(source_repository, source_event, source_ref, source_tree)
     sidecar = archive.with_name(archive.name + ".sha256")
@@ -923,6 +925,8 @@ def validate_authorization_archive(
     candidate: str,
     target: str,
 ) -> None:
+    if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe"):
+        binary_name += ".exe"
     if not isinstance(archive, dict) or set(archive) != {
         "archive",
         "archive_sha256",
