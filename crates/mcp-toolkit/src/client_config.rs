@@ -280,3 +280,52 @@ impl Default for ClientConfigOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn project(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("mcp-toolkit-client-config-{name}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = 'demo-server'\nversion = '0.1.0'\n",
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn defaults_preserve_legacy_profile_and_local_binary() {
+        let root = project("legacy");
+        let output = render_client_config(&ClientConfigOptions {
+            root: root.clone(),
+            transport: Some(ClientConfigTransport::Stdio),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(output.contains("target/release/demo-server"));
+        assert!(output.contains("EXAMPLE_MCP_TOOL_PROFILE = \"read_only\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_and_environment_overrides_are_rendered() {
+        let root = project("overrides");
+        let output = render_client_config(&ClientConfigOptions {
+            root: root.clone(),
+            transport: Some(ClientConfigTransport::Stdio),
+            installed: true,
+            env_key: Some("DEMO_PROFILE".into()),
+            env_value: Some("operator".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(output.contains("command = \"demo-server\""));
+        assert!(output.contains("DEMO_PROFILE = \"operator\""));
+        let _ = fs::remove_dir_all(root);
+    }
+}

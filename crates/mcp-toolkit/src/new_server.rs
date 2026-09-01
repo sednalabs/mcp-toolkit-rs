@@ -660,6 +660,12 @@ mod tests {
     }
 
     #[test]
+    fn profile_environment_key_is_derived_from_package_name() {
+        assert_eq!(profile_env_key("demo-server"), "DEMO_SERVER_TOOL_PROFILE");
+        assert_eq!(profile_env_key("analytics_v2"), "ANALYTICS_V2_TOOL_PROFILE");
+    }
+
+    #[test]
     fn output_dir_validation_rejects_escape_paths() {
         for path in [Path::new(""), Path::new(".."), Path::new("../server")] {
             assert!(
