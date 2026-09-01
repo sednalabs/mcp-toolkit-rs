@@ -62,10 +62,16 @@ pub struct ClientConfigOptions {
     pub transport: Option<ClientConfigTransport>,
     /// Optional stdio command path. Defaults to `<root>/target/release/<package>`.
     pub command: Option<String>,
+    /// Use the installed command name resolved from `PATH`.
+    pub installed: bool,
     /// Optional hosted MCP URL. Defaults to the hosted starter local URL.
     pub url: Option<String>,
     /// Tool profile value for stdio process environment configuration.
     pub profile: String,
+    /// Optional stdio environment variable name.
+    pub env_key: Option<String>,
+    /// Optional stdio environment variable value.
+    pub env_value: Option<String>,
 }
 
 /// Errors returned while rendering client configuration.
@@ -170,6 +176,9 @@ fn render_stdio_config(
     canonical_root: &Path,
 ) -> String {
     let command = options.command.clone().unwrap_or_else(|| {
+        if options.installed {
+            return package_name.to_string();
+        }
         canonical_root
             .join("target")
             .join("release")
@@ -183,8 +192,8 @@ fn render_stdio_config(
         toml_string(server_name),
         toml_string_value(&command),
         toml_string(server_name),
-        DEFAULT_PROFILE_ENV,
-        toml_string_value(&options.profile),
+        options.env_key.as_deref().unwrap_or(DEFAULT_PROFILE_ENV),
+        toml_string_value(options.env_value.as_deref().unwrap_or(&options.profile)),
     )
 }
 
@@ -263,8 +272,11 @@ impl Default for ClientConfigOptions {
             server_name: None,
             transport: None,
             command: None,
+            installed: false,
             url: None,
             profile: READ_ONLY_PROFILE_KEY.to_string(),
+            env_key: None,
+            env_value: None,
         }
     }
 }

@@ -218,12 +218,15 @@ fn run_client_config(args: &[String]) -> Result<(), String> {
             "--command" => {
                 options.command = Some(take_value(args, &mut index, "--command")?);
             }
+            "--installed" | "--path" => options.installed = true,
             "--url" => {
                 options.url = Some(take_value(args, &mut index, "--url")?);
             }
             "--profile" => {
                 options.profile = take_value(args, &mut index, "--profile")?;
             }
+            "--env-key" => options.env_key = Some(take_value(args, &mut index, "--env-key")?),
+            "--env-value" => options.env_value = Some(take_value(args, &mut index, "--env-value")?),
             "--help" | "-h" => {
                 print_client_config_help();
                 return Ok(());
@@ -757,6 +760,9 @@ fn print_client_config_help() {
     println!("      --name <server-name>  MCP client server name (default: Cargo package name)");
     println!("      --transport <kind>    stdio or http (default: infer from generated files)");
     println!("      --command <path>      Stdio command path (default: target/release/<package>)");
+    println!("      --installed            Use the package binary resolved from PATH");
+    println!("      --env-key <name>       Override the stdio environment variable name");
+    println!("      --env-value <value>    Override the stdio environment variable value");
     println!(
         "      --url <url>           Hosted HTTP MCP URL (default: http://127.0.0.1:9411/mcp)"
     );
