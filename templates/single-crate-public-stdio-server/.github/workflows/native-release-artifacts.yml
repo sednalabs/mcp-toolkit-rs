@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  build-native-linux:
+  build-native:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -27,6 +27,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
     env:
       BINARY_NAME: single-crate-public-stdio-server
       CARGO_CYCLONEDX_VERSION: 0.5.9
@@ -92,9 +98,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          binary_path="target/$TARGET/release/$BINARY_NAME"
+          if [[ "$TARGET" == *windows* ]]; then binary_path+=".exe"; fi
           mkdir -p release-inputs
           python3 scripts/native_release_artifact.py capture \
-            --binary "target/$TARGET/release/$BINARY_NAME" \
+            --binary "$binary_path" \
             --inventory-output release-inputs/tool-inventory.json \
             --schema-output release-inputs/tool-schema.json
 
@@ -117,11 +125,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          binary_path="target/$TARGET/release/$BINARY_NAME"
+          binary_name="$BINARY_NAME"
+          if [[ "$TARGET" == *windows* ]]; then binary_path+=".exe"; binary_name+=".exe"; fi
           source_tree=$(git rev-parse HEAD^{tree})
           mkdir -p dist
           archive=$(python3 scripts/native_release_artifact.py package \
-            --binary "target/$TARGET/release/$BINARY_NAME" \
-            --binary-name "$BINARY_NAME" \
+            --binary "$binary_path" \
+            --binary-name "$binary_name" \
             --target "$TARGET" \
             --candidate "$GITHUB_SHA" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -153,14 +164,14 @@ jobs:
         # actions/upload-artifact v7
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-linux-${{ matrix.target }}-${{ github.sha }}
+          name: native-${{ matrix.target }}-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
 
-  verify-native-linux:
+  verify-native:
     name: Verify cross-architecture release contract
-    needs: build-native-linux
+    needs: build-native
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -191,7 +202,7 @@ jobs:
         # actions/download-artifact v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: native-linux-*-${{ github.sha }}
+          pattern: native-*-${{ github.sha }}
           path: downloaded
           merge-multiple: true
 
@@ -203,11 +214,20 @@ jobs:
           source_tree=$(git rev-parse HEAD^{tree})
           x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
           arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+          mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+          mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+          windows_archive="downloaded/$BINARY_NAME.exe-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
           python3 scripts/native_release_artifact.py compare \
             --archive "$x86_archive" \
             --target x86_64-unknown-linux-gnu \
             --archive "$arm_archive" \
             --target aarch64-unknown-linux-gnu \
+            --archive "$mac_x86_archive" \
+            --target x86_64-apple-darwin \
+            --archive "$mac_arm_archive" \
+            --target aarch64-apple-darwin \
+            --archive "$windows_archive" \
+            --target x86_64-pc-windows-msvc \
             --binary-name "$BINARY_NAME" \
             --candidate "$GITHUB_SHA" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -218,7 +238,7 @@ jobs:
             --manifest Cargo.toml \
             --lockfile Cargo.lock \
             --output native-release-verification.json
-          test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 4
+          test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 10
 
       - name: Upload SHA-qualified verification report
         # actions/upload-artifact v7
@@ -229,11 +249,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  attest-native-linux:
+  attest-native:
     name: Attest verified trusted release artifacts
     needs:
-      - build-native-linux
-      - verify-native-linux
+      - build-native
+      - verify-native
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -269,7 +289,7 @@ jobs:
         # actions/download-artifact v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: native-linux-*-${{ github.sha }}
+          pattern: native-*-${{ github.sha }}
           path: downloaded
           merge-multiple: true
 
@@ -286,11 +306,20 @@ jobs:
           source_tree=$(git rev-parse HEAD^{tree})
           x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
           arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+          mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+          mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+          windows_archive="downloaded/$BINARY_NAME.exe-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
           python3 scripts/native_release_artifact.py compare \
             --archive "$x86_archive" \
             --target x86_64-unknown-linux-gnu \
             --archive "$arm_archive" \
             --target aarch64-unknown-linux-gnu \
+            --archive "$mac_x86_archive" \
+            --target x86_64-apple-darwin \
+            --archive "$mac_arm_archive" \
+            --target aarch64-apple-darwin \
+            --archive "$windows_archive" \
+            --target x86_64-pc-windows-msvc \
             --binary-name "$BINARY_NAME" \
             --candidate "$GITHUB_SHA" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -302,7 +331,7 @@ jobs:
             --lockfile Cargo.lock \
             --output trusted-verification.json
           cmp trusted-verification.json downloaded/native-release-verification.json
-          test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+          test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
           python3 scripts/native_release_artifact.py authorize \
             --verification trusted-verification.json \
             --binary-name "$BINARY_NAME" \

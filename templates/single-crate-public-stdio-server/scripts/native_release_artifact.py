@@ -487,7 +487,7 @@ def sbom_release_bindings(
     runtime: dict[str, str],
     dependency_count: int,
 ) -> dict[str, str]:
-    return {
+    bindings = {
         "mcp-toolkit.release.source.eligible": str(
             release_source_eligible(source_event, source_ref, source_main_proven)
         ).lower(),
@@ -497,8 +497,6 @@ def sbom_release_bindings(
         "mcp-toolkit.release.dependency.count": str(dependency_count),
         "mcp-toolkit.release.lockfile.sha256": lockfile_digest,
         "mcp-toolkit.release.manifest.sha256": manifest_digest,
-        "mcp-toolkit.release.runtime.interpreter": runtime["interpreter"],
-        "mcp-toolkit.release.runtime.required_glibc": runtime["required_glibc"],
         "mcp-toolkit.release.source.event": source_event,
         "mcp-toolkit.release.source.ref": source_ref,
         "mcp-toolkit.release.source.repository": source_repository,
@@ -506,6 +504,9 @@ def sbom_release_bindings(
         "mcp-toolkit.release.source.main_proven": str(source_main_proven).lower(),
         "mcp-toolkit.release.target": target,
     }
+    for key, value in sorted(runtime.items()):
+        bindings[f"mcp-toolkit.release.runtime.{key}"] = value
+    return bindings
 
 
 def canonical_sbom(
@@ -603,8 +604,8 @@ def package(
 ) -> Path:
     require_candidate(candidate)
     require_source(source_repository, source_event, source_ref, source_tree)
-    verify_elf(binary, target)
-    runtime = inspect_glibc(binary, target)
+    legacy_linux = target in TARGET_MACHINES
+    runtime = inspect_glibc(binary, target) if legacy_linux else inspect_platform_runtime(binary, target)
     binary_digest = sha256(binary)
     manifest_digest = sha256(manifest)
     lockfile_digest = sha256(lockfile)
@@ -670,6 +671,15 @@ def package(
             },
             "runtime": runtime,
         }
+        if not legacy_linux:
+            metadata = native_release_metadata_v3(
+                binary_name=binary_name, target=target, candidate=candidate,
+                source_repository=source_repository, source_event=source_event,
+                source_ref=source_ref, source_tree=source_tree,
+                source_main_proven=source_main_proven,
+                binary_digest=binary_digest, manifest_digest=manifest_digest,
+                lockfile_digest=lockfile_digest, runtime=runtime,
+            )
         write_json(root / "release-metadata.json", metadata)
         write_manifest(root, set(PAYLOAD_FILES) | {binary_name})
         archive = output_dir / f"{root_name}-{candidate}.tar.gz"
@@ -747,7 +757,8 @@ def verify(
         if (root / "BUILD-CANDIDATE").read_text(encoding="utf-8") != candidate + "\n":
             raise ArtifactError("BUILD-CANDIDATE does not match the requested SHA")
         metadata = read_json(root / "release-metadata.json")
-        runtime = inspect_glibc(root / binary_name, target)
+        legacy_linux = target in TARGET_MACHINES
+        runtime = inspect_glibc(root / binary_name, target) if legacy_linux else inspect_platform_runtime(root / binary_name, target)
         expected_metadata = {
             "schema": "mcp_native_linux_release",
             "version": 2,
@@ -771,9 +782,19 @@ def verify(
             },
             "runtime": runtime,
         }
+        if not legacy_linux:
+            expected_metadata = native_release_metadata_v3(
+                binary_name=binary_name, target=target, candidate=candidate,
+                source_repository=source_repository, source_event=source_event,
+                source_ref=source_ref, source_tree=source_tree,
+                source_main_proven=source_main_proven,
+                binary_digest=sha256(root / binary_name),
+                manifest_digest=sha256(manifest), lockfile_digest=sha256(lockfile),
+                runtime=runtime,
+            )
         if metadata != expected_metadata:
             raise ArtifactError("release metadata does not match the requested candidate")
-        verify_elf(root / binary_name, target)
+        verify_platform_binary(root / binary_name, target)
         sbom = read_json(root / "sbom.cdx.json")
         if not isinstance(sbom, dict):
             raise ArtifactError("CycloneDX SBOM must be an object")
@@ -918,6 +939,10 @@ def validate_authorization_archive(
         if not isinstance(value, str) or DIGEST_PATTERN.fullmatch(value) is None:
             raise ArtifactError(f"authorization archive {field} must be an exact SHA-256")
     runtime = archive.get("runtime")
+    if target not in TARGET_MACHINES:
+        if not isinstance(runtime, dict) or runtime.get("format") != platform_validator(target).format:
+            raise ArtifactError("authorization archive runtime identity does not match its target")
+        return
     if not isinstance(runtime, dict) or set(runtime) != {
         "libc",
         "interpreter",
