@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from dataclasses import dataclass
 from unittest import mock
 from pathlib import Path, PurePosixPath
 
@@ -33,6 +34,23 @@ TARGET_MACHINES = {
 TARGET_INTERPRETERS = {
     "x86_64-unknown-linux-gnu": "/lib64/ld-linux-x86-64.so.2",
     "aarch64-unknown-linux-gnu": "/lib/ld-linux-aarch64.so.1",
+}
+# The v3 contract is deliberately data driven.  Linux v2 remains backed by
+# TARGET_MACHINES/TARGET_INTERPRETERS above so existing release consumers keep
+# their exact schema and runtime proof.
+@dataclass(frozen=True)
+class PlatformValidator:
+    target: str
+    format: str
+    architecture: str
+
+
+PLATFORM_VALIDATORS = {
+    "x86_64-unknown-linux-gnu": PlatformValidator("x86_64-unknown-linux-gnu", "elf", "x86_64"),
+    "aarch64-unknown-linux-gnu": PlatformValidator("aarch64-unknown-linux-gnu", "elf", "aarch64"),
+    "x86_64-apple-darwin": PlatformValidator("x86_64-apple-darwin", "macho", "x86_64"),
+    "aarch64-apple-darwin": PlatformValidator("aarch64-apple-darwin", "macho", "aarch64"),
+    "x86_64-pc-windows-msvc": PlatformValidator("x86_64-pc-windows-msvc", "pe", "x86_64"),
 }
 PAYLOAD_FILES = frozenset(
     {
@@ -174,6 +192,137 @@ def verify_elf(path: Path, target: str) -> None:
         raise ArtifactError(
             f"{path} ELF machine {machine} does not match {target} ({expected_machine})"
         )
+
+
+def platform_validator(target: str) -> PlatformValidator:
+    """Return the immutable binary-format contract for a release target."""
+    try:
+        return PLATFORM_VALIDATORS[target]
+    except KeyError as exc:
+        raise ArtifactError(f"unsupported native target: {target}") from exc
+
+
+def verify_macho(path: Path, target: str) -> None:
+    validator = platform_validator(target)
+    if validator.format != "macho":
+        raise ArtifactError(f"{target} is not a Mach-O target")
+    header = path.read_bytes()[:8]
+    # 64-bit little-endian Mach-O (including arm64 and x86_64).
+    if len(header) < 8 or header[:4] != b"\xcf\xfa\xed\xfe":
+        raise ArtifactError(f"{path} is not a 64-bit Mach-O executable")
+    cpu = struct.unpack("<I", header[4:8])[0]
+    expected = {"x86_64": 0x01000007, "aarch64": 0x0100000C}[validator.architecture]
+    if cpu != expected:
+        raise ArtifactError(
+            f"{path} Mach-O CPU {cpu:#x} does not match {target} ({expected:#x})"
+        )
+
+
+def verify_pe(path: Path, target: str) -> None:
+    validator = platform_validator(target)
+    if validator.format != "pe":
+        raise ArtifactError(f"{target} is not a PE target")
+    data = path.read_bytes()
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        raise ArtifactError(f"{path} is not a PE executable")
+    pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+    if pe_offset + 6 > len(data) or data[pe_offset:pe_offset + 4] != b"PE\0\0":
+        raise ArtifactError(f"{path} does not contain a PE signature")
+    machine = struct.unpack_from("<H", data, pe_offset + 4)[0]
+    expected = 0x8664
+    if machine != expected:
+        raise ArtifactError(
+            f"{path} PE machine {machine:#x} does not match {target} ({expected:#x})"
+        )
+
+
+def verify_platform_binary(path: Path, target: str) -> None:
+    """Validate the target's executable container and architecture."""
+    validator = platform_validator(target)
+    if validator.format == "elf":
+        verify_elf(path, target)
+    elif validator.format == "macho":
+        verify_macho(path, target)
+    else:
+        verify_pe(path, target)
+
+
+def inspect_platform_runtime(path: Path, target: str) -> dict[str, str]:
+    """Return a stable v3 runtime identity without assuming a host OS toolchain."""
+    validator = platform_validator(target)
+    verify_platform_binary(path, target)
+    if validator.format == "elf":
+        return {"format": "elf", "architecture": validator.architecture, **inspect_glibc(path, target)}
+    if validator.format == "macho":
+        return {"format": "macho", "architecture": validator.architecture, "platform": "apple"}
+    return {"format": "pe", "architecture": validator.architecture, "platform": "windows", "abi": "msvc"}
+
+
+def native_release_metadata_v3(
+    *,
+    binary_name: str,
+    target: str,
+    candidate: str,
+    source_repository: str,
+    source_event: str,
+    source_ref: str,
+    source_tree: str,
+    source_main_proven: bool,
+    binary_digest: str,
+    manifest_digest: str,
+    lockfile_digest: str,
+    runtime: dict[str, str],
+) -> dict[str, object]:
+    """Build the cross-platform v3 metadata envelope.
+
+    The envelope intentionally keeps source and input bindings identical to
+    Linux v2 while replacing the Linux-only runtime contract with a target
+    validator/runtime identity.
+    """
+    platform_validator(target)
+    require_candidate(candidate)
+    require_source(source_repository, source_event, source_ref, source_tree)
+    for label, digest in (("binary", binary_digest), ("manifest", manifest_digest), ("lockfile", lockfile_digest)):
+        if DIGEST_PATTERN.fullmatch(digest) is None:
+            raise ArtifactError(f"{label} digest must be an exact SHA-256")
+    return {
+        "schema": "mcp_native_release",
+        "version": 3,
+        "candidate": candidate,
+        "target": target,
+        "binary": binary_name,
+        "release_source_eligible": release_source_eligible(source_event, source_ref, source_main_proven),
+        "source": {
+            "repository": source_repository,
+            "event": source_event,
+            "ref": source_ref,
+            "tree": source_tree,
+            "main_proven": source_main_proven,
+        },
+        "inputs": {
+            "binary_sha256": binary_digest,
+            "manifest_sha256": manifest_digest,
+            "lockfile_sha256": lockfile_digest,
+        },
+        "runtime": runtime,
+    }
+
+
+def validate_native_release_metadata_v3(
+    metadata: object, expected: dict[str, object]
+) -> None:
+    """Require exact v3 metadata; callers can then trust the runtime proof."""
+    if metadata != expected:
+        raise ArtifactError("release metadata does not match the requested v3 candidate")
+    if not isinstance(metadata, dict) or metadata.get("schema") != "mcp_native_release" or metadata.get("version") != 3:
+        raise ArtifactError("release metadata is not the cross-platform v3 schema")
+    target = metadata.get("target")
+    runtime = metadata.get("runtime")
+    if not isinstance(target, str) or not isinstance(runtime, dict):
+        raise ArtifactError("v3 release metadata has an invalid target/runtime contract")
+    validator = platform_validator(target)
+    if runtime.get("format") != validator.format or runtime.get("architecture") != validator.architecture:
+        raise ArtifactError("v3 runtime identity does not match the target validator")
 
 
 def format_glibc(version: tuple[int, int]) -> str:
@@ -964,6 +1113,43 @@ def fake_verification_report(binary_name: str = "example-server") -> dict[str, o
 
 
 class ArtifactTests(unittest.TestCase):
+    def test_platform_validator_covers_cross_platform_v3_targets(self) -> None:
+        self.assertEqual(platform_validator("x86_64-unknown-linux-gnu").format, "elf")
+        self.assertEqual(platform_validator("aarch64-apple-darwin").format, "macho")
+        self.assertEqual(platform_validator("x86_64-pc-windows-msvc").format, "pe")
+        with self.assertRaisesRegex(ArtifactError, "unsupported native target"):
+            platform_validator("unknown-target")
+
+    def test_macho_and_pe_validators_reject_bad_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "binary"
+            path.write_bytes(b"not-an-executable")
+            with self.assertRaisesRegex(ArtifactError, "Mach-O"):
+                verify_macho(path, "x86_64-apple-darwin")
+            with self.assertRaisesRegex(ArtifactError, "PE"):
+                verify_pe(path, "x86_64-pc-windows-msvc")
+
+    def test_v3_metadata_binds_runtime_validator(self) -> None:
+        runtime = {"format": "macho", "architecture": "x86_64", "platform": "apple"}
+        metadata = native_release_metadata_v3(
+            binary_name="example-server",
+            target="x86_64-apple-darwin",
+            candidate="a" * 40,
+            source_repository="example/server",
+            source_event="push",
+            source_ref="refs/heads/main",
+            source_tree="b" * 40,
+            source_main_proven=True,
+            binary_digest="c" * 64,
+            manifest_digest="d" * 64,
+            lockfile_digest="e" * 64,
+            runtime=runtime,
+        )
+        validate_native_release_metadata_v3(metadata, metadata)
+        invalid = {**metadata, "runtime": {**runtime, "architecture": "aarch64"}}
+        with self.assertRaisesRegex(ArtifactError, "does not match"):
+            validate_native_release_metadata_v3(invalid, invalid)
+
     def test_packages_and_verifies_exact_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
