@@ -214,7 +214,7 @@ pub fn inspect_release_preflight_with_profile(
         checks.push(file_check(&root, label, path));
     }
 
-    checks.push(probe_scenario_check(&root, doctor.shape));
+    checks.push(probe_scenario_check(&root, doctor.shape, profile));
     checks.push(manifest_metadata_check(&root));
     checks.push(portable_toolkit_dependencies_check(&root));
     checks.push(cargo_local_path_overrides_check(&root));
@@ -244,7 +244,17 @@ fn file_check(root: &Path, label: &'static str, path: &'static str) -> ReleasePr
     }
 }
 
-fn probe_scenario_check(root: &Path, shape: DoctorShape) -> ReleasePreflightCheck {
+fn probe_scenario_check(root: &Path, shape: DoctorShape, profile: ReleasePreflightProfile) -> ReleasePreflightCheck {
+    if matches!(profile, ReleasePreflightProfile::PublicStdio) && matches!(shape, DoctorShape::Unknown) {
+        let present = exists(root, "spec/mcp_probe_stdio_smoke.v1.json");
+        return ReleasePreflightCheck {
+            label: "MCP stdio probe scenario",
+            target: "spec/mcp_probe_stdio_smoke.v1.json".to_string(),
+            required: true,
+            passed: present,
+            detail: if present { "explicit stdio probe scenario present".into() } else { "existing public stdio profile requires an explicit stdio probe scenario".into() },
+        };
+    }
     let (target, detail) = match shape {
         DoctorShape::HostedHttpAuth => (
             HTTP_AUTH_PROBE_SCENARIO,

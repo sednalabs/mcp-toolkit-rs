@@ -91,6 +91,10 @@ pub enum ClientConfigError {
     MissingPackageName(PathBuf),
     /// The transport could not be inferred from generated proof files.
     UnknownTransport,
+    /// An environment key is not a valid TOML bare key.
+    InvalidEnvKey(String),
+    /// An environment value contains a control character unsupported by TOML strings.
+    InvalidEnvValue,
 }
 
 impl fmt::Display for ClientConfigError {
@@ -113,6 +117,8 @@ impl fmt::Display for ClientConfigError {
                 formatter,
                 "could not infer generated-server transport; pass --transport stdio or --transport http"
             ),
+            Self::InvalidEnvKey(key) => write!(formatter, "invalid client-config environment key `{key}`"),
+            Self::InvalidEnvValue => write!(formatter, "client-config environment value contains a control character"),
         }
     }
 }
@@ -153,9 +159,24 @@ pub fn render_client_config(options: &ClientConfigOptions) -> Result<String, Cli
         None => infer_transport(&canonical_root)?,
     };
 
+    let env_key = options.env_key.as_deref().unwrap_or_else(|| {
+        // Derive the generated contract key while preserving the historical
+        // EXAMPLE_MCP key for the example package.
+        if package_name == "example-mcp" { DEFAULT_PROFILE_ENV } else { "" }
+    });
+    let derived_key;
+    let env_key = if env_key.is_empty() {
+        derived_key = profile_env_key(&package_name);
+        derived_key.as_str()
+    } else { env_key };
+    validate_env_key(env_key)?;
+    if let Some(value) = options.env_value.as_deref().or(Some(options.profile.as_str())) {
+        if value.chars().any(|c| c.is_control()) { return Err(ClientConfigError::InvalidEnvValue); }
+    }
+
     Ok(match transport {
         ClientConfigTransport::Stdio => {
-            render_stdio_config(options, &package_name, &server_name, &canonical_root)
+            render_stdio_config(options, &package_name, &server_name, &canonical_root, env_key)
         }
         ClientConfigTransport::HostedHttp => render_hosted_http_config(options, &server_name),
     })
@@ -174,6 +195,7 @@ fn render_stdio_config(
     package_name: &str,
     server_name: &str,
     canonical_root: &Path,
+    env_key: &str,
 ) -> String {
     let command = options.command.clone().unwrap_or_else(|| {
         if options.installed {
@@ -192,9 +214,22 @@ fn render_stdio_config(
         toml_string(server_name),
         toml_string_value(&command),
         toml_string(server_name),
-        options.env_key.as_deref().unwrap_or(DEFAULT_PROFILE_ENV),
+        env_key,
         toml_string_value(options.env_value.as_deref().unwrap_or(&options.profile)),
     )
+}
+
+fn profile_env_key(package_name: &str) -> String {
+    let mut key = package_name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect::<String>();
+    key.push_str("_TOOL_PROFILE");
+    key
+}
+
+fn validate_env_key(key: &str) -> Result<(), ClientConfigError> {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ClientConfigError::InvalidEnvKey(key.to_string()));
+    }
+    Ok(())
 }
 
 fn render_hosted_http_config(options: &ClientConfigOptions, server_name: &str) -> String {
