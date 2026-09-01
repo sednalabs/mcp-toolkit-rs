@@ -72,9 +72,7 @@ in planning notes are evidence, not a reservation.
 
 ## First Rust Package Set
 
-The first package set should be as small as the adopting services need. Start
-with the Rust crates that define the reusable public surface and the proof
-helpers needed by downstream MCP services:
+The approved 0.1.0 candidate contains exactly these nine crates:
 
 - `mcp-toolkit-core`
 - `mcp-toolkit-testing`
@@ -83,8 +81,10 @@ helpers needed by downstream MCP services:
 - `mcp-toolkit-http`
 - `mcp-toolkit-policy-core`
 - `mcp-toolkit-policy-conformance`
+- `mcp-toolkit-scratchpad`
+- `mcp-toolkit-server`
 
-Hold back the umbrella, server, policy-runtime, policy-ffi,
+Hold back the umbrella, policy-runtime, policy-ffi,
 policy-kernel-adapters, process, docs, Gemini, Postgres, and other
 service-specific or convenience crates until their public API, dependency
 graph, and adopting-service evidence are ready for the same semver promise.
@@ -130,22 +130,69 @@ stability promise. Any publication approval should include a changelog entry
 for the exact crate set and should call out consumer-facing breaking changes
 before increasing any published version.
 
-The likely first-wave order is:
+The approved first-wave order is:
 
 1. `mcp-toolkit-core`, `mcp-toolkit-observability`,
    `mcp-toolkit-policy-core`
 2. `mcp-toolkit-http`
-3. `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`
+3. `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`,
+   `mcp-toolkit-scratchpad`
 4. `mcp-toolkit-auth`
+5. `mcp-toolkit-server`
 
 `mcp-toolkit-testing` currently depends on `mcp-toolkit-core` and
 `mcp-toolkit-http`; `mcp-toolkit-policy-conformance` depends on
 `mcp-toolkit-policy-core`; and `mcp-toolkit-auth` uses `mcp-toolkit-testing` as
-a dev-dependency for contract tests. Adjust the order if the approved package
-set or dependency graph changes.
+a dev-dependency for contract tests, while `mcp-toolkit-server` composes the
+HTTP and auth crates. Adjust the order only through a new approved release
+candidate and refreshed readiness receipt.
 
 Do not include server-generation or scaffold tooling in the required first Rust
 release path until that product shape and name are explicitly approved.
+
+## First manual publication procedure
+
+Routine pull requests and the package-readiness workflow never publish. After
+the release owner approves the exact commit and hosted run, use a clean
+checkout of that commit and the following order:
+
+1. Record the repository, commit SHA, nine package names, versions, and the
+   successful hosted readiness run.
+2. Recheck every registry name immediately before publication with
+   `cargo search <name>`; an occupied or changed name stops the release.
+3. Run `cargo package --locked --package <name>` for each package in the
+   approved order.
+4. Run `cargo publish --locked --dry-run --package <name>` for each package,
+   resolving all failures before continuing.
+5. Publish one package at a time with `cargo publish --locked --package <name>`.
+   Wait for each version to appear in the registry index before publishing a
+   dependent package. Never use `--all` or publish the workspace umbrella.
+6. Run consumer smoke checks against the published versions and record
+   lockfile changes and the validation run.
+
+If a publication is defective, stop the train and preserve the registry
+record. With release-owner confirmation, yank only the affected version using
+`cargo yank --vers 0.1.0 --package <name>`. Yanking blocks new resolution but
+does not erase existing downloads. Consumers move to a corrected version, or
+restore their previously recorded lockfile and toolkit commit. Published
+versions must never be overwritten or silently replaced under another name.
+
+## Trusted publishing for later versions
+
+After 0.1.0, the preferred path is a dedicated protected workflow at
+`.github/workflows/crates-oidc-publish.yml`, activated only from a reviewed
+release tag and explicit release-owner dispatch. It should verify the exact
+tag commit and ancestry, use `permissions: { contents: read, id-token: write }`
+with a protected `crates-io` environment, publish only an enumerated package
+matrix in dependency order with `--locked`, and reject pull-request-controlled
+refs or package names. Use crates.io trusted publishing (OIDC), never a stored
+registry token. Emit an immutable run summary with tag, commit,
+package/version set, and per-package result, followed by consumer readback.
+
+This later-version path is not part of routine readiness and does not
+authorize publication of this candidate. Its first use requires independent
+review of the workflow and exact protected-environment/trusted-publisher
+configuration readback.
 
 ## Consumer Migration After Publication
 
