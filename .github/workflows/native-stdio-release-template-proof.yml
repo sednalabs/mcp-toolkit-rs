@@ -306,11 +306,17 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           source_tree=$(git rev-parse HEAD^{tree})
-          x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
-          arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
-          mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
-          mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
-          windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
+          archive_name() {
+            python3 scripts/native_release_artifact.py archive-name \
+              --binary-name "$BINARY_NAME" \
+              --target "$1" \
+              --candidate "$GITHUB_SHA"
+          }
+          x86_archive="downloaded/$(archive_name x86_64-unknown-linux-gnu)"
+          arm_archive="downloaded/$(archive_name aarch64-unknown-linux-gnu)"
+          mac_x86_archive="downloaded/$(archive_name x86_64-apple-darwin)"
+          mac_arm_archive="downloaded/$(archive_name aarch64-apple-darwin)"
+          windows_archive="downloaded/$(archive_name x86_64-pc-windows-msvc)"
           python3 scripts/native_release_artifact.py compare \
             --archive "$x86_archive" \
             --target x86_64-unknown-linux-gnu \

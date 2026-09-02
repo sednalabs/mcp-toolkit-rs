@@ -130,13 +130,12 @@ jobs:
         run: |
           set -euo pipefail
           binary_path="target/$TARGET/release/$BINARY_NAME"
-          binary_name="$BINARY_NAME"
-          if [[ "$TARGET" == *windows* ]]; then binary_path+=".exe"; binary_name+=".exe"; fi
+          if [[ "$TARGET" == *windows* ]]; then binary_path+=".exe"; fi
           source_tree=$(git rev-parse HEAD^{tree})
           mkdir -p dist
           archive=$(python3 scripts/native_release_artifact.py package \
             --binary "$binary_path" \
-            --binary-name "$binary_name" \
+            --binary-name "$BINARY_NAME" \
             --target "$TARGET" \
             --candidate "$GITHUB_SHA" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -216,11 +215,17 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           source_tree=$(git rev-parse HEAD^{tree})
-          x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
-          arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
-          mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
-          mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
-          windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
+          archive_name() {
+            python3 scripts/native_release_artifact.py archive-name \
+              --binary-name "$BINARY_NAME" \
+              --target "$1" \
+              --candidate "$GITHUB_SHA"
+          }
+          x86_archive="downloaded/$(archive_name x86_64-unknown-linux-gnu)"
+          arm_archive="downloaded/$(archive_name aarch64-unknown-linux-gnu)"
+          mac_x86_archive="downloaded/$(archive_name x86_64-apple-darwin)"
+          mac_arm_archive="downloaded/$(archive_name aarch64-apple-darwin)"
+          windows_archive="downloaded/$(archive_name x86_64-pc-windows-msvc)"
           python3 scripts/native_release_artifact.py compare \
             --archive "$x86_archive" \
             --target x86_64-unknown-linux-gnu \
@@ -308,11 +313,17 @@ jobs:
           esac
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           source_tree=$(git rev-parse HEAD^{tree})
-          x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
-          arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
-          mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
-          mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
-          windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
+          archive_name() {
+            python3 scripts/native_release_artifact.py archive-name \
+              --binary-name "$BINARY_NAME" \
+              --target "$1" \
+              --candidate "$GITHUB_SHA"
+          }
+          x86_archive="downloaded/$(archive_name x86_64-unknown-linux-gnu)"
+          arm_archive="downloaded/$(archive_name aarch64-unknown-linux-gnu)"
+          mac_x86_archive="downloaded/$(archive_name x86_64-apple-darwin)"
+          mac_arm_archive="downloaded/$(archive_name aarch64-apple-darwin)"
+          windows_archive="downloaded/$(archive_name x86_64-pc-windows-msvc)"
           python3 scripts/native_release_artifact.py compare \
             --archive "$x86_archive" \
             --target x86_64-unknown-linux-gnu \
