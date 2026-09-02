@@ -125,7 +125,9 @@ jobs:
           fi
           test "$(git -C validation-target rev-parse --verify HEAD)" = "${target_sha}"
           plan_json="${RUNNER_TEMP}/toolkit-validation-plan.json"
-          python3 validation-target/.github/scripts/resolve_validation_plan.py lab \
+          # Keep planner code tied to the workflow source; the validation target
+          # supplies data (catalog) and an exact commit, never executable policy.
+          python3 workflow-source/.github/scripts/resolve_validation_plan.py lab \
             --profile "${PROFILE}" \
             --lane-set "${LANE_SET}" \
             --lanes "${LANES}" \
