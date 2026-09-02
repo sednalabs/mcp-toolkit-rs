@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "Reusable DuckDB-backed scratchpad sessions for Rust MCP servers."
+description = "DuckDB-backed scratchpad sessions for the Sedna Labs MCP Toolkit for Rust."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 documentation = "https://docs.rs/mcp-toolkit-scratchpad"
 readme = "../../README.md"
+keywords = ["mcp", "sednalabs", "rust", "duckdb"]
+categories = ["database", "development-tools"]
 publish = false
 
 [package.metadata.docs.rs]

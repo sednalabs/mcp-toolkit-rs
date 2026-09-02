@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "HTTP, OAuth discovery, and session helpers for Rust MCP services."
+description = "HTTP and session helpers for the Sedna Labs MCP Toolkit for Rust."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 documentation = "https://docs.rs/mcp-toolkit-http"
 readme = "../../README.md"
+keywords = ["mcp", "sednalabs", "rust", "http"]
+categories = ["network-programming", "web-programming"]
 publish = false
 
 [package.metadata.docs.rs]
