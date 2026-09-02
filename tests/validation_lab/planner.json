@@ -4,8 +4,8 @@
   "candidate": {
     "repository": "sednalabs/mcp-toolkit-rs",
     "ref": "refs/heads/main",
-    "sha": "dd72f5cee203c8497ab43574e8dcdf506987f995",
-    "tree": "bc51f72d2bada062ef14036931ee612150c09084"
+    "sha": "0000000000000000000000000000000000000000",
+    "tree": "1111111111111111111111111111111111111111"
   },
   "target_set": [
     "x86_64-unknown-linux-gnu",

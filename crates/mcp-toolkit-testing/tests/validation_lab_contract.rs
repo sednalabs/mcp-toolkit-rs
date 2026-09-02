@@ -36,7 +36,7 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing fixture field `{key}`"))
 }
 
-fn string_field(value: &Value, key: &str) -> &str {
+fn string_field<'a>(value: &'a Value, key: &str) -> &'a str {
     field(value, key)
         .as_str()
         .unwrap_or_else(|| panic!("fixture field `{key}` must be a string"))
@@ -56,7 +56,10 @@ fn planner_pins_profiles_lanes_and_exact_candidate_identity() {
     assert_eq!(field(&planner, "version"), 1);
 
     let candidate = field(&planner, "candidate");
-    assert_eq!(string_field(candidate, "repository"), "sednalabs/mcp-toolkit-rs");
+    assert_eq!(
+        string_field(candidate, "repository"),
+        "sednalabs/mcp-toolkit-rs"
+    );
     assert_eq!(string_field(candidate, "ref"), "refs/heads/main");
     assert!(exact_sha(string_field(candidate, "sha"), 40));
     assert!(exact_sha(string_field(candidate, "tree"), 40));
@@ -86,7 +89,10 @@ fn planner_pins_profiles_lanes_and_exact_candidate_identity() {
         .iter()
         .map(|profile| string_field(profile, "id"))
         .collect();
-    assert_eq!(profile_ids, BTreeSet::from(["checkpoint", "frontier", "targeted"]));
+    assert_eq!(
+        profile_ids,
+        BTreeSet::from(["checkpoint", "frontier", "targeted"])
+    );
 
     let lanes = field(&planner, "lanes").as_array().expect("lanes array");
     let mut lane_ids = BTreeSet::new();
@@ -219,7 +225,10 @@ fn artifact_identity_rejects_same_name_from_a_different_run_attempt() {
     }
     assert_eq!(artifacts[0].get("name"), artifacts[1].get("name"));
     assert_eq!(artifacts[0].get("run_id"), artifacts[1].get("run_id"));
-    assert_ne!(artifacts[0].get("run_attempt"), artifacts[1].get("run_attempt"));
+    assert_ne!(
+        artifacts[0].get("run_attempt"),
+        artifacts[1].get("run_attempt")
+    );
     assert_eq!(
         artifacts[0].get("name").and_then(Value::as_str),
         Some("frontier-lane")
