@@ -116,6 +116,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m pip install --user PyYAML
           python3 scripts/workflow_runner_policy_check.py \
             --self-test \
             --root . \

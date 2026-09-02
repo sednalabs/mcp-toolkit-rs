@@ -229,8 +229,8 @@ fn release_preflight_accepts_public_stdio_generated_project() {
     assert!(stdout.contains("Public ready: yes"));
     assert!(stdout.contains("CodeQL workflow"));
     assert!(stdout.contains("Dependency governance workflow"));
-    assert!(stdout.contains("Native Linux release workflow"));
-    assert!(stdout.contains("Native Linux release contract"));
+    assert!(stdout.contains("Native release workflow"));
+    assert!(stdout.contains("Native release contract"));
     assert!(stdout.contains("Portable toolkit dependencies"));
     assert!(stdout.contains("High-confidence secret marker scan"));
 
@@ -266,7 +266,7 @@ fn release_preflight_rejects_incomplete_native_release_semantics() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(contract.detail.contains("cargo build --release --locked"));
@@ -302,7 +302,7 @@ fn release_preflight_rejects_unpinned_native_release_actions() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(contract.detail.contains("not pinned"));
@@ -338,7 +338,7 @@ fn release_preflight_rejects_folded_unpinned_native_release_actions() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -377,7 +377,7 @@ fn release_preflight_rejects_inert_release_semantics() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -409,8 +409,8 @@ fn release_preflight_rejects_untrusted_release_authority() {
     let workflow = read(&workflow_path)
         .replace("  push:\n", "  pull_request:\n  push:\n")
         .replace(
-            "  build-native-linux:\n",
-            "  build-native-linux:\n    permissions:\n      id-token: write\n      contents: read\n",
+            "  build-native:\n",
+            "  build-native:\n    permissions:\n      id-token: write\n      contents: read\n",
         );
     fs::write(&workflow_path, workflow).expect("grant untrusted release authority");
 
@@ -418,7 +418,7 @@ fn release_preflight_rejects_untrusted_release_authority() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(contract.detail.contains("trusted push events"));
@@ -454,7 +454,7 @@ fn release_preflight_rejects_extra_privileged_release_job() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -484,8 +484,8 @@ fn release_preflight_rejects_unexpected_release_runner() {
 
     let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
     let workflow = read(&workflow_path).replace(
-        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: ubuntu-24.04",
-        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: self-hosted",
+        "  verify-native:\n    name: Verify cross-architecture release contract\n    needs: build-native\n    runs-on: ubuntu-24.04",
+        "  verify-native:\n    name: Verify cross-architecture release contract\n    needs: build-native\n    runs-on: self-hosted",
     );
     fs::write(&workflow_path, workflow).expect("change verifier runner");
 
@@ -493,7 +493,7 @@ fn release_preflight_rejects_unexpected_release_runner() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -738,7 +738,7 @@ fn release_preflight_rejects_incomplete_tag_ancestry_proof() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -769,8 +769,8 @@ fn release_preflight_rejects_attestation_before_consumer_verification() {
 
     let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
     let workflow = read(&workflow_path).replace(
-        "      - verify-native-linux\n",
-        "      - build-native-linux\n",
+        "      - verify-native\n",
+        "      - build-native\n",
     );
     fs::write(&workflow_path, workflow).expect("remove verification dependency");
 
@@ -778,7 +778,7 @@ fn release_preflight_rejects_attestation_before_consumer_verification() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -816,7 +816,7 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
         "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
     let reverify_run =
         "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
-    let privileged_job = "  attest-native-linux:\n";
+    let privileged_job = "  attest-native:\n";
 
     let cases = vec![
         (
@@ -1082,7 +1082,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
     let canonical_contract = canonical_report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(canonical_contract.passed, "{}", canonical_contract.detail);
 
@@ -1151,7 +1151,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         let contract = report
             .checks
             .iter()
-            .find(|check| check.label == "Native Linux release contract")
+            .find(|check| check.label == "Native release contract")
             .expect("native release contract check");
         assert!(!contract.passed, "{label} weakening should fail preflight");
         assert!(
@@ -1435,7 +1435,7 @@ fn release_preflight_accepts_local_native_release_actions() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(contract.passed, "{}", contract.detail);
     assert!(report.ready());
@@ -2437,7 +2437,7 @@ fn assert_native_release_contract_rejects(
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed, "{label} weakening should fail preflight");
     assert!(
