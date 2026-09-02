@@ -546,7 +546,7 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
                 &canonical,
                 include_rows,
                 &format!(
-                    "{include_rows}        runner: [ubuntu-24.04, self-hosted]\n"
+                    "{include_rows}          - runner: self-hosted\n            target: x86_64-unknown-linux-gnu\n"
                 ),
                 "self-hosted extra runner dimension",
             ),
@@ -973,8 +973,8 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
             replace_once_after(
                 &canonical,
                 privileged_job,
-                "          cmp trusted-verification.json downloaded/native-release-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n",
-                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n          cmp trusted-verification.json downloaded/native-release-verification.json\n",
+                "          cmp trusted-verification.json downloaded/native-release-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-verification.json downloaded/native-release-verification.json\n",
                 "reordered privileged shell commands",
             ),
             "run body must match the exact canonical command body",
@@ -1323,8 +1323,8 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             replace_once_after(
                 &canonical_wrapper,
                 privileged_job,
-                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n",
-                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
                 "root reordered privileged shell commands",
             ),
             "run body must match the exact canonical command body",

@@ -608,11 +608,20 @@ test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 source_tree=$(git rev-parse HEAD^{tree})
 x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
 arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
 python3 scripts/native_release_artifact.py compare \
   --archive "$x86_archive" \
   --target x86_64-unknown-linux-gnu \
   --archive "$arm_archive" \
   --target aarch64-unknown-linux-gnu \
+  --archive "$mac_x86_archive" \
+  --target x86_64-apple-darwin \
+  --archive "$mac_arm_archive" \
+  --target aarch64-apple-darwin \
+  --archive "$windows_archive" \
+  --target x86_64-pc-windows-msvc \
   --binary-name "$BINARY_NAME" \
   --candidate "$GITHUB_SHA" \
   --source-repository "$GITHUB_REPOSITORY" \
@@ -624,7 +633,7 @@ python3 scripts/native_release_artifact.py compare \
   --lockfile Cargo.lock \
   --output trusted-verification.json
 cmp trusted-verification.json downloaded/native-release-verification.json
-test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
 python3 scripts/native_release_artifact.py authorize \
   --verification trusted-verification.json \
   --binary-name "$BINARY_NAME" \
@@ -648,11 +657,20 @@ test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 source_tree=$(git rev-parse HEAD^{tree})
 x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
 arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
 python3 scripts/native_release_artifact.py compare \
   --archive "$x86_archive" \
   --target x86_64-unknown-linux-gnu \
   --archive "$arm_archive" \
   --target aarch64-unknown-linux-gnu \
+  --archive "$mac_x86_archive" \
+  --target x86_64-apple-darwin \
+  --archive "$mac_arm_archive" \
+  --target aarch64-apple-darwin \
+  --archive "$windows_archive" \
+  --target x86_64-pc-windows-msvc \
   --binary-name "$BINARY_NAME" \
   --candidate "$GITHUB_SHA" \
   --source-repository "$GITHUB_REPOSITORY" \
@@ -664,7 +682,7 @@ python3 scripts/native_release_artifact.py compare \
   --lockfile templates/single-crate-public-stdio-server/Cargo.lock \
   --output trusted-template-verification.json
 cmp trusted-template-verification.json downloaded/native-template-verification.json
-test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
 python3 scripts/native_release_artifact.py authorize \
   --verification trusted-template-verification.json \
   --binary-name "$BINARY_NAME" \
@@ -686,7 +704,7 @@ const CHECKOUT_INPUTS: &[(&str, ExpectedStepValue)] = &[
 const GENERATED_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
-        ExpectedStepValue::String("native-linux-*-${{ github.sha }}"),
+        ExpectedStepValue::String("native-*-${{ github.sha }}"),
     ),
     ("path", ExpectedStepValue::String("downloaded")),
     ("merge-multiple", ExpectedStepValue::Bool(true)),
@@ -722,7 +740,7 @@ const ROOT_LOCKFILE_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
 const ROOT_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
-        ExpectedStepValue::String("native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}"),
+        ExpectedStepValue::String("native-stdio-template-*-*-${{ github.sha }}"),
     ),
     ("path", ExpectedStepValue::String("downloaded")),
     ("merge-multiple", ExpectedStepValue::Bool(true)),

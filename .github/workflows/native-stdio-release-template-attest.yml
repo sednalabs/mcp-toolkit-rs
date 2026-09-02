@@ -20,7 +20,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/native-stdio-release-template-proof.yml
 
-  attest-native-template:
+  attest-native-linux-template:
     name: Attest verified trusted template artifacts
     needs: prove-native-template
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
@@ -66,23 +66,7 @@ jobs:
         # actions/download-artifact v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}
-          path: downloaded
-          merge-multiple: true
-
-      - name: Download verified Apple native template artifacts
-        # actions/download-artifact v8.0.1
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: native-stdio-template-*-apple-darwin-${{ github.sha }}
-          path: downloaded
-          merge-multiple: true
-
-      - name: Download verified Windows native template artifacts
-        # actions/download-artifact v8.0.1
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: native-stdio-template-*-pc-windows-msvc-${{ github.sha }}
+          pattern: native-stdio-template-*-*-${{ github.sha }}
           path: downloaded
           merge-multiple: true
 

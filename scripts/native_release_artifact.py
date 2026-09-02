@@ -625,8 +625,13 @@ def package(
     with tempfile.TemporaryDirectory(prefix="native-release-") as temporary:
         root = Path(temporary) / root_name
         root.mkdir()
-        shutil.copyfile(binary, root / binary_name)
-        os.chmod(root / binary_name, 0o755)
+        archive_binary_name = (
+            f"{binary_name}.exe"
+            if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe")
+            else binary_name
+        )
+        shutil.copyfile(binary, root / archive_binary_name)
+        os.chmod(root / archive_binary_name, 0o755)
         (root / "BUILD-CANDIDATE").write_text(candidate + "\n", encoding="utf-8")
         write_json(root / "tool-inventory.json", inventory_value)
         write_json(root / "tool-schema.json", schema_value)
@@ -681,7 +686,7 @@ def package(
                 lockfile_digest=lockfile_digest, runtime=runtime,
             )
         write_json(root / "release-metadata.json", metadata)
-        write_manifest(root, set(PAYLOAD_FILES) | {binary_name})
+        write_manifest(root, set(PAYLOAD_FILES) | {archive_binary_name})
         archive = output_dir / f"{root_name}-{candidate}.tar.gz"
         write_archive(root, archive, root_name)
 
