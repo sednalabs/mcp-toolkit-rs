@@ -1,0 +1,148 @@
+name: native-stdio-release-template-attest
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v[0-9]*"
+
+concurrency:
+  group: native-stdio-release-template-attest::${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prove-native-template:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-stdio-release-template-proof.yml
+
+  attest-native-linux-template:
+    name: Attest verified trusted template artifacts
+    needs: prove-native-template
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      BINARY_NAME: single-crate-public-stdio-server
+      MANIFEST_PATH: templates/single-crate-public-stdio-server/Cargo.toml
+    steps:
+      - name: Checkout exact trusted candidate
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Prove protected-main ancestry for trusted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          source_main_proven=$(python3 scripts/native_release_artifact.py prove-source \
+            --repository . \
+            --candidate "$GITHUB_SHA" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF")
+          test "$source_main_proven" = true
+          echo "SOURCE_MAIN_PROVEN=$source_main_proven" >> "$GITHUB_ENV"
+
+      - name: Download immutable template lockfile
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: native-stdio-template-source-inputs-${{ github.sha }}
+          path: templates/single-crate-public-stdio-server
+
+      - name: Download verified template artifact set
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: native-stdio-template-*-*-${{ github.sha }}
+          path: downloaded
+          merge-multiple: true
+
+      - name: Download verified template report
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: native-stdio-template-verification-${{ github.sha }}
+          path: downloaded
+
+      - name: Reverify trusted consumer artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/v[0-9]*) ;;
+            *) echo "attestation requires a main push or version tag" >&2; exit 1 ;;
+          esac
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          source_tree=$(git rev-parse HEAD^{tree})
+          x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+          arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+          mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+          mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+          windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
+          python3 scripts/native_release_artifact.py compare \
+            --archive "$x86_archive" \
+            --target x86_64-unknown-linux-gnu \
+            --archive "$arm_archive" \
+            --target aarch64-unknown-linux-gnu \
+            --archive "$mac_x86_archive" \
+            --target x86_64-apple-darwin \
+            --archive "$mac_arm_archive" \
+            --target aarch64-apple-darwin \
+            --archive "$windows_archive" \
+            --target x86_64-pc-windows-msvc \
+            --binary-name "$BINARY_NAME" \
+            --candidate "$GITHUB_SHA" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF" \
+            --source-tree "$source_tree" \
+            --source-main-proven "$SOURCE_MAIN_PROVEN" \
+            --manifest "$MANIFEST_PATH" \
+            --lockfile templates/single-crate-public-stdio-server/Cargo.lock \
+            --output trusted-template-verification.json
+          cmp trusted-template-verification.json downloaded/native-template-verification.json
+          test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
+          python3 scripts/native_release_artifact.py authorize \
+            --verification trusted-template-verification.json \
+            --binary-name "$BINARY_NAME" \
+            --candidate "$GITHUB_SHA" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --source-ref "$GITHUB_REF" \
+            --source-tree "$source_tree" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output release-authorization.json
+
+      - name: Attest verified template archives, checksums, and report
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            downloaded/*.tar.gz
+            downloaded/*.tar.gz.sha256
+            downloaded/native-template-verification.json
+            release-authorization.json
+
+      - name: Upload attested template authorization receipt
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-stdio-template-authorization-${{ github.sha }}
+          path: release-authorization.json
+          if-no-files-found: error
+          retention-days: 14

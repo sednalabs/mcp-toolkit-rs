@@ -204,6 +204,24 @@ Required evidence:
 - terminal conclusion;
 - any relevant artifact name or digest.
 
+For the single-crate public stdio template's
+`.github/workflows/native-release-artifacts.yml` lane, also record
+both native runner targets, exact candidate readback, archive and sidecar
+digests, ELF machine and GNU interpreter/GLIBC verification, target-specific CycloneDX SBOM
+evidence semantically bound to source, binary, manifest,
+lockfile, and dependency inputs, complete archive
+file-set verification, canonical tool inventory/schema equality, the trusted
+`main` or version-tag push ref, proof that any tag commit is identical to or an
+ancestor of protected `main`, and GitHub attestation URLs. Build and parity
+jobs are read-only; the attestation job must depend on successful consumer reverification.
+The workflow is artifact-only and must not be described as a
+published release. Consumer acceptance additionally requires the successful
+hosted run and its attested, run-bound `release-authorization.json` receipt.
+Pre-merge review can cover only the read-only proof workflow. Record trusted
+attestation as a post-merge acceptance gap until the protected-`main` run and
+its exact receipt have been verified; never mint OIDC authority for a PR to
+close that evidence gap.
+
 Use the repository's normal workflow when it covers formatting, clippy, tests,
 schema snapshots, and template or server-specific checks. Add a workflow only
 when the existing one cannot prove the lane.
@@ -234,6 +252,11 @@ Acceptable sources:
 - a GitHub Actions artifact produced by the passing run;
 - a release artifact with a stable name and SHA256 digest;
 - a tagged commit whose validation run is recorded.
+
+The maintained public stdio artifact workflow emits SHA-qualified x86_64 and
+arm64 Linux archives and a cross-architecture verification report. A consumer
+must verify the archive sidecar and exact internal manifest before promotion;
+the passing workflow alone is not an installation instruction.
 
 Before promotion, record:
 

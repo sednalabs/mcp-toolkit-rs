@@ -191,7 +191,7 @@ pub fn templates() -> &'static [TemplateSpec] {
             id: "single-crate-public-stdio",
             source_dir: "single-crate-public-stdio-server",
             source_package: "single-crate-public-stdio-server",
-            description: "Standalone public stdio repository with CI, CodeQL, coverage, and dependency governance.",
+            description: "Standalone public stdio repository with CI, governance, and dual-native Linux release artifacts.",
             aliases: &[
                 "single-crate-public-stdio-server",
                 "public-stdio",
@@ -480,6 +480,10 @@ fn render_asset(contents: &[u8], template: TemplateSpec, options: &NewServerOpti
     let rendered = rewrite_toolkit_dependencies(
         &text
             .replace(
+                "EXAMPLE_MCP_TOOL_PROFILE",
+                &profile_env_key(&options.package_name),
+            )
+            .replace(
                 &format!("templates/{}/Cargo.toml", template.source_dir),
                 "Cargo.toml",
             )
@@ -490,6 +494,19 @@ fn render_asset(contents: &[u8], template: TemplateSpec, options: &NewServerOpti
     );
 
     rendered.into_bytes()
+}
+
+fn profile_env_key(package_name: &str) -> String {
+    let mut key = String::with_capacity(package_name.len() + 18);
+    for ch in package_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch.to_ascii_uppercase());
+        } else {
+            key.push('_');
+        }
+    }
+    key.push_str("_TOOL_PROFILE");
+    key
 }
 
 fn cargo_crate_identifier(package_name: &str) -> String {
@@ -640,6 +657,12 @@ mod tests {
         for name in ["", ".", "..", "../server", "/tmp/server", "-server"] {
             assert!(validate_package_name(name).is_err(), "{name} should fail");
         }
+    }
+
+    #[test]
+    fn profile_environment_key_is_derived_from_package_name() {
+        assert_eq!(profile_env_key("demo-server"), "DEMO_SERVER_TOOL_PROFILE");
+        assert_eq!(profile_env_key("analytics_v2"), "ANALYTICS_V2_TOOL_PROFILE");
     }
 
     #[test]

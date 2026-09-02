@@ -31,8 +31,8 @@ mcp-toolkit <command>
 | `mcp-toolkit draft-tools <source>` | Draft a conservative MCP tool report from local OpenAPI JSON, JSON Schema, or endpoint notes. | Review names, profiles, auth, pagination, and tests before copying approved entries into code. |
 | `mcp-toolkit new --name <package>` | Generate a new server from a maintained template. | Run `doctor`, inspect generated files, then run generated tests. |
 | `mcp-toolkit doctor [generated-server-dir]` | Check generated source, proof files, probe files, and baseline workflow. | Fix missing scaffold files or continue to validation. |
-| `mcp-toolkit release-preflight [generated-server-dir]` | Check public-readiness files, workflows, release proof scaffolding, and high-confidence secret markers. | Fix missing public repository evidence before publishing or installing. |
-| `mcp-toolkit client-config [generated-server-dir]` | Print a Codex-style client snippet for the generated transport. | Replace placeholder command paths, URLs, or profiles for the real deployment. |
+| `mcp-toolkit release-preflight [generated-server-dir]` | Check public-readiness files, workflows, release proof scaffolding, and high-confidence secret markers. | Fix missing public repository evidence before publishing or installing; use `--profile existing-public-stdio` for an established public stdio repo. |
+| `mcp-toolkit client-config [generated-server-dir]` | Print a Codex-style client snippet for the generated transport. | Replace placeholder command paths, URLs, or profiles for the real deployment; use `--installed` for a binary on `PATH`. |
 | `mcp-toolkit conformance` | Print downstream manifest conformance posture. | Use `--strict` in PRs that change pattern manifests. |
 
 The top-level help is deliberately short:
@@ -170,13 +170,34 @@ Release preflight is stricter than doctor. It expects a public-ready repository
 shape with README guidance, a license file, Cargo license and description
 metadata, baseline CI, CodeQL, coverage, dependency governance, schema/probe
 proof for the generated transport, governance docs, portable toolkit
-dependencies, no committed Cargo path overrides, and no high-confidence secret
-markers in generated text files.
+dependencies, no committed Cargo path overrides, a pinned dual-native Linux
+artifact workflow, an exact archive verifier, and no high-confidence secret
+markers in generated text files. The native workflow must use the exact closed
+architecture strategy: `fail-fast: false`, only `matrix.include`, and the two
+ordered literal x86_64 and arm64 hosted runner/target rows with no additional
+strategy options, matrix dimensions, or row fields. It also requires exact
+candidate readback, locked builds,
+ELF machine plus GNU interpreter/GLIBC checks, source/input/dependency-bound
+CycloneDX SBOMs, complete checksums, canonical tool inventory/schema parity,
+SHA-qualified artifacts, consumer reverification, and trusted-push GitHub
+attestations.
 
 The `single-crate-public-stdio` template is designed to pass release preflight
-from generation when created with `--toolkit-git`. Smaller starter templates may
-pass `doctor` but fail `release-preflight` until the service repository adds
-public release files and workflows.
+after generation with `--toolkit-git` and a committed `Cargo.lock`. Smaller
+starter templates may pass `doctor` but fail `release-preflight` until the
+service repository adds public release files and workflows.
+
+The generated public stdio workflow is artifact-only and runs only for `main`
+pushes or `v...` tags. Generate and commit `Cargo.lock` before that trusted
+push. Pull-request and arbitrary manual feature-branch code receive no OIDC or
+attestation authority. Version tags are eligible only when complete Git history
+proves their exact commit is identical to or an ancestor of protected `main`.
+Release preflight structurally parses the complete job map, exact triggers,
+runner labels, permissions, and action references,
+including folded YAML action references, but does not build, attest, publish,
+or install a binary. A trusted successful run produces and attests a run-bound
+`release-authorization.json` receipt only after consumer reverification. Its exact path is
+`.github/workflows/native-release-artifacts.yml`.
 
 ## Client Config
 
@@ -196,6 +217,8 @@ Overrides:
 | `--command <path>` | stdio | Set the release binary path. |
 | `--url <url>` | HTTP | Set the hosted `/mcp` URL. |
 | `--profile <profile>` | stdio | Set the generated tool profile environment value. |
+| `--installed` | stdio | Use the package/binary name resolved from `PATH`. |
+| `--env-key <name>` / `--env-value <value>` | stdio | Override the profile environment key/value for an established server contract. |
 
 The default stdio profile is `read_only`. Operator or mutation tools should
 only appear when the generated service explicitly enables an operator profile or
@@ -275,11 +298,13 @@ my-mcp-server/
     codeql-query-tests.yml
     codeql.yml
     dependency-governance.yml
+    native-release-artifacts.yml
     rust-baseline.yml
   docs/
     dependency-governance.md
   scripts/
     dependency_governance_check.sh
+    native_release_artifact.py
     rebaseline_tool_schema_snapshot.sh
     rmcp_macro_runtime_pin_check.py
     workflow_runner_policy_check.py

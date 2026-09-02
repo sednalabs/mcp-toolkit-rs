@@ -192,6 +192,43 @@ The `rust-baseline` workflow runs those checks on pull requests, pushes to the
 primary branch, and manual dispatches. Record the run URL in the PR or work
 item before merging.
 
+For a generated public stdio server, commit `Cargo.lock`, merge the reviewed
+candidate, then use the `native-release-artifacts` run created by a successful
+`main` push or `v...` tag. The workflow has no pull-request or manual release
+entrypoint. A version tag must resolve to the exact candidate and that commit
+must be identical to or an ancestor of protected `main`, proven with complete
+Git history. Treat the two read-only native build jobs, the cross-architecture
+verifier, and the final trusted attestation job as one proof unit:
+the x86_64 and arm64 archives must both pass ELF, checksum, exact file-set,
+candidate/source/input-bound SBOM, GNU interpreter/GLIBC, and canonical tool
+inventory/schema checks. Attestation occurs only after consumer reverification.
+The final job emits a run-bound `release-authorization.json` receipt and
+attests it with the verified archives; consumers must also confirm that hosted
+workflow concluded successfully.
+Toolkit changes to that generated lane are exercised before merge by the
+read-only, non-attesting `native-stdio-release-template-proof` workflow; the
+separate trusted template attestation workflow runs only on `main` or version
+tag pushes. Release preflight structurally validates that optional privileged
+wrapper when it is present, including its exact trigger, job graph, isolated
+OIDC permissions, hosted runner, pinned actions, credential-free full-history
+checkout, and source-bound authorization path. One shared fail-closed contract
+validates the complete ordered privileged-step sequence for both the generated
+workflow and toolkit-root wrapper: every step permits only its exact keys,
+each shell step must equal its complete canonical command body, action pins and
+inputs cannot drift, and the provenance subject list must be the exact ordered
+archive, checksum-sidecar, verification-report, and authorization-receipt set.
+The YAML parser's standard line-break handling is the only normalization for a
+privileged command body; command order, arguments, quoting, continuations, and
+all remaining whitespace must match without extra prefixes or suffixes.
+Prefix and substring checks provide diagnostics only and do not authorize a
+privileged command body. The hosted proof also requires
+the generated template's runner-policy helper to remain byte-identical to the
+canonical root copy. GitHub-hosted attestations are provenance evidence; they
+do not publish a release.
+An unmerged candidate can prove only the read-only lane. Trusted attestation is
+an explicit post-merge acceptance gap until the protected-`main` workflow runs
+successfully and its exact authorization receipt and attestations are verified.
+
 Snapshot updates are exceptional. To intentionally rebaseline a snapshot:
 
 ```bash
@@ -238,7 +275,8 @@ Before publishing or promoting a toolkit-built server:
 2. Tool schema snapshots and runtime contract tests are committed.
 3. GitHub-hosted validation passed on the exact commit being promoted.
 4. The PR or work item records the validation run URL.
-5. Any release artifact has a stable name and SHA256 digest.
+5. Any native release artifact has a SHA-qualified name, complete checksum
+   coverage, target-specific CycloneDX SBOM, and GitHub-hosted attestation.
 6. Fresh runtime smoke proof was captured after the final build.
 7. Existing long-lived MCP client sessions are restarted or explicitly called
    out as stale until restart.
@@ -250,6 +288,8 @@ Before publishing or promoting a toolkit-built server:
     when the server is expected to be publicly maintained.
 12. Public wording has been scrubbed for secrets, hostnames, and internal-only
     terminology.
+13. Multi-architecture artifacts expose equal canonical tool inventories and
+    schemas, and the recorded candidate equals the workflow commit.
 
 For service repositories, also verify that service-specific policy, secrets,
 hostnames, backend schemas, and deployment-specific wording remain out of this

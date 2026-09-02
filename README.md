@@ -24,6 +24,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-policy-ffi` | Optional dynamic policy-runtime loader. |
 | `mcp-toolkit-policy-kernel-adapters` | Compatibility adapters for exact external policy-kernel parity work. |
 | `mcp-toolkit-postgres` | PostgreSQL connection, TLS, and target-identity helpers. |
+| `mcp-toolkit-private-artifact` | Descriptor-bound, bounded, content-hashed reads of private local artifacts. |
 | `mcp-toolkit-process` | Process and signal helpers. |
 | `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions for large analytical result sets, bounded read-only SQL, table inventory, and evidence handles. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
@@ -238,7 +239,8 @@ stable public surface:
    `run_scratchpad_blocking` so DuckDB work stays off the async executor. Keep
    provider-specific ingest and evidence wording in the service repository.
 11. Use `mcp-toolkit-observability` helpers for sanitized logs, bounded labels,
-   and optional tracing/metrics integration.
+   the fixed-schema terminal tool-call diagnostic, and optional tracing/metrics
+   integration.
 12. Use `mcp-toolkit-core::query_evidence` when a tool response should expose
    provider query-cost and read-only evidence without returning raw provider
    payloads.

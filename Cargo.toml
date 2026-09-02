@@ -13,6 +13,7 @@ members = [
   "crates/mcp-toolkit-policy-kernel-adapters",
   "crates/mcp-toolkit-policy-runtime",
   "crates/mcp-toolkit-postgres",
+  "crates/mcp-toolkit-private-artifact",
   "crates/mcp-toolkit-process",
   "crates/mcp-toolkit-scratchpad",
   "crates/mcp-toolkit-testing",

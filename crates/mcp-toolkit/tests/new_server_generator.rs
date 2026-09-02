@@ -65,6 +65,8 @@ fn generator_creates_curated_stdio_project() {
 #[test]
 fn generator_emits_contract_and_probe_artifacts_for_every_template() {
     let root = temp_root("all-template-contracts");
+    let canonical_runner_policy =
+        read(&default_toolkit_root().join("scripts/workflow_runner_policy_check.py"));
 
     for template in templates() {
         let package_name = format!("{}-generated", template.id);
@@ -87,6 +89,12 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
         assert!(
             output.join("tests/tool_schema_snapshot.rs").exists(),
             "{} should include tool schema snapshot tests",
+            template.id
+        );
+        assert_eq!(
+            read(&output.join("scripts/workflow_runner_policy_check.py")),
+            canonical_runner_policy,
+            "{} should emit the canonical workflow runner policy helper",
             template.id
         );
 
@@ -114,6 +122,24 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
                 "{} should include a stdio probe scenario",
                 template.id
             );
+        }
+
+        if template.id == "single-crate-public-stdio" {
+            assert!(
+                output
+                    .join(".github/workflows/native-release-artifacts.yml")
+                    .exists(),
+                "{} should include the native release artifact workflow",
+                template.id
+            );
+            assert!(
+                output.join("scripts/native_release_artifact.py").exists(),
+                "{} should include the native release verifier",
+                template.id
+            );
+            let workflow = read(&output.join(".github/workflows/native-release-artifacts.yml"));
+            assert!(workflow.contains("BINARY_NAME: single-crate-public-stdio-generated"));
+            assert!(!workflow.contains("single-crate-public-stdio-server"));
         }
     }
 
@@ -180,6 +206,7 @@ fn release_preflight_accepts_public_stdio_generated_project() {
         overwrite: false,
     })
     .expect("generate public stdio template");
+    add_lockfile(&output);
 
     let report = inspect_release_preflight(&output);
     assert!(report.ready(), "public template should be release-ready");
@@ -202,8 +229,1212 @@ fn release_preflight_accepts_public_stdio_generated_project() {
     assert!(stdout.contains("Public ready: yes"));
     assert!(stdout.contains("CodeQL workflow"));
     assert!(stdout.contains("Dependency governance workflow"));
+    assert!(stdout.contains("Native release workflow"));
+    assert!(stdout.contains("Native release contract"));
     assert!(stdout.contains("Portable toolkit dependencies"));
     assert!(stdout.contains("High-confidence secret marker scan"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_incomplete_native_release_semantics() {
+    let root = temp_root("release-preflight-native-contract");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path)
+        .replace("cargo build --release --locked", "cargo build --release")
+        .replace(
+            "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+            "actions/attest-build-provenance@main",
+        );
+    fs::write(&workflow_path, workflow).expect("weaken native release workflow fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(contract.detail.contains("cargo build --release --locked"));
+    assert!(!report.ready());
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_unpinned_native_release_actions() {
+    let root = temp_root("release-preflight-native-action-pin");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+        "actions/attest-build-provenance@main",
+    );
+    fs::write(&workflow_path, workflow).expect("weaken native action pin fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(contract.detail.contains("not pinned"));
+    assert!(!report.ready());
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_folded_unpinned_native_release_actions() {
+    let root = temp_root("release-preflight-native-folded-action-pin");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+        "uses: >-\n          actions/attest-build-provenance@main",
+    );
+    fs::write(&workflow_path, workflow).expect("fold unpinned action fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("not pinned"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_inert_release_semantics() {
+    let root = temp_root("release-preflight-native-inert-semantics");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "run: cargo build --release --locked --target \"$TARGET\" --bin \"$BINARY_NAME\"",
+        "run: |\n          # cargo build --release --locked\n          echo 'cargo build --release --locked'",
+    );
+    fs::write(&workflow_path, workflow).expect("replace active build with inert comment");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("cargo build --release --locked"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_untrusted_release_authority() {
+    let root = temp_root("release-preflight-native-untrusted-authority");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path)
+        .replace("  push:\n", "  pull_request:\n  push:\n")
+        .replace(
+            "  build-native-linux:\n",
+            "  build-native-linux:\n    permissions:\n      id-token: write\n      contents: read\n",
+        );
+    fs::write(&workflow_path, workflow).expect("grant untrusted release authority");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(contract.detail.contains("trusted push events"));
+    assert!(contract.detail.contains("read-only permissions"));
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_extra_privileged_release_job() {
+    let root = temp_root("release-preflight-native-extra-job");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "jobs:\n",
+        "jobs:\n  unreviewed-privileged-job:\n    runs-on: ubuntu-24.04\n    permissions:\n      id-token: write\n      contents: read\n    steps:\n      - run: echo unexpected\n\n",
+    );
+    fs::write(&workflow_path, workflow).expect("add extra privileged release job");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("must contain only"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_unexpected_release_runner() {
+    let root = temp_root("release-preflight-native-runner");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: ubuntu-24.04",
+        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: self-hosted",
+    );
+    fs::write(&workflow_path, workflow).expect("change verifier runner");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("runner labels"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
+    let root = temp_root("release-preflight-native-matrix-shape");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let canonical = read(&workflow_path);
+    let include_rows = concat!(
+        "        include:\n",
+        "          - runner: ubuntu-24.04\n",
+        "            target: x86_64-unknown-linux-gnu\n",
+        "          - runner: ubuntu-24.04-arm\n",
+        "            target: aarch64-unknown-linux-gnu\n",
+    );
+    let cases = vec![
+        (
+            "runs-on expression drift",
+            replace_once(
+                &canonical,
+                "    runs-on: ${{ matrix.runner }}\n",
+                "    runs-on: ${{ matrix.os }}\n",
+                "runs-on expression drift",
+            ),
+        ),
+        (
+            "self-hosted extra runner dimension",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: [ubuntu-24.04, self-hosted]\n            target: x86_64-unknown-linux-gnu\n",
+                "self-hosted extra runner dimension",
+            ),
+        ),
+        (
+            "extra target dimension",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n            target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]\n",
+                "extra target dimension",
+            ),
+        ),
+        (
+            "extra os dimension",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n            os: linux\n",
+                "extra os dimension",
+            ),
+        ),
+        (
+            "matrix exclude",
+            replace_once(
+                &canonical,
+                "            target: x86_64-pc-windows-msvc\n    env:\n",
+                "            target: x86_64-pc-windows-msvc\n        exclude: []\n    env:\n",
+                "matrix exclude",
+            ),
+        ),
+        (
+            "unknown matrix key",
+            replace_once(
+                &canonical,
+                "            target: x86_64-pc-windows-msvc\n    env:\n",
+                "            target: x86_64-pc-windows-msvc\n        unexpected: true\n    env:\n",
+                "unknown matrix key",
+            ),
+        ),
+        (
+            "strategy max-parallel",
+            replace_once(
+                &canonical,
+                "      fail-fast: false\n",
+                "      fail-fast: false\n      max-parallel: 1\n",
+                "strategy max-parallel",
+            ),
+        ),
+        (
+            "strategy unknown key",
+            replace_once(
+                &canonical,
+                "      fail-fast: false\n",
+                "      fail-fast: false\n      unexpected: true\n",
+                "strategy unknown key",
+            ),
+        ),
+        (
+            "fail-fast drift",
+            replace_once(
+                &canonical,
+                "      fail-fast: false\n",
+                "      fail-fast: true\n",
+                "fail-fast drift",
+            ),
+        ),
+        (
+            "missing matrix row",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04-arm\n            target: aarch64-unknown-linux-gnu\n",
+                "",
+                "missing matrix row",
+            ),
+        ),
+        (
+            "extra matrix row",
+            replace_once(
+                &canonical,
+                include_rows,
+                &format!(
+                    "{include_rows}          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n"
+                ),
+                "extra matrix row",
+            ),
+        ),
+        (
+            "duplicate matrix row",
+            replace_once(
+                &canonical,
+                include_rows,
+                concat!(
+                    "        include:\n",
+                    "          - runner: ubuntu-24.04\n",
+                    "            target: x86_64-unknown-linux-gnu\n",
+                    "          - runner: ubuntu-24.04\n",
+                    "            target: x86_64-unknown-linux-gnu\n",
+                ),
+                "duplicate matrix row",
+            ),
+        ),
+        (
+            "reordered matrix rows",
+            replace_once(
+                &canonical,
+                include_rows,
+                concat!(
+                    "        include:\n",
+                    "          - runner: ubuntu-24.04-arm\n",
+                    "            target: aarch64-unknown-linux-gnu\n",
+                    "          - runner: ubuntu-24.04\n",
+                    "            target: x86_64-unknown-linux-gnu\n",
+                ),
+                "reordered matrix rows",
+            ),
+        ),
+        (
+            "matrix row extra key",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n            unexpected: true\n",
+                "matrix row extra key",
+            ),
+        ),
+        (
+            "matrix row missing key",
+            replace_once(
+                &canonical,
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n",
+                "matrix row missing key",
+            ),
+        ),
+        (
+            "matrix row target drift",
+            replace_once(
+                &canonical,
+                "            target: x86_64-unknown-linux-gnu\n",
+                "            target: x86_64-unknown-linux-musl\n",
+                "matrix row target drift",
+            ),
+        ),
+    ];
+
+    for (label, mutated) in cases {
+        assert_native_release_contract_rejects(
+            &output,
+            &workflow_path,
+            &canonical,
+            label,
+            mutated,
+            "exact ordered five-target matrix.include",
+        );
+    }
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_incomplete_tag_ancestry_proof() {
+    let root = temp_root("release-preflight-native-tag-ancestry");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path)
+        .replace("fetch-depth: 0", "fetch-depth: 1")
+        .replace(
+            "git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+            "echo skipped-main-fetch",
+        );
+    fs::write(&workflow_path, workflow).expect("weaken tag ancestry proof");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract.detail.contains("protected-main ancestry")
+            || contract.detail.contains("complete history"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_attestation_before_consumer_verification() {
+    let root = temp_root("release-preflight-native-attestation-order");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replace(
+        "      - verify-native-linux\n",
+        "      - build-native-linux\n",
+    );
+    fs::write(&workflow_path, workflow).expect("remove verification dependency");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed);
+    assert!(
+        contract
+            .detail
+            .contains("successful build and verification"),
+        "{}",
+        contract.detail
+    );
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
+    let root = temp_root("release-preflight-generated-privileged-steps");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let canonical = read(&workflow_path);
+    let attest_step = "      - name: Attest verified native archives, checksums, and report\n";
+    let upload_step = "      - name: Upload attested release authorization receipt\n";
+    let attest_uses =
+        "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
+    let reverify_run =
+        "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
+    let privileged_job = "  attest-native-linux:\n";
+
+    let cases = vec![
+        (
+            "extra privileged run",
+            replace_once(
+                &canonical,
+                attest_step,
+                &format!(
+                    "      - name: Unexpected privileged run\n        shell: bash\n        run: echo unexpected\n\n{attest_step}"
+                ),
+                "extra privileged run",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "reordered privileged steps",
+            swap_once(
+                &canonical,
+                attest_step,
+                upload_step,
+                "reordered privileged steps",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "duplicated privileged step",
+            replace_once(
+                &canonical,
+                attest_step,
+                &format!(
+                    "      - name: Reverify trusted consumer artifact set\n        shell: bash\n        run: echo duplicate\n\n{attest_step}"
+                ),
+                "duplicated privileged step",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "unexpected action run key",
+            replace_once(
+                &canonical,
+                attest_uses,
+                &format!("{attest_uses}        run: echo unexpected\n"),
+                "unexpected action run key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "unexpected action shell key",
+            replace_once(
+                &canonical,
+                attest_uses,
+                &format!("{attest_uses}        shell: bash\n"),
+                "unexpected action shell key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "privileged action pin drift",
+            replace_once(
+                &canonical,
+                attest_uses,
+                "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd9\n",
+                "privileged action pin drift",
+            ),
+            "not pinned to the exact contract",
+        ),
+        (
+            "unexpected action input key",
+            replace_once(
+                &canonical,
+                "          subject-path: |\n",
+                "          unexpected: true\n          subject-path: |\n",
+                "unexpected action input key",
+            ),
+            "subject-path",
+        ),
+        (
+            "unexpected run env key",
+            replace_once(
+                &canonical,
+                reverify_run,
+                &format!("{reverify_run}        env:\n          UNEXPECTED: true\n"),
+                "unexpected run env key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "unexpected run with key",
+            replace_once(
+                &canonical,
+                reverify_run,
+                &format!("{reverify_run}        with:\n          unexpected: true\n"),
+                "unexpected run with key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "prepended privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "        run: |\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "        run: |\n          echo prepended\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "prepended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "appended privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "            --output release-authorization.json\n\n      - name: Attest verified native archives",
+                "            --output release-authorization.json\n          echo appended\n\n      - name: Attest verified native archives",
+                "appended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "injected privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          x86_archive=",
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          echo injected\n          x86_archive=",
+                "injected privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "replaced privileged shell command",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "          cmp trusted-verification.json downloaded/native-release-verification.json\n",
+                "          cp trusted-verification.json downloaded/native-release-verification.json\n",
+                "replaced privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "mutated privileged required argument",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "            --workflow-run-attempt \"$GITHUB_RUN_ATTEMPT\" \\\n",
+                "            --workflow-run-attempt \"$GITHUB_RUN_NUMBER\" \\\n",
+                "mutated privileged required argument",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "reordered privileged shell commands",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "          cmp trusted-verification.json downloaded/native-release-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-verification.json downloaded/native-release-verification.json\n",
+                "reordered privileged shell commands",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "privileged continuation whitespace trick",
+            replace_once_after(
+                &canonical,
+                privileged_job,
+                "            --candidate \"$GITHUB_SHA\" \\\n",
+                "            --candidate \"$GITHUB_SHA\"\\\n",
+                "privileged continuation whitespace trick",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "missing attestation subject",
+            replace_once(
+                &canonical,
+                "            downloaded/*.tar.gz.sha256\n",
+                "",
+                "missing attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "substituted attestation subject",
+            replace_once(
+                &canonical,
+                "            downloaded/native-release-verification.json\n",
+                "            downloaded/substituted-verification.json\n",
+                "substituted attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "extra attestation subject",
+            replace_once(
+                &canonical,
+                "            release-authorization.json\n",
+                "            release-authorization.json\n            downloaded/unexpected.json\n",
+                "extra attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "duplicated attestation subject",
+            replace_once(
+                &canonical,
+                "            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz.sha256\n",
+                "duplicated attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "reordered attestation subjects",
+            replace_once(
+                &canonical,
+                "            downloaded/*.tar.gz\n            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz\n",
+                "reordered attestation subjects",
+            ),
+            "subject-path",
+        ),
+    ];
+
+    for (label, mutated, expected_detail) in cases {
+        assert_native_release_contract_rejects(
+            &output,
+            &workflow_path,
+            &canonical,
+            label,
+            mutated,
+            expected_detail,
+        );
+    }
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
+    let root = temp_root("release-preflight-native-template-attestation");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+
+    let wrapper_path = output.join(".github/workflows/native-stdio-release-template-attest.yml");
+    let canonical_wrapper = read(
+        &default_toolkit_root().join(".github/workflows/native-stdio-release-template-attest.yml"),
+    );
+    fs::write(&wrapper_path, &canonical_wrapper).expect("install canonical wrapper fixture");
+
+    let canonical_report = inspect_release_preflight(&output);
+    let canonical_contract = canonical_report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(canonical_contract.passed, "{}", canonical_contract.detail);
+
+    let weakened_cases = [
+        (
+            "trigger",
+            "on:\n  push:\n",
+            "on:\n  workflow_dispatch:\n  push:\n",
+            "triggered only by trusted push events",
+        ),
+        (
+            "job graph",
+            "jobs:\n",
+            "jobs:\n  unexpected-job:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo unexpected\n\n",
+            "must contain only proof and attestation jobs",
+        ),
+        (
+            "dependency",
+            "    needs: prove-native-template\n",
+            "    needs: []\n",
+            "depend on successful template proof",
+        ),
+        (
+            "OIDC isolation",
+            "      id-token: write\n",
+            "      id-token: read\n",
+            "isolate exact job-scoped OIDC",
+        ),
+        (
+            "runner",
+            "    runs-on: ubuntu-24.04\n",
+            "    runs-on: self-hosted\n",
+            "exact GitHub-hosted runner label",
+        ),
+        (
+            "action pin",
+            "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+            "actions/attest-build-provenance@main",
+            "not pinned",
+        ),
+        (
+            "checkout custody",
+            "          persist-credentials: false\n",
+            "          persist-credentials: true\n",
+            "exact permitted key/value contract",
+        ),
+        (
+            "authorization path",
+            "          python3 scripts/native_release_artifact.py authorize \\\n",
+            "          echo skipped-authorization \\\n",
+            "authorization path is missing active command",
+        ),
+    ];
+
+    for (label, original, replacement, expected_detail) in weakened_cases {
+        assert!(
+            canonical_wrapper.contains(original),
+            "canonical fixture is missing mutation anchor for {label}"
+        );
+        fs::write(
+            &wrapper_path,
+            canonical_wrapper.replacen(original, replacement, 1),
+        )
+        .unwrap_or_else(|error| panic!("write weakened {label} fixture: {error}"));
+        let report = inspect_release_preflight(&output);
+        let contract = report
+            .checks
+            .iter()
+            .find(|check| check.label == "Native release contract")
+            .expect("native release contract check");
+        assert!(!contract.passed, "{label} weakening should fail preflight");
+        assert!(
+            contract.detail.contains(expected_detail),
+            "{label} weakening produced unexpected detail: {}",
+            contract.detail
+        );
+    }
+
+    let attest_step = "      - name: Attest verified template archives, checksums, and report\n";
+    let upload_step = "      - name: Upload attested template authorization receipt\n";
+    let attest_uses =
+        "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
+    let reverify_run =
+        "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
+    let privileged_job = "  attest-native-linux-template:\n";
+    let structural_cases = vec![
+        (
+            "root extra privileged run",
+            replace_once(
+                &canonical_wrapper,
+                attest_step,
+                &format!(
+                    "      - name: Unexpected privileged run\n        shell: bash\n        run: echo unexpected\n\n{attest_step}"
+                ),
+                "root extra privileged run",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "root reordered privileged steps",
+            swap_once(
+                &canonical_wrapper,
+                attest_step,
+                upload_step,
+                "root reordered privileged steps",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "root duplicated privileged step",
+            replace_once(
+                &canonical_wrapper,
+                attest_step,
+                &format!(
+                    "      - name: Reverify trusted consumer artifact set\n        shell: bash\n        run: echo duplicate\n\n{attest_step}"
+                ),
+                "root duplicated privileged step",
+            ),
+            "privileged step sequence",
+        ),
+        (
+            "root unexpected action run key",
+            replace_once(
+                &canonical_wrapper,
+                attest_uses,
+                &format!("{attest_uses}        run: echo unexpected\n"),
+                "root unexpected action run key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "root unexpected action shell key",
+            replace_once(
+                &canonical_wrapper,
+                attest_uses,
+                &format!("{attest_uses}        shell: bash\n"),
+                "root unexpected action shell key",
+            ),
+            "unexpected keys",
+        ),
+        (
+            "root privileged action pin drift",
+            replace_once(
+                &canonical_wrapper,
+                attest_uses,
+                "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd9\n",
+                "root privileged action pin drift",
+            ),
+            "not pinned to the exact contract",
+        ),
+        (
+            "root unexpected action input key",
+            replace_once(
+                &canonical_wrapper,
+                "          subject-path: |\n",
+                "          unexpected: true\n          subject-path: |\n",
+                "root unexpected action input key",
+            ),
+            "subject-path",
+        ),
+        (
+            "root unexpected run env key",
+            replace_once(
+                &canonical_wrapper,
+                reverify_run,
+                &format!("{reverify_run}        env:\n          UNEXPECTED: true\n"),
+                "root unexpected run env key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "root unexpected run with key",
+            replace_once(
+                &canonical_wrapper,
+                reverify_run,
+                &format!("{reverify_run}        with:\n          unexpected: true\n"),
+                "root unexpected run with key",
+            ),
+            "only exact name, shell, and run keys",
+        ),
+        (
+            "root prepended privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "        run: |\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "        run: |\n          echo prepended\n          set -euo pipefail\n          git fetch --force --no-tags origin",
+                "root prepended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root appended privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "            --output release-authorization.json\n\n      - name: Attest verified template archives",
+                "            --output release-authorization.json\n          echo appended\n\n      - name: Attest verified template archives",
+                "root appended privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root injected privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          x86_archive=",
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          echo injected\n          x86_archive=",
+                "root injected privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root replaced privileged shell command",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "root replaced privileged shell command",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root mutated privileged required argument",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "            --workflow-run-attempt \"$GITHUB_RUN_ATTEMPT\" \\\n",
+                "            --workflow-run-attempt \"$GITHUB_RUN_NUMBER\" \\\n",
+                "root mutated privileged required argument",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root reordered privileged shell commands",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "root reordered privileged shell commands",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root privileged continuation whitespace trick",
+            replace_once_after(
+                &canonical_wrapper,
+                privileged_job,
+                "            --candidate \"$GITHUB_SHA\" \\\n",
+                "            --candidate \"$GITHUB_SHA\"\\\n",
+                "root privileged continuation whitespace trick",
+            ),
+            "run body must match the exact canonical command body",
+        ),
+        (
+            "root missing attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/*.tar.gz.sha256\n",
+                "",
+                "root missing attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root substituted attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/native-template-verification.json\n",
+                "            downloaded/substituted-verification.json\n",
+                "root substituted attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root extra attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            release-authorization.json\n",
+                "            release-authorization.json\n            downloaded/unexpected.json\n",
+                "root extra attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root duplicated attestation subject",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz.sha256\n",
+                "root duplicated attestation subject",
+            ),
+            "subject-path",
+        ),
+        (
+            "root reordered attestation subjects",
+            replace_once(
+                &canonical_wrapper,
+                "            downloaded/*.tar.gz\n            downloaded/*.tar.gz.sha256\n",
+                "            downloaded/*.tar.gz.sha256\n            downloaded/*.tar.gz\n",
+                "root reordered attestation subjects",
+            ),
+            "subject-path",
+        ),
+    ];
+
+    for (label, mutated, expected_detail) in structural_cases {
+        assert_native_release_contract_rejects(
+            &output,
+            &wrapper_path,
+            &canonical_wrapper,
+            label,
+            mutated,
+            expected_detail,
+        );
+    }
+
+    cleanup(root);
+}
+
+#[test]
+fn release_preflight_accepts_local_native_release_actions() {
+    let root = temp_root("release-preflight-native-local-action");
+    let output = root.join("public-mcp");
+
+    generate_new_server(&NewServerOptions {
+        template: "single-crate-public-stdio".to_string(),
+        package_name: "public-mcp".to_string(),
+        output_dir: output.clone(),
+        toolkit_dependency: ToolkitDependencySource::Git(
+            "https://github.com/sednalabs/mcp-toolkit-rs".to_string(),
+        ),
+        overwrite: false,
+    })
+    .expect("generate public stdio template");
+    add_lockfile(&output);
+
+    let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
+    let workflow = read(&workflow_path).replacen(
+        "    steps:\n",
+        "    steps:\n      - uses: ./.github/actions/release-setup\n",
+        1,
+    );
+    fs::write(&workflow_path, workflow).expect("add local action fixture");
+
+    let report = inspect_release_preflight(&output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(contract.passed, "{}", contract.detail);
+    assert!(report.ready());
 
     cleanup(root);
 }
@@ -437,12 +1668,13 @@ fn release_preflight_accepts_workspace_inherited_package_metadata() {
     let manifest_path = output.join("Cargo.toml");
     let description_line = concat!(
         "description = \"Standalone public Rust MCP server starter with hosted CI, ",
-        "CodeQL, coverage, and dependency governance.\""
+        "governance, and dual-native Linux release artifacts.\""
     );
     let manifest = read(&manifest_path)
         .replace("license = \"Apache-2.0\"", "license.workspace = true")
         .replace(description_line, "description.workspace = true");
     fs::write(&manifest_path, manifest).expect("write workspace-inherited package metadata");
+    add_lockfile(&output);
 
     let report = inspect_release_preflight(&output);
     assert!(
@@ -1143,6 +2375,74 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
+fn missing_fixture_anchor(kind: &str, label: &str) -> ! {
+    std::panic::panic_any(["fixture is missing ", kind, " anchor for ", label].concat())
+}
+
+fn replace_once(contents: &str, original: &str, replacement: &str, label: &str) -> String {
+    if !contents.contains(original) {
+        missing_fixture_anchor("mutation", label);
+    }
+    contents.replacen(original, replacement, 1)
+}
+
+fn replace_once_after(
+    contents: &str,
+    section: &str,
+    original: &str,
+    replacement: &str,
+    label: &str,
+) -> String {
+    let section_start = contents
+        .find(section)
+        .unwrap_or_else(|| missing_fixture_anchor("section", label));
+    let search_start = section_start + section.len();
+    let relative_start = contents[search_start..]
+        .find(original)
+        .unwrap_or_else(|| missing_fixture_anchor("mutation", label));
+    let replacement_start = search_start + relative_start;
+    let replacement_end = replacement_start + original.len();
+    let mut mutated = contents.to_string();
+    mutated.replace_range(replacement_start..replacement_end, replacement);
+    mutated
+}
+
+fn swap_once(contents: &str, first: &str, second: &str, label: &str) -> String {
+    let marker = "__MCP_TOOLKIT_PRIVILEGED_STEP_SWAP_MARKER__";
+    assert!(!contents.contains(marker));
+    let swapped = replace_once(contents, first, marker, label);
+    let swapped = replace_once(&swapped, second, first, label);
+    replace_once(&swapped, marker, second, label)
+}
+
+fn assert_native_release_contract_rejects(
+    output: &Path,
+    workflow_path: &Path,
+    canonical: &str,
+    label: &str,
+    mutated: String,
+    expected_detail: &str,
+) {
+    assert_ne!(
+        canonical, mutated,
+        "{label} mutation must change the fixture"
+    );
+    fs::write(workflow_path, mutated)
+        .unwrap_or_else(|error| panic!("write weakened {label} fixture: {error}"));
+    let report = inspect_release_preflight(output);
+    let contract = report
+        .checks
+        .iter()
+        .find(|check| check.label == "Native release contract")
+        .expect("native release contract check");
+    assert!(!contract.passed, "{label} weakening should fail preflight");
+    assert!(
+        contract.detail.contains(expected_detail),
+        "{label} weakening produced unexpected detail: {}",
+        contract.detail
+    );
+}
+
 fn cleanup(path: PathBuf) {
     let _ = fs::remove_dir_all(path);
 }
@@ -1158,13 +2458,24 @@ fn add_public_release_files(output: &Path) {
         ".github/workflows/code-coverage.yml",
         ".github/workflows/dependency-governance.yml",
         ".github/workflows/codeql-query-tests.yml",
+        ".github/workflows/native-release-artifacts.yml",
         "scripts/dependency_governance_check.sh",
+        "scripts/native_release_artifact.py",
         "docs/dependency-governance.md",
     ] {
         let target = output.join(relative);
         fs::create_dir_all(target.parent().expect("target parent")).expect("create parent");
         fs::copy(public_template.join(relative), target).expect("copy public release file");
     }
+    add_lockfile(output);
+}
+
+fn add_lockfile(output: &Path) {
+    fs::write(
+        output.join("Cargo.lock"),
+        "# generated for release preflight\nversion = 4\n",
+    )
+    .expect("write Cargo.lock fixture");
 }
 
 fn add_manifest_description(output: &Path) {
