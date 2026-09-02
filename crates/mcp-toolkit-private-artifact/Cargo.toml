@@ -1,0 +1,23 @@
+[package]
+name = "mcp-toolkit-private-artifact"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Descriptor-bound read custody for private local artifacts."
+repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+documentation = "https://docs.rs/mcp-toolkit-private-artifact"
+readme = "README.md"
+publish = false
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2.186"
+sha2 = "0.10.9"
+
+[dev-dependencies]
+tempfile = "3.25.0"

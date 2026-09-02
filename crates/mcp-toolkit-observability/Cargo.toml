@@ -38,3 +38,6 @@ time = { version = "0.3", features = ["formatting"] }
 tracing = "0.1"
 tracing-opentelemetry = { version = "0.33", optional = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry"] }
+
+[dev-dependencies]
+trybuild = "1"

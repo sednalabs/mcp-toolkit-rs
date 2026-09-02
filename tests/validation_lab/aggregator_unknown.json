@@ -1,0 +1,6 @@
+{
+  "schema": "toolkit_frontier_aggregate_case",
+  "case": "unknown",
+  "lanes": [{"lane_id": "lane-unknown", "status": "unknown", "finding": "missing receipt"}],
+  "expected": {"decision": "fail", "ranked_failures": ["lane-unknown"]}
+}

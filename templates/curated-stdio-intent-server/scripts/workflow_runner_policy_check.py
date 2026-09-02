@@ -42,6 +42,20 @@ STANDARD_PUBLIC_RUNNER_LABELS = frozenset(
     }
 )
 
+MATRIX_RUNNER_EXPRESSION = "${{ matrix.runner }}"
+CANONICAL_ARCHITECTURE_STRATEGY = {
+    "fail-fast": False,
+    "matrix": {
+        "include": [
+            {"runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu"},
+            {"runner": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+            {"runner": "macos-15-intel", "target": "x86_64-apple-darwin"},
+            {"runner": "macos-15", "target": "aarch64-apple-darwin"},
+            {"runner": "windows-2025", "target": "x86_64-pc-windows-msvc"},
+        ]
+    },
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -92,10 +106,31 @@ def validate_label(job_ref: str, label: str) -> list[str]:
     return violations
 
 
-def validate_runs_on(job_ref: str, runs_on: object) -> list[str]:
+def validate_matrix_runner(job_ref: str, job_body: object) -> list[str]:
+    if not isinstance(job_body, dict):
+        return [f"{job_ref}: matrix runner routing requires a mapping job body."]
+
+    strategy = job_body.get("strategy")
+    if (
+        not isinstance(strategy, dict)
+        or type(strategy.get("fail-fast")) is not bool
+        or strategy["fail-fast"] is not False
+        or strategy != CANONICAL_ARCHITECTURE_STRATEGY
+    ):
+        return [
+            f"{job_ref}: {MATRIX_RUNNER_EXPRESSION!r} requires the exact canonical architecture strategy: only fail-fast: false and matrix.include, with the ordered x86_64 and arm64 hosted runner/target rows and no extra keys or dimensions."
+        ]
+    return []
+
+
+def validate_runs_on(
+    job_ref: str, runs_on: object, job_body: object | None = None
+) -> list[str]:
     violations: list[str] = []
     labels: list[str] = []
 
+    if runs_on == MATRIX_RUNNER_EXPRESSION:
+        return validate_matrix_runner(job_ref, job_body)
     if isinstance(runs_on, str):
         labels = [runs_on]
     elif isinstance(runs_on, list):
@@ -180,7 +215,11 @@ def validate_workflow_file(path: Path) -> list[str]:
             continue
         if "runs-on" not in job_body:
             continue
-        violations.extend(validate_runs_on(f"{path}::{job_id}", job_body["runs-on"]))
+        violations.extend(
+            validate_runs_on(
+                f"{path}::{job_id}", job_body["runs-on"], job_body=job_body
+            )
+        )
     return violations
 
 
@@ -193,6 +232,24 @@ def validate_roots(roots: Iterable[Path]) -> list[str]:
 
 
 class RunnerPolicyTests(unittest.TestCase):
+    @staticmethod
+    def canonical_matrix_job() -> dict[str, object]:
+        return {
+            "runs-on": MATRIX_RUNNER_EXPRESSION,
+            "strategy": {
+                "fail-fast": False,
+                "matrix": {
+                    "include": [
+                        {"runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu"},
+                        {"runner": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+                        {"runner": "macos-15-intel", "target": "x86_64-apple-darwin"},
+                        {"runner": "macos-15", "target": "aarch64-apple-darwin"},
+                        {"runner": "windows-2025", "target": "x86_64-pc-windows-msvc"},
+                    ]
+                },
+            },
+        }
+
     def test_allows_standard_scalar_label(self) -> None:
         self.assertEqual(
             validate_runs_on("workflow.yml::build", "ubuntu-24.04"),
@@ -223,6 +280,174 @@ class RunnerPolicyTests(unittest.TestCase):
     def test_rejects_dynamic_expression(self) -> None:
         violations = validate_runs_on("workflow.yml::build", "${{ inputs.runner }}")
         self.assertTrue(any("dynamic runs-on expression" in item for item in violations))
+
+    def test_allows_exact_matrix_runner_with_literal_include_values(self) -> None:
+        job = self.canonical_matrix_job()
+        self.assertEqual(
+            validate_runs_on("workflow.yml::build", job["runs-on"], job), []
+        )
+
+    def test_rejects_missing_matrix_structure_keys(self) -> None:
+        jobs = [
+            {},
+            {"strategy": {}},
+            {"strategy": {"matrix": {}}},
+        ]
+        for job in jobs:
+            with self.subTest(job=job):
+                self.assertNotEqual(
+                    validate_runs_on(
+                        "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                    ),
+                    [],
+                )
+
+    def test_rejects_every_architecture_matrix_shape_drift(self) -> None:
+        canonical = self.canonical_matrix_job()
+        canonical_strategy = canonical["strategy"]
+        assert isinstance(canonical_strategy, dict)
+        cases = {
+            "self-hosted extra runner dimension": {
+                **canonical_strategy,
+                "matrix": {
+                    **canonical_strategy["matrix"],
+                    "runner": ["ubuntu-24.04", "self-hosted"],
+                },
+            },
+            "extra target dimension": {
+                **canonical_strategy,
+                "matrix": {
+                    **canonical_strategy["matrix"],
+                    "target": ["x86_64-unknown-linux-gnu"],
+                },
+            },
+            "extra os dimension": {
+                **canonical_strategy,
+                "matrix": {**canonical_strategy["matrix"], "os": ["linux"]},
+            },
+            "exclude": {
+                **canonical_strategy,
+                "matrix": {**canonical_strategy["matrix"], "exclude": []},
+            },
+            "unknown matrix key": {
+                **canonical_strategy,
+                "matrix": {**canonical_strategy["matrix"], "unexpected": True},
+            },
+            "strategy max-parallel": {**canonical_strategy, "max-parallel": 1},
+            "strategy unknown key": {**canonical_strategy, "unexpected": True},
+            "fail-fast drift": {**canonical_strategy, "fail-fast": True},
+        }
+        include = canonical_strategy["matrix"]["include"]
+        cases.update(
+            {
+                "missing row": {
+                    **canonical_strategy,
+                    "matrix": {"include": include[:1]},
+                },
+                "extra row": {
+                    **canonical_strategy,
+                    "matrix": {"include": [*include, include[0]]},
+                },
+                "duplicate row": {
+                    **canonical_strategy,
+                    "matrix": {"include": [include[0], include[0]]},
+                },
+                "reordered rows": {
+                    **canonical_strategy,
+                    "matrix": {"include": list(reversed(include))},
+                },
+                "row extra key": {
+                    **canonical_strategy,
+                    "matrix": {
+                        "include": [{**include[0], "unexpected": True}, include[1]]
+                    },
+                },
+                "row missing runner": {
+                    **canonical_strategy,
+                    "matrix": {
+                        "include": [{"target": include[0]["target"]}, include[1]]
+                    },
+                },
+                "row non-mapping": {
+                    **canonical_strategy,
+                    "matrix": {"include": ["ubuntu-24.04", include[1]]},
+                },
+                "row custom runner": {
+                    **canonical_strategy,
+                    "matrix": {
+                        "include": [{**include[0], "runner": "linux-x64"}, include[1]]
+                    },
+                },
+                "row self-hosted runner": {
+                    **canonical_strategy,
+                    "matrix": {
+                        "include": [{**include[0], "runner": "self-hosted"}, include[1]]
+                    },
+                },
+                "row target drift": {
+                    **canonical_strategy,
+                    "matrix": {
+                        "include": [
+                            {**include[0], "target": "x86_64-unknown-linux-musl"},
+                            include[1],
+                        ]
+                    },
+                },
+            }
+        )
+        for label, strategy in cases.items():
+            with self.subTest(label=label):
+                job = {**canonical, "strategy": strategy}
+                violations = validate_runs_on(
+                    "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                )
+                self.assertTrue(
+                    any("exact canonical architecture strategy" in item for item in violations),
+                    violations,
+                )
+
+    def test_rejects_fail_fast_type_drift(self) -> None:
+        canonical = self.canonical_matrix_job()
+        canonical_strategy = canonical["strategy"]
+        assert isinstance(canonical_strategy, dict)
+        for label, yaml_value in {
+            "integer zero": "0",
+            "float zero": "0.0",
+            "string false": "'false'",
+            "null": "null",
+        }.items():
+            with self.subTest(label=label):
+                fail_fast = yaml.safe_load(yaml_value)
+                job = {
+                    **canonical,
+                    "strategy": {**canonical_strategy, "fail-fast": fail_fast},
+                }
+                violations = validate_runs_on(
+                    "workflow.yml::build", MATRIX_RUNNER_EXPRESSION, job
+                )
+                self.assertTrue(
+                    any("exact canonical architecture strategy" in item for item in violations),
+                    violations,
+                )
+
+    def test_rejects_nested_matrix_runner_expression(self) -> None:
+        violations = validate_runs_on(
+            "workflow.yml::build", "${{ matrix.release.runner }}"
+        )
+        self.assertTrue(any("dynamic runs-on expression" in item for item in violations))
+
+    def test_rejects_from_json_runner_expression(self) -> None:
+        violations = validate_runs_on(
+            "workflow.yml::build", "${{ fromJSON(inputs.runners) }}"
+        )
+        self.assertTrue(any("dynamic runs-on expression" in item for item in violations))
+
+    def test_rejects_matrix_runner_group(self) -> None:
+        violations = validate_runs_on(
+            "workflow.yml::build",
+            {"group": "release-runners", "labels": MATRIX_RUNNER_EXPRESSION},
+        )
+        self.assertTrue(any("runner groups are forbidden" in item for item in violations))
 
     def test_rejects_multi_label_array(self) -> None:
         violations = validate_runs_on(
