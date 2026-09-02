@@ -899,7 +899,12 @@ where
             );
         }
     };
-    forward_service(service, Request::from_parts(parts, Body::from(bytes)), phase).await
+    forward_service(
+        service,
+        Request::from_parts(parts, Body::from(bytes)),
+        phase,
+    )
+    .await
 }
 
 async fn forward_service<S>(
