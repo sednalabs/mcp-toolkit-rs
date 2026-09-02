@@ -71,14 +71,14 @@ jobs:
             verify_cmd: |
               cargo package --package mcp-toolkit-http --list
               cargo package --package mcp-toolkit-http
+          - name: mcp-toolkit-scratchpad
+            verify_cmd: cargo package --package mcp-toolkit-scratchpad --list
           - name: mcp-toolkit-testing
             verify_cmd: cargo package --package mcp-toolkit-testing --list
           - name: mcp-toolkit-policy-conformance
             verify_cmd: cargo package --package mcp-toolkit-policy-conformance --list
           - name: mcp-toolkit-auth
             verify_cmd: cargo package --package mcp-toolkit-auth --list
-          - name: mcp-toolkit-scratchpad
-            verify_cmd: cargo package --package mcp-toolkit-scratchpad --list
           - name: mcp-toolkit-server
             verify_cmd: cargo package --package mcp-toolkit-server --list
     steps:

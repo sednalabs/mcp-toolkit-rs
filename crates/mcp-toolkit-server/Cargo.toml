@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "Composable server bootstrap helpers for Rust MCP services."
+description = "Server composition helpers for the Sedna Labs MCP Toolkit for Rust."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 documentation = "https://docs.rs/mcp-toolkit-server"
 readme = "../../README.md"
+keywords = ["mcp", "sednalabs", "rust", "server"]
+categories = ["network-programming", "web-programming"]
 publish = false
 
 [package.metadata.docs.rs]

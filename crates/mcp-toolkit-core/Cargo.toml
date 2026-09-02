@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "Core types and protocol-facing primitives for Rust MCP projects."
+description = "Core protocol types and primitives for the Sedna Labs MCP Toolkit for Rust."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 documentation = "https://docs.rs/mcp-toolkit-core"
 readme = "../../README.md"
+keywords = ["mcp", "sednalabs", "rust", "protocol"]
+categories = ["data-structures", "development-tools"]
 publish = false
 
 [package.metadata.docs.rs]

@@ -1,6 +1,9 @@
 # Cargo Package Release
 
-`mcp-toolkit-rs` is public, but its crates are not published to crates.io yet.
+`mcp-toolkit-rs` is the independent, open-source Sedna Labs MCP Toolkit for
+Rust. It is published and maintained by Sedna Labs, is not affiliated with
+other Sedna-branded products, and is not the official Model Context Protocol
+implementation. Its crates are not published to crates.io yet.
 Until the crate release process is approved, service repositories should consume
 the public Git repository and commit the resulting `Cargo.lock` entries.
 
@@ -75,13 +78,13 @@ in planning notes are evidence, not a reservation.
 The approved 0.1.0 candidate contains exactly these nine crates:
 
 - `mcp-toolkit-core`
-- `mcp-toolkit-testing`
 - `mcp-toolkit-observability`
-- `mcp-toolkit-auth`
-- `mcp-toolkit-http`
 - `mcp-toolkit-policy-core`
-- `mcp-toolkit-policy-conformance`
+- `mcp-toolkit-http`
 - `mcp-toolkit-scratchpad`
+- `mcp-toolkit-testing`
+- `mcp-toolkit-policy-conformance`
+- `mcp-toolkit-auth`
 - `mcp-toolkit-server`
 
 Hold back the umbrella, policy-runtime, policy-ffi,
@@ -94,8 +97,9 @@ graph, and adopting-service evidence are ready for the same semver promise.
 Before a crate can move from Git-only consumption to crates.io publication:
 
 1. Remove `publish = false` only for crates in the approved package set.
-2. Confirm each package has `description`, `license`, `repository`,
-   `documentation`, and `readme` metadata.
+2. Confirm each package has the complete publication metadata contract:
+   `description`, `license`, `repository`, `documentation`, `readme`,
+   `rust-version`, `keywords`, and `categories`.
 3. Confirm internal dependencies include both `version` and `path`, so local
    workspace development remains ergonomic and registry publication resolves by
    version.
@@ -153,6 +157,12 @@ keeps crates.io and docs.rs aligned and makes optional feature documentation
 visible unless a crate has a documented reason to build docs with a smaller
 feature set.
 
+All first-wave manifests use `rust-version = "1.88"`, matching the workspace
+compatibility floor and the hosted stable-toolchain package and baseline lanes.
+No homepage is declared: the repository URL is already the canonical project
+link, and an unresolved `sednalabs.io` homepage is deliberately rejected by the
+readiness verifier.
+
 The first public package versions are currently `0.1.0`. Treat all pre-1.0
 versions as semver-minor-compatible at the crate level but not as a 1.0 API
 stability promise. Any publication approval should include a changelog entry
@@ -164,8 +174,8 @@ The approved first-wave order is:
 1. `mcp-toolkit-core`, `mcp-toolkit-observability`,
    `mcp-toolkit-policy-core`
 2. `mcp-toolkit-http`
-3. `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`,
-   `mcp-toolkit-scratchpad`
+3. `mcp-toolkit-scratchpad`, `mcp-toolkit-testing`,
+   `mcp-toolkit-policy-conformance`
 4. `mcp-toolkit-auth`
 5. `mcp-toolkit-server`
 

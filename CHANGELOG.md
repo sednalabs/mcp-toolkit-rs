@@ -5,6 +5,11 @@ are approved for publication.
 
 ## Unreleased
 
+- Clarified the independent Sedna Labs MCP Toolkit for Rust identity and
+  non-affiliation boundary in the public README and release documentation.
+- Added consistent crates.io metadata to the nine first-wave manifests,
+  including component descriptions, keywords, categories, and the documented
+  Rust 1.88 compatibility floor; publication remains disabled.
 - Added hosted first-wave Cargo package readiness validation for the planned
   Rust crate set.
 - Added docs.rs metadata requirements for first-wave crates.
@@ -19,6 +24,6 @@ are approved for publication.
 - Initial pre-1.0 Rust crate layout for public Git dependency consumers.
 - Planned first-wave crates:
   `mcp-toolkit-core`, `mcp-toolkit-observability`,
-  `mcp-toolkit-policy-core`, `mcp-toolkit-http`,
+  `mcp-toolkit-policy-core`, `mcp-toolkit-http`, `mcp-toolkit-scratchpad`,
   `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`, `mcp-toolkit-auth`,
-  `mcp-toolkit-scratchpad`, and `mcp-toolkit-server`.
+  and `mcp-toolkit-server`.
