@@ -1,0 +1,6 @@
+{
+  "schema": "toolkit_frontier_aggregate_case",
+  "case": "no-op",
+  "lanes": [{"lane_id": "lane-noop", "status": "no-op", "finding": null}],
+  "expected": {"decision": "fail", "ranked_failures": ["lane-noop"]}
+}
