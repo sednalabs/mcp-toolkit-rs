@@ -646,7 +646,7 @@ def package(
                 source_ref,
                 source_tree,
                 source_main_proven,
-                archive_binary_name,
+                binary_name,
                 binary_digest,
                 manifest_digest,
                 lockfile_digest,
@@ -805,7 +805,8 @@ def verify(
         sbom = read_json(root / "sbom.cdx.json")
         if not isinstance(sbom, dict):
             raise ArtifactError("CycloneDX SBOM must be an object")
-        dependency_count = validate_sbom_graph(sbom, binary_name)
+        sbom_binary_name = binary_name.removesuffix(".exe")
+        dependency_count = validate_sbom_graph(sbom, sbom_binary_name)
         properties = sbom.get("metadata", {}).get("properties", [])
         expected_bindings = sbom_release_bindings(
             target,
@@ -815,7 +816,7 @@ def verify(
             source_ref,
             source_tree,
             source_main_proven,
-            binary_name,
+            sbom_binary_name,
             sha256(root / binary_name),
             sha256(manifest),
             sha256(lockfile),

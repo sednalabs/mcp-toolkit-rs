@@ -312,7 +312,7 @@ jobs:
           arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
           mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
           mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
-          windows_archive="downloaded/$BINARY_NAME.exe-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
+          windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
           python3 scripts/native_release_artifact.py compare \
             --archive "$x86_archive" \
             --target x86_64-unknown-linux-gnu \
