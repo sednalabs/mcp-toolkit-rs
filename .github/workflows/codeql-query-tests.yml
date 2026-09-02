@@ -10,6 +10,10 @@ on:
       - main
     paths:
       - ".github/codeql/actions-workflow-security/**"
+      - ".github/codeql/rust-toolkit-contract/**"
+      - ".github/codeql/codeql-python.yml"
+      - ".github/codeql/codeql-rust.yml"
+      - ".github/scripts/test_codeql_static_workflow.py"
       - ".github/workflows/codeql.yml"
       - ".github/workflows/codeql-query-tests.yml"
       - "templates/single-crate-public-stdio-server/.github/codeql/actions-workflow-security/**"
@@ -78,17 +82,88 @@ jobs:
             --search-path "${{ matrix.pack.search_path }}" \
             ${{ matrix.pack.query_glob }}
 
-  actions-workflow-security-gate:
-    name: Actions workflow security query tests
+  rust-toolkit-contract:
+    name: Rust toolkit contract query tests
     runs-on: ubuntu-24.04
-    needs: [actions-workflow-security]
-    if: ${{ always() }}
+    timeout-minutes: 20
     steps:
-      - name: Require every query-test lane to pass
+      - name: Checkout repository
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Set up CodeQL
+        # github/codeql-action v4
+        id: setup-codeql
+        uses: github/codeql-action/setup-codeql@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
+
+      - name: Install Rust toolkit contract query pack dependencies
         shell: bash
         run: |
-          if [[ "${{ needs.actions-workflow-security.result }}" != "success" ]]; then
-            echo "One or more Actions workflow security query-test lanes failed." >&2
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" pack install .github/codeql/rust-toolkit-contract
+
+      - name: Resolve Rust toolkit contract suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" resolve queries \
+            --search-path .github/codeql \
+            .github/codeql/rust-toolkit-contract/suites/rust-toolkit-contract.qls
+
+      - name: Compile Rust toolkit contract queries
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" query compile \
+            --search-path .github/codeql \
+            .github/codeql/rust-toolkit-contract/queries/*.ql
+
+      - name: Run Rust toolkit contract query tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" test run \
+            --search-path .github/codeql \
+            .github/codeql/rust-toolkit-contract/test
+
+  codeql-workflow-contract:
+    name: CodeQL workflow coverage contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
+      - name: Validate static CodeQL workflow and configs
+        shell: bash
+        run: python3 .github/scripts/test_codeql_static_workflow.py
+
+  actions-workflow-security-gate:
+    # Retain this legacy context name because main branch protection requires it.
+    name: Actions workflow security query tests
+    runs-on: ubuntu-24.04
+    needs:
+      - actions-workflow-security
+      - rust-toolkit-contract
+      - codeql-workflow-contract
+    if: ${{ always() }}
+    steps:
+      - name: Require every CodeQL query-test lane to pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "actions: ${{ needs.actions-workflow-security.result }}"
+          echo "rust   : ${{ needs.rust-toolkit-contract.result }}"
+          echo "static : ${{ needs.codeql-workflow-contract.result }}"
+          if [[ "${{ needs.actions-workflow-security.result }}" != "success" ||
+                "${{ needs.rust-toolkit-contract.result }}" != "success" ||
+                "${{ needs.codeql-workflow-contract.result }}" != "success" ]]; then
+            echo "One or more CodeQL query-test lanes failed." >&2
             exit 1
           fi
-          echo "All Actions workflow security query-test lanes passed."
+          echo "All CodeQL query and workflow-contract lanes passed."

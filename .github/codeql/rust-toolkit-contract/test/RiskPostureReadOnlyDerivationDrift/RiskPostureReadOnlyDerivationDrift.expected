@@ -1,0 +1,1 @@
+| crates/mcp-toolkit-core/src/tool_inventory.rs:1:1:4:1 | fn with_risk_posture | ToolCapability::with_risk_posture no longer derives read_only from GuardedActionPosture::is_read_only. Keep inventory safety metadata bound to the guarded-action posture. |

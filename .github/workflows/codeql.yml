@@ -36,6 +36,9 @@ jobs:
           - language: actions
             build-mode: none
             config_file: ./.codeql-runtime/codeql-actions.yml
+          - language: python
+            build-mode: none
+            config_file: ./.github/codeql/codeql-python.yml
           - language: rust
             build-mode: none
             config_file: ./.github/codeql/codeql-rust.yml
@@ -47,6 +50,25 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Restore trusted CodeQL policy for forked pull requests
+        if: ${{ matrix.language != 'actions' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .codeql-runtime/trusted-base
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply trusted CodeQL policy for forked pull requests
+        if: ${{ matrix.language != 'actions' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d .codeql-runtime/trusted-base/.github/codeql
+          rm -rf .github/codeql
+          cp -R .codeql-runtime/trusted-base/.github/codeql .github/codeql
 
       - name: Install Rust toolchain for CodeQL
         if: ${{ matrix.language == 'rust' }}
@@ -135,7 +157,8 @@ jobs:
                 tar -x -C "${trusted_root}"; then
               pack_path="${trusted_pack}"
             else
-              echo "::warning title=CodeQL Actions query pack bootstrap::Trusted base query pack was unavailable; using the checked-out pack for this run."
+              echo "::error title=CodeQL Actions query pack bootstrap::Trusted base query pack was unavailable for a forked pull request."
+              exit 1
             fi
           fi
 
