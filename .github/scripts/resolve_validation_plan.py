@@ -112,6 +112,12 @@ def normalize_catalog(catalog: dict) -> dict:
         )
         if lane["status_class"] == "active":
             expected = "sentinel" if lane["lane_id"] == active_members[0] else "depth"
+        if declared is not None and declared != expected:
+            raise SystemExit(
+                f"lane {lane['lane_id']} declares frontier_role={declared!r}, "
+                f"but deterministic role is {expected!r} for summary_family="
+                f"{lane['summary_family']!r}"
+            )
         lane["frontier_role"] = expected
     return {**catalog, "lanes": lanes}
 

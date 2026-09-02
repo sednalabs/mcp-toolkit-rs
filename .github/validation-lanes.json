@@ -94,7 +94,7 @@
       }
     },
     {
-      "lane_id": "toolkit-native-attestation-artifact-origin-negative",
+      "lane_id": "toolkit-native-attestation-negative-artifact-origin",
       "groups": ["attestation"],
       "lane_sets": ["all", "attestation"],
       "frontier_lane_sets": ["attestation"],
