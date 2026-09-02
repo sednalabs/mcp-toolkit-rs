@@ -1,0 +1,297 @@
+name: Toolkit validation lab
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to validate.
+        required: false
+        type: string
+        default: ""
+      candidate_sha:
+        description: Exact expected target commit; the run fails if checkout resolves another SHA.
+        required: false
+        type: string
+        default: ""
+      profile:
+        description: Finite validation profile.
+        required: true
+        type: string
+      lane_set:
+        description: Named lane family.
+        required: true
+        type: string
+      lanes:
+        description: Optional comma-separated explicit lane IDs.
+        required: false
+        type: string
+        default: ""
+      fanout_tier:
+        description: Maximum hosted fanout tier.
+        required: false
+        type: string
+        default: enterprise
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to validate.
+        required: false
+        type: string
+        default: ""
+      candidate_sha:
+        description: Exact expected target commit.
+        required: false
+        type: string
+        default: ""
+      profile:
+        description: Finite validation profile.
+        required: true
+        type: choice
+        options: [targeted, frontier, checkpoint]
+        default: frontier
+      lane_set:
+        description: Named lane family.
+        required: true
+        type: choice
+        options: [all, workflow, core, packages, attestation]
+        default: all
+      lanes:
+        description: Optional comma-separated explicit lane IDs.
+        required: false
+        type: string
+        default: ""
+      fanout_tier:
+        description: Maximum hosted fanout tier.
+        required: true
+        type: choice
+        options: [balanced, enterprise, soak]
+        default: enterprise
+
+concurrency:
+  group: toolkit-validation-lab::${{ inputs.ref || github.sha }}::${{ inputs.profile }}::${{ inputs.lane_set }}::${{ inputs.lanes || 'default' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Resolve exact target and validation plan
+    runs-on: ubuntu-24.04
+    outputs:
+      target_ref: ${{ steps.plan.outputs.target_ref }}
+      target_sha: ${{ steps.plan.outputs.target_sha }}
+      target_tree: ${{ steps.plan.outputs.target_tree }}
+      selected_matrix: ${{ steps.plan.outputs.selected_matrix }}
+      selected_lane_ids: ${{ steps.plan.outputs.selected_lane_ids }}
+      planned_job_count: ${{ steps.plan.outputs.planned_job_count }}
+      matrix_fail_fast: ${{ steps.plan.outputs.matrix_fail_fast }}
+      matrix_max_parallel: ${{ steps.plan.outputs.matrix_max_parallel }}
+      profile: ${{ steps.plan.outputs.profile }}
+      lane_set: ${{ steps.plan.outputs.lane_set }}
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: workflow-source
+
+      - name: Checkout exact validation target
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: validation-target
+
+      - name: Resolve target SHA and lane matrix
+        id: plan
+        shell: bash
+        env:
+          PROFILE: ${{ inputs.profile }}
+          LANE_SET: ${{ inputs.lane_set }}
+          LANES: ${{ inputs.lanes }}
+          FANOUT_TIER: ${{ inputs.fanout_tier || 'enterprise' }}
+          EXPECTED_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          target_sha="$(git -C validation-target rev-parse HEAD)"
+          target_tree="$(git -C validation-target rev-parse HEAD^{tree})"
+          if [[ -n "${EXPECTED_SHA}" && "${target_sha}" != "${EXPECTED_SHA}" ]]; then
+            echo "expected candidate ${EXPECTED_SHA}, resolved ${target_sha}" >&2
+            exit 1
+          fi
+          test "$(git -C validation-target rev-parse --verify HEAD)" = "${target_sha}"
+          plan_json="${RUNNER_TEMP}/toolkit-validation-plan.json"
+          python3 validation-target/.github/scripts/resolve_validation_plan.py lab \
+            --profile "${PROFILE}" \
+            --lane-set "${LANE_SET}" \
+            --lanes "${LANES}" \
+            --fanout-tier "${FANOUT_TIER}" \
+            --catalog-path validation-target/.github/validation-lanes.json > "${plan_json}"
+          python3 - "${plan_json}" "${target_sha}" "${target_tree}" "${GITHUB_OUTPUT}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          plan = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          target_sha, target_tree, output = sys.argv[2:]
+          required = ("selected_matrix", "selected_lane_ids", "planned_job_count", "matrix_fail_fast", "matrix_max_parallel")
+          missing = [key for key in required if key not in plan]
+          if missing:
+              raise SystemExit("planner omitted required field(s): " + ", ".join(missing))
+          if int(plan["planned_job_count"]) != len(plan["selected_lane_ids"]):
+              raise SystemExit("planner job count does not match selected lane IDs")
+          if not plan["selected_lane_ids"]:
+              raise SystemExit("planner selected no executable lanes; refusing false success")
+          values = {
+              "target_ref": "exact:" + target_sha,
+              "target_sha": target_sha,
+              "target_tree": target_tree,
+              "selected_matrix": json.dumps(plan["selected_matrix"], separators=(",", ":")),
+              "selected_lane_ids": json.dumps(plan["selected_lane_ids"], separators=(",", ":")),
+              "planned_job_count": str(plan["planned_job_count"]),
+              "matrix_fail_fast": plan["matrix_fail_fast"],
+              "matrix_max_parallel": str(plan["matrix_max_parallel"]),
+              "profile": plan["profile"],
+              "lane_set": plan["lane_set"],
+          }
+          with Path(output).open("a", encoding="utf-8") as handle:
+              for key, value in values.items():
+                  delimiter = "EOF_" + key
+                  handle.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+          PY
+
+  lanes:
+    name: Lane ${{ matrix.lane_id }}
+    needs: metadata
+    if: ${{ needs.metadata.result == 'success' && needs.metadata.outputs.planned_job_count != '0' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: ${{ needs.metadata.outputs.matrix_fail_fast == 'true' }}
+      max-parallel: ${{ fromJSON(needs.metadata.outputs.matrix_max_parallel) }}
+      matrix: ${{ fromJSON(needs.metadata.outputs.selected_matrix) }}
+    env:
+      TOOLKIT_VALIDATION_TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+      TOOLKIT_VALIDATION_TARGET_TREE: ${{ needs.metadata.outputs.target_tree }}
+      TOOLKIT_VALIDATION_LANE_ID: ${{ matrix.lane_id }}
+      TOOLKIT_VALIDATION_PROFILE: ${{ needs.metadata.outputs.profile }}
+      TOOLKIT_VALIDATION_LANE_SET: ${{ needs.metadata.outputs.lane_set }}
+      TOOLKIT_VALIDATION_SUMMARY_FAMILY: ${{ matrix.summary_family }}
+      TOOLKIT_VALIDATION_FRONTIER_ROLE: ${{ matrix.frontier_role }}
+      TOOLKIT_VALIDATION_ARTIFACT_DIR: validation-artifacts/${{ matrix.lane_id }}
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ needs.metadata.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read back exact target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${TOOLKIT_VALIDATION_TARGET_SHA}"
+          test "$(git rev-parse HEAD^{tree})" = "${TOOLKIT_VALIDATION_TARGET_TREE}"
+
+      - name: Run bounded validation lane
+        id: lane
+        shell: bash
+        env:
+          SCRIPT_PATH: ${{ matrix.script_path }}
+          WORKING_DIRECTORY: ${{ matrix.working_directory }}
+        run: |
+          set +e
+          mkdir -p "${TOOLKIT_VALIDATION_ARTIFACT_DIR}"
+          status=0
+          if [[ ! -f "${SCRIPT_PATH}" ]]; then
+            echo "lane script is missing: ${SCRIPT_PATH}" >&2
+            status=1
+          else
+            (cd "${WORKING_DIRECTORY}" && bash "${GITHUB_WORKSPACE}/${SCRIPT_PATH}")
+            status=$?
+          fi
+          python3 - "${TOOLKIT_VALIDATION_ARTIFACT_DIR}/lane-receipt.json" "${status}" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          Path(sys.argv[1]).write_text(json.dumps({
+              "lane_id": os.environ["TOOLKIT_VALIDATION_LANE_ID"],
+              "target_sha": os.environ["TOOLKIT_VALIDATION_TARGET_SHA"],
+              "target_tree": os.environ["TOOLKIT_VALIDATION_TARGET_TREE"],
+              "profile": os.environ["TOOLKIT_VALIDATION_PROFILE"],
+              "lane_set": os.environ["TOOLKIT_VALIDATION_LANE_SET"],
+              "summary_family": os.environ["TOOLKIT_VALIDATION_SUMMARY_FAMILY"],
+              "frontier_role": os.environ["TOOLKIT_VALIDATION_FRONTIER_ROLE"],
+              "exit_code": int(sys.argv[2]),
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          exit "${status}"
+
+      - name: Upload lane evidence (including failures)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: toolkit-validation-lane-${{ matrix.lane_id }}-${{ needs.metadata.outputs.target_sha }}
+          path: validation-artifacts/${{ matrix.lane_id }}
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    name: Aggregate target-bound validation evidence
+    needs: [metadata, lanes]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ needs.metadata.outputs.target_sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download all lane evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: toolkit-validation-lane-*-${{ needs.metadata.outputs.target_sha }}
+          path: validation-artifacts
+          merge-multiple: true
+
+      - name: Aggregate and rank actionable failures
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.metadata.outputs.target_sha }}
+          TARGET_TREE: ${{ needs.metadata.outputs.target_tree }}
+          PROFILE: ${{ needs.metadata.outputs.profile }}
+          LANE_SET: ${{ needs.metadata.outputs.lane_set }}
+          PLANNER_RESULT: ${{ needs.metadata.result }}
+          LANES_RESULT: ${{ needs.lanes.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${PLANNER_RESULT}" != success || -z "${TARGET_SHA}" ]]; then
+            echo "target resolution/planning failed; refusing aggregate success" >&2
+            exit 1
+          fi
+          python3 .github/scripts/aggregate_validation_lanes.py \
+            --artifacts-dir validation-artifacts \
+            --target-sha "${TARGET_SHA}" \
+            --target-tree "${TARGET_TREE}" \
+            --profile "${PROFILE}" \
+            --lane-set "${LANE_SET}" \
+            --lanes-result "${LANES_RESULT}" \
+            --output validation-summary.json
+
+      - name: Upload aggregate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: toolkit-validation-summary-${{ needs.metadata.outputs.target_sha || github.sha }}
+          path: validation-summary.json
+          if-no-files-found: error
+          retention-days: 14
