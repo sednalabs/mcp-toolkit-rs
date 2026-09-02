@@ -39,6 +39,16 @@ def main() -> None:
         "Apply trusted CodeQL policy for forked pull requests",
         "trusted fork policy application",
     )
+    require(
+        workflow,
+        "group: codeql-advanced::${{ github.event_name }}::${{ github.ref }}",
+        "event-isolated CodeQL concurrency group",
+    )
+    require(
+        workflow,
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'merge_group' }}",
+        "superseded source-generation cancellation",
+    )
     require(workflow, "persist-credentials: false", "credential-free checkout")
     if "pull_request_target:" in workflow:
         raise SystemExit("CodeQL workflow must not use pull_request_target")
