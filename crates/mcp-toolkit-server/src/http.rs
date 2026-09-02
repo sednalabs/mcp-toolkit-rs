@@ -733,8 +733,9 @@ where
             );
         }
     };
-    let is_initialize = is_initialize_payload(&bytes);
-    let is_current = payload_declares_current_protocol(&bytes);
+    let payload = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+    let is_initialize = payload.as_ref().is_some_and(is_initialize_payload);
+    let is_current = payload.as_ref().is_some_and(payload_declares_current_protocol);
     let req = Request::from_parts(parts, Body::from(bytes));
 
     if is_initialize || is_current {
@@ -948,10 +949,7 @@ fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
         .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
 }
 
-fn payload_declares_current_protocol(body: &[u8]) -> bool {
-    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return false;
-    };
+fn payload_declares_current_protocol(payload: &serde_json::Value) -> bool {
     payload
         .get("params")
         .and_then(|params| params.get("_meta"))
@@ -994,13 +992,7 @@ fn is_body_limit_error(err: &axum::Error) -> bool {
         .is_some_and(|source| source.is::<LengthLimitError>())
 }
 
-fn is_initialize_payload(body: &[u8]) -> bool {
-    if body.is_empty() {
-        return false;
-    }
-    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return false;
-    };
+fn is_initialize_payload(payload: &serde_json::Value) -> bool {
     payload
         .get("method")
         .and_then(|value| value.as_str())
