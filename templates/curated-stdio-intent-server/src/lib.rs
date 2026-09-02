@@ -2,8 +2,8 @@ use mcp_toolkit::rmcp::{
     self,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, ServerCapabilities,
-        ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+        ServerCapabilities, ServerInfo, Tool,
     },
     schemars,
     service::RequestContext,
@@ -163,14 +163,14 @@ impl ServerHandler for IntentServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let decision = self
             .active_profile_decision(request.name.as_ref(), ToolOperation::Call)
             .map_err(profile_error)?;
         if !decision.allowed() {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                decision.caller_message(),
-            )]));
+            return Ok(
+                CallToolResult::error(vec![ContentBlock::text(decision.caller_message())]).into(),
+            );
         }
 
         let context = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);

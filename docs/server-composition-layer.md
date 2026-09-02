@@ -1,91 +1,164 @@
 # Rust Server Composition Layer
 
-This note scopes the public-generic server composition layer for
+This note scopes the public generic server composition layer for
 `mcp-toolkit-rs`.
 
-The goal is not to turn the toolkit into an application framework. The goal is
-to reduce repeated MCP server bootstrap wiring while keeping domain logic,
-backend clients, and deployment-specific contracts out of the toolkit.
+The goal is not to turn Toolkit into an application framework or a parallel MCP
+implementation. The goal is to remove repeated production wiring around RMCP
+while keeping MCP protocol semantics in RMCP and domain behavior in service
+repositories.
 
-## Why This May Belong In The Toolkit
+## Ownership model
 
-Rust MCP services often repeat the same setup work:
+The composition layer follows one rule:
+
+> RMCP owns MCP. Toolkit owns reusable production substrate around RMCP.
+
+For Streamable HTTP under RMCP 3.1.2 this means one primary
+`StreamableHttpService` is capable of serving both protocol eras:
+
+- MCP 2026-07-28 requests are stateless and carry protocol/client metadata per
+  request;
+- pre-2026 compatibility traffic may use the legacy initialize/session
+  lifecycle;
+- Toolkit must not pre-route a valid current-protocol request through legacy
+  `Mcp-Session-Id` lookup merely because a stale session header is present.
+
+Toolkit owns deployment concerns around that service, including:
+
+- bind safety;
+- Host and Origin guarding;
+- auth-surface composition;
+- health and discovery route assembly;
+- bounded legacy-session capacity and retention;
+- legacy live-session context markers;
+- cancellation and shutdown wiring;
+- reusable contract tests and starter templates.
+
+RMCP continues to own:
+
+- JSON-RPC request and response semantics;
+- current-versus-legacy protocol classification;
+- Streamable HTTP response framing;
+- protocol-version validation;
+- MCP Tasks and other protocol extensions;
+- current-protocol stateless request dispatch.
+
+## Why this belongs in Toolkit
+
+Rust MCP services repeatedly need the same production wiring:
 
 - auth surface setup;
 - protected-resource and OIDC discovery routing;
-- streamable HTTP session and replay wiring;
-- stateful plus stateless fallback service wiring;
-- host and auth middleware composition;
-- graceful shutdown and bind handling;
-- request-level observability scaffolding.
-
-That repetition is a signal that a small composition layer helps, as long as it
-stays optional and transport-specific.
-
-## Possible Extraction Targets
-
-### Auth-Surface Runtime Helper
-
-Package the common steps for:
-
-- deriving canonical resource URLs from a public base URL;
-- building `AuthSurfaceConfig`;
-- creating `AuthSurfaceLayer`;
-- wiring standard public and protected path handling.
-
-This should stay generic and avoid issuer or audience heuristics beyond values
-configured explicitly by the caller.
-
-### Streamable HTTP Session Runtime Helper
-
-Package the common steps for:
-
-- building `SessionConfig`;
-- creating bounded session managers;
-- optional event-store construction;
-- optional recording session managers;
-- resume mode and stateless fallback wiring;
-- cancellation-token propagation.
-
-This helper should build runtime pieces, not the domain server itself.
-
-### Discovery Route Bundle
-
-Package the standard route set for:
-
-- health;
-- protected-resource metadata;
-- authorization-server metadata;
-- OIDC metadata;
-- `/mcp`.
-
-Servers should be able to opt into the bundle and add their own routes around
-it.
-
-### HTTP Serve Helper
-
-Package repeated serve logic for:
-
-- bind address handling;
-- optional TLS setup;
+- safe HTTP bind and host policy;
+- bounded legacy-session compatibility;
 - graceful shutdown;
-- `axum_server` launch.
+- request-level observability;
+- tool-surface contract tests.
 
-This should stay compatible with all-in-one routers and partially prebuilt
-routers.
+That repetition is a signal for a small optional composition layer. It is not a
+reason to duplicate RMCP lifecycle or protocol state machines.
 
-### Request Observability Hooks
+## Streamable HTTP runtime
 
-Package common request-level observability hooks so servers can opt into:
+`crates/mcp-toolkit-server` exposes the preferred hosted HTTP front door.
 
-- request outcome logging;
-- safe host and header capture;
-- transport and auth-mode startup events.
+`LocalMcpHttpRuntimeBuilder` constructs a primary RMCP 3 Streamable HTTP
+service. The historical public field name `stateful_service` is retained for
+compatibility, but the service is dual-era:
 
-This should provide reusable hooks, not force one logging policy on every
-service.
+- current MCP requests are stateless;
+- only legacy traffic uses Toolkit's bounded session manager.
 
-## What Must Stay Out
+`allow_resume(true)` currently controls legacy session-era resumability. It does
+not imply native MCP 2026 retained-event replay.
+
+### Legacy sessionless fallback
+
+`stateless_fallback(true)` is retained only as a compatibility path for
+pre-2026 clients that issue sessionless non-initialize POST requests. It is not
+needed for MCP 2026-07-28, because RMCP's primary service already handles current
+requests statelessly.
+
+New code should not interpret the existence of this fallback as a second normal
+MCP runtime.
+
+### Current-protocol routing
+
+The route bundle deliberately delegates current-protocol POST, GET, and DELETE
+requests to RMCP before applying legacy session preflight. This prevents an old
+or stale `Mcp-Session-Id` header from stealing routing authority from a valid
+current request.
+
+Headerless POSTs without an explicit protocol-version header are ambiguous. The
+Toolkit route may inspect a bounded request body only to distinguish:
+
+- a legacy initialize request;
+- a current request carrying the 2026 protocol version in request `_meta`;
+- an older sessionless compatibility request.
+
+After that bounded classification, RMCP remains the protocol engine.
+
+## Replay and event retention
+
+Do not conflate Toolkit's existing legacy session recorder with RMCP 3 native
+stateless replay.
+
+The legacy recorder preserves session-era identifiers such as
+`index[/request_id]` and resolves events with an already-known session. RMCP's
+current `EventStore` contract requires opaque globally unique event identifiers
+that can recover the originating stream from `Last-Event-Id` alone.
+
+Those are different identity contracts even though both persist events.
+
+Native bounded MCP 2026 replay is therefore a separate adaptation, tracked by
+issue #190. Until that work lands, documentation and health output must not
+claim that legacy `allow_resume` enables current-protocol retained-event replay.
+
+## Low-level HTTP crate
+
+`mcp-toolkit-http` owns HTTP-adjacent helpers and bounded legacy-session
+substrate. It does not own the current MCP front door.
+
+In particular, `streamable::handle_stateful_mcp_request` is a legacy
+session-era compatibility helper. New hosted MCP services should use
+`mcp-toolkit-server` or RMCP directly for current protocol routing.
+
+The low-level crate remains useful for:
+
+- Host and Origin validation;
+- OAuth metadata URL construction;
+- bounded legacy session management;
+- legacy session persistence and retention;
+- constructing RMCP Streamable HTTP services.
+
+## Live session context
+
+Legacy route helpers attach
+`mcp_toolkit_http::streamable::LiveMcpSessionId` only after the authoritative
+session manager confirms exact live membership.
+
+That marker proves only transport-scoped session membership at routing time. It
+does not authenticate an actor or authorize a tool. Services that require
+actor-bound sessions must derive a stronger service-owned authority marker after
+authentication and session binding.
+
+## Public pieces
+
+The current composition surface includes:
+
+- `stdio::StdioServerBuilder` for stdio startup;
+- `stdio::serve_stdio` for the common stdio serve and wait loop;
+- `auth::AuthSurfaceBuilder` for auth-surface normalization and layer assembly;
+- `http::HttpBindSafety` for fail-closed non-loopback exposure checks;
+- `http::LocalMcpHttpRuntimeBuilder` for RMCP 3 HTTP runtime composition;
+- `http::LocalMcpHttpServerBuilder` for the common hosted route bundle;
+- `http::LocalMcpHttpRouterBuilder` for partial adoption into an existing
+  router.
+
+The public API should stay small and driven by repeated adopter code.
+
+## What must stay out
 
 The composition layer should not absorb:
 
@@ -94,79 +167,56 @@ The composition layer should not absorb:
 - domain-specific routes or response payloads;
 - product-specific capability names;
 - service-specific policy decisions;
-- one-off admin or gateway behavior.
+- a duplicate MCP task or transport state machine;
+- provider-specific endpoint heuristics that can be expressed through standard
+  discovery or caller configuration.
 
-Those concerns belong in reference services or reference architectures.
+Those concerns belong in service repositories, reference architectures, or the
+upstream SDK when they are protocol-level capabilities.
 
-## Implemented First Slice
+## Adoption posture
 
-The first slice lives in `crates/mcp-toolkit-server`. It is a small, opinionated
-assembly crate layered above the existing low-level crates:
+The layer supports three adoption styles:
 
-- `mcp-toolkit-auth`;
-- `mcp-toolkit-http`;
-- `mcp-toolkit-core`;
-- `mcp-toolkit-observability`.
+1. Full adoption: use `StdioServerBuilder` or `LocalMcpHttpServerBuilder` for the
+   standard front door.
+2. Partial adoption: use selected runtime, auth, host, or route helpers inside an
+   existing service architecture.
+3. No adoption: highly specialized services may use lower-level Toolkit crates
+   or RMCP directly.
 
-Current public pieces:
+The objective is to make the correct production path convenient, not mandatory.
 
-- `stdio::StdioServerBuilder` for the stdio starter front door;
-- `stdio::serve_stdio` for the common stdio startup and wait loop;
-- `auth::AuthSurfaceBuilder` for auth-surface normalization and layer assembly;
-- `http::HttpBindSafety` for fail-closed non-loopback bind posture checks;
-- `http::LocalMcpHttpServerBuilder` for the common hosted HTTP route bundle;
-- `http::LocalMcpHttpRuntimeBuilder` for bounded Streamable HTTP sessions and
-  optional stateless fallback;
-- `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
-  OAuth-not-configured placeholder discovery routes, and host/origin guarding.
+## Maintained templates
 
-Stateful route helpers also attach
-`mcp_toolkit_http::streamable::LiveMcpSessionId` to the forwarded HTTP request
-after the authoritative session manager confirms exact live membership.
-Downstream MCP handlers can recover it from the `http::request::Parts` carried
-by `rmcp`, avoiding a second session-store lookup. The marker is deliberately
-transport-scoped: it does not authenticate an actor or authorize tools.
-Services that need actor-bound sessions must derive a stronger, service-owned
-marker after applying their own authentication and session-binding policy.
+The maintained starters exercise the supported path:
 
-The guiding rule remains: keep the public API small and obviously reusable.
-Service-specific health payloads, attestation payloads, backend clients, tool
-handlers, and product policy stay in service repositories.
+- `templates/curated-stdio-intent-server` demonstrates a current-protocol stdio
+  server with typed tools, explicit inventory metadata, schema snapshots, and a
+  real JSON-RPC smoke test;
+- `templates/single-crate-public-stdio-server` demonstrates the public minimal
+  stdio shape;
+- `templates/hosted-http-auth-server` demonstrates RMCP 3 Streamable HTTP
+  composition, Host/Origin guarding, OAuth Protected Resource Metadata, bearer
+  challenges, tool-schema snapshots, and route-level contract tests.
 
-## Adoption Posture
+Contract tests should cover current-protocol callability as well as deliberately
+named legacy compatibility behavior. Tests that expect a legacy session must use
+an explicit pre-2026 protocol rather than an ambiguous SDK alias.
 
-The composition layer should support three adoption styles:
+## Next slices
 
-1. Full adoption: the server wants `StdioServerBuilder` or
-   `LocalMcpHttpServerBuilder` to assemble the standard transport front door.
-2. Partial adoption: the server already has a router or runtime split and wants
-   selected helpers.
-3. No adoption: stdio-only or highly specialized services should not be forced
-   into the composition layer.
+Further work should be driven by repeated production need:
 
-## Next Implementation Slices
+1. implement bounded RMCP-native current-protocol replay under #190;
+2. expand reusable transport contract tests without duplicating RMCP's own
+   protocol suite;
+3. add standard tool/task lifecycle observability around RMCP;
+4. keep auth, provenance, admission, process supervision, and task authority as
+   optional production substrate;
+5. prove each new abstraction in at least one real adopter before broadening the
+   API.
 
-Maintained starter templates now cover the first adoption path:
-
-- `templates/curated-stdio-intent-server` shows a small stdio server with typed
-  intent tools, explicit inventory metadata, tool-schema snapshots, and a real
-  JSON-RPC stdio smoke test.
-- `templates/hosted-http-auth-server` shows hosted Streamable HTTP assembly,
-  host/origin guarding, OAuth Protected Resource Metadata, bearer challenges,
-  device authorization metadata, tool-schema snapshots, and route-level
-  contract tests.
-
-The remaining slices should build on this crate rather than copying old wiring:
-
-1. expand reusable contract tests for auth metadata, host/origin rejection,
-   sessions, tool schema snapshots, and stdio callability;
-2. prove the API in one reference server slice;
-3. keep route-bundle additions driven by repeated adopter code, not speculative
-   framework growth.
-
-That keeps the toolkit public, composable, and honest about what is truly
-shared.
-
-Use `docs/golden-path.md` when turning this composition layer into a new server
-or an adoption PR. The golden path defines the expected contract tests,
-GitHub-hosted validation evidence, review gate handoff, and release checklist.
+Use `docs/golden-path.md` when adopting this layer in a new server. The golden
+path defines contract testing, hosted CI evidence, review handoff, and release
+readiness expectations.

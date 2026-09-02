@@ -699,7 +699,8 @@ impl BoundedSessionManager {
         };
 
         for session_id in to_expire {
-            match self.inner.close_session(&session_id).await {
+            let close_result = self.inner.close_session(&session_id).await;
+            match close_result {
                 Ok(()) => {
                     self.remove_session(&session_id).await;
                     self.note_session_expired(&session_id);
