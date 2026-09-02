@@ -114,10 +114,10 @@ jobs:
             --manifest "$MANIFEST_PATH" \
             --lockfile templates/single-crate-public-stdio-server/Cargo.lock \
             --output trusted-template-verification.json
-          if ! cmp trusted-template-verification.json downloaded/native-template-verification.json; then
+          cmp trusted-template-verification.json downloaded/native-template-verification.json || {
             python3 -c 'import json; a=json.load(open("trusted-template-verification.json")); b=json.load(open("downloaded/native-template-verification.json")); print(json.dumps({k:{"computed":a.get(k),"downloaded":b.get(k)} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k)}, sort_keys=True))'
             exit 1
-          fi
+          }
           test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
           python3 scripts/native_release_artifact.py authorize \
             --verification trusted-template-verification.json \
