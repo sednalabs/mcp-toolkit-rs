@@ -60,7 +60,7 @@ REQUIRED_PACKAGE_FIELDS = {
 }
 
 REPOSITORY_URL = "https://github.com/sednalabs/mcp-toolkit-rs"
-EXPECTED_RUST_VERSION = "1.84.1"
+EXPECTED_RUST_VERSION = "1.88"
 EXPECTED_README = "../../README.md"
 REQUIRED_KEYWORDS = {"mcp", "sednalabs"}
 EXPECTED_CATEGORIES = {
@@ -230,9 +230,13 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
     if isinstance(homepage, str) and "sednalabs.io" in homepage.lower():
         errors.append(f"{package.name}: unresolved sednalabs.io homepage is not allowed")
 
-    if "Sedna Labs MCP Toolkit for Rust" not in metadata.get("description", ""):
+    description = metadata.get("description")
+    if (
+        not isinstance(description, str)
+        or "Sedna Labs MCP Toolkit for Rust" not in description
+    ):
         errors.append(
-            f"{package.name}: package.description must identify the Sedna Labs MCP Toolkit for Rust"
+            f"{package.name}: package.description must be a string identifying the Sedna Labs MCP Toolkit for Rust"
         )
 
     if metadata.get("publish") is not False:
@@ -277,11 +281,15 @@ def validate_readme(repo_root: Path, first_wave: list[str]) -> list[str]:
         if phrase not in normalized_text:
             errors.append(f"README.md: missing {label}")
 
-    if README_START not in text or README_END not in text:
-        errors.append("README.md: canonical first-wave inventory markers are missing")
+    start_idx = text.find(README_START)
+    end_idx = text.find(README_END)
+    if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+        errors.append(
+            "README.md: canonical first-wave inventory markers are missing or out of order"
+        )
         return errors
 
-    block = text.split(README_START, 1)[1].split(README_END, 1)[0]
+    block = text[start_idx + len(README_START) : end_idx]
     inventory = re.findall(r"^\| `([^`]+)` \|", block, flags=re.MULTILINE)
     if inventory != first_wave:
         errors.append(
@@ -329,12 +337,10 @@ def main() -> int:
         return 1
 
     packages = [load_package(crates_root / name) for name in FIRST_WAVE]
-    package_names = {package.name for package in packages}
-    if package_names != first_wave:
-        missing = sorted(first_wave - package_names)
-        extra = sorted(package_names - first_wave)
+    package_names_ordered = [package.name for package in packages]
+    if package_names_ordered != FIRST_WAVE:
         print(
-            f"First-wave package mismatch. missing={missing} extra={extra}",
+            f"First-wave package name/order mismatch. expected={FIRST_WAVE} observed={package_names_ordered}",
             file=sys.stderr,
         )
         return 1

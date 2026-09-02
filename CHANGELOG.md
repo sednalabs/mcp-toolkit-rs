@@ -9,7 +9,7 @@ are approved for publication.
   non-affiliation boundary in the public README and release documentation.
 - Added consistent crates.io metadata to the nine first-wave manifests,
   including component descriptions, keywords, categories, and the documented
-  Rust 1.84.1 compatibility floor; publication remains disabled.
+  Rust 1.88 compatibility floor; publication remains disabled.
 - Added hosted first-wave Cargo package readiness validation for the planned
   Rust crate set.
 - Added docs.rs metadata requirements for first-wave crates.

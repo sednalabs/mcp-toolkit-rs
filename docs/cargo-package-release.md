@@ -157,13 +157,11 @@ keeps crates.io and docs.rs aligned and makes optional feature documentation
 visible unless a crate has a documented reason to build docs with a smaller
 feature set.
 
-All first-wave manifests use `rust-version = "1.84.1"`. This is the exact
-minimum declared by the direct `duckdb 1.4.4` dependency used by
-`mcp-toolkit-scratchpad`; the hosted stable-toolchain package and baseline lanes
-remain the compatibility gate for the complete dependency graph. No homepage
-is declared: the repository URL is already the canonical project link, and an
-unresolved `sednalabs.io` homepage is deliberately rejected by the readiness
-verifier.
+All first-wave manifests use `rust-version = "1.88"`, matching the workspace
+compatibility floor and the hosted stable-toolchain package and baseline lanes.
+No homepage is declared: the repository URL is already the canonical project
+link, and an unresolved `sednalabs.io` homepage is deliberately rejected by the
+readiness verifier.
 
 The first public package versions are currently `0.1.0`. Treat all pre-1.0
 versions as semver-minor-compatible at the crate level but not as a 1.0 API
@@ -176,8 +174,8 @@ The approved first-wave order is:
 1. `mcp-toolkit-core`, `mcp-toolkit-observability`,
    `mcp-toolkit-policy-core`
 2. `mcp-toolkit-http`
-3. `mcp-toolkit-testing`, `mcp-toolkit-policy-conformance`,
-   `mcp-toolkit-scratchpad`
+3. `mcp-toolkit-scratchpad`, `mcp-toolkit-testing`,
+   `mcp-toolkit-policy-conformance`
 4. `mcp-toolkit-auth`
 5. `mcp-toolkit-server`
 
