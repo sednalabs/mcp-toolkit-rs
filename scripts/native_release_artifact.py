@@ -800,7 +800,9 @@ def verify(
                 runtime=runtime,
             )
         if metadata != expected_metadata:
-            raise ArtifactError("release metadata does not match the requested candidate")
+            raise ArtifactError(
+                f"release metadata does not match the requested candidate for {target}"
+            )
         verify_platform_binary(root / binary_name, target)
         sbom = read_json(root / "sbom.cdx.json")
         if not isinstance(sbom, dict):
