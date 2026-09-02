@@ -2,9 +2,13 @@ name: mcp-rs-toolkit-codeql-rust
 
 queries:
   - uses: security-and-quality
+  - uses: ./.github/codeql/rust-toolkit-contract
 
 paths:
   - crates
   - templates
+
+paths-ignore:
+  - .github/codeql/rust-toolkit-contract/test/**
 
 threat-models: [local]

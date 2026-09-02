@@ -1,0 +1,1 @@
+| crates/mcp-toolkit-core/src/capability.rs:1:1:5:1 | fn to_mcp_annotations | CapabilitySafety::to_mcp_annotations does not project the 'open_world' safety dimension. Keep MCP annotations aligned with the canonical capability safety contract. |

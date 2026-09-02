@@ -1,0 +1,11 @@
+name: mcp-rs-toolkit-codeql-python
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - .github/scripts
+  - scripts
+  - templates/single-crate-public-stdio-server/scripts
+
+threat-models: [local]
