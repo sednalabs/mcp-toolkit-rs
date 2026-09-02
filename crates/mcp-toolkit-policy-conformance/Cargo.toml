@@ -2,11 +2,14 @@
 name = "mcp-toolkit-policy-conformance"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.84.1"
 license = "Apache-2.0"
-description = "Conformance helpers for validating Rust MCP policy contracts."
+description = "Policy conformance helpers for the Sedna Labs MCP Toolkit for Rust."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
 documentation = "https://docs.rs/mcp-toolkit-policy-conformance"
 readme = "../../README.md"
+keywords = ["mcp", "sednalabs", "rust", "conformance"]
+categories = ["development-tools", "development-tools::testing"]
 publish = false
 
 [package.metadata.docs.rs]

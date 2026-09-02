@@ -1,6 +1,11 @@
-# mcp-toolkit-rs
+# mcp-toolkit-rs — the Sedna Labs MCP Toolkit for Rust
 
-Reusable Rust building blocks for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers and clients.
+Published and maintained by Sedna Labs.
+
+An independent, open-source Rust developer toolkit for building services that
+use the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). This
+project is not affiliated with other Sedna-branded products and is not the
+official Model Context Protocol implementation.
 
 This pre-1.0 workspace provides protocol-adjacent substrate—authentication
 helpers, HTTP/session support, policy primitives, tool inventories,
@@ -17,6 +22,32 @@ crates.io yet; consumers should use Git dependencies and commit their own
 - **Designing a security-sensitive surface:** read [security profiles](docs/security-profiles.md), [auth surface](docs/auth-surface.md), [guarded actions](docs/guarded-action-pattern.md), and [upstream OAuth](docs/upstream-oauth.md).
 - **Reporting a vulnerability:** follow [SECURITY.md](SECURITY.md). Do not include credentials or sensitive deployment details in a public issue.
 - **Contributing or preparing a release:** read [CONTRIBUTING.md](CONTRIBUTING.md), [public landing policy](docs/public-landing-policy.md), and [dependency governance](docs/dependency-governance.md).
+
+## Sedna Labs package family
+
+The canonical first-wave package family for the Sedna Labs MCP Toolkit for Rust
+contains exactly these nine crates. Their descriptive `mcp-toolkit-*` names are
+preserved for Cargo consumers.
+
+<!-- canonical-sedna-labs-first-wave:start -->
+
+| Crate | Purpose |
+| --- | --- |
+| `mcp-toolkit-core` | Protocol helpers, notifications, query evidence, and tool inventories. |
+| `mcp-toolkit-observability` | Redaction, sanitization, tracing, metrics, and optional OTel helpers. |
+| `mcp-toolkit-policy-core` | Pure policy decisions and deterministic validators. |
+| `mcp-toolkit-http` | OAuth/PRM metadata, device-authorization metadata, and HTTP sessions. |
+| `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions and bounded read-only SQL. |
+| `mcp-toolkit-testing` | Tool-schema and auth-surface contract-test helpers. |
+| `mcp-toolkit-policy-conformance` | Policy conformance checks and contract vectors. |
+| `mcp-toolkit-auth` | Bearer authentication, token validation, and replay protection. |
+| `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition. |
+
+<!-- canonical-sedna-labs-first-wave:end -->
+
+Other similarly named workspace crates, including the umbrella, runtime,
+adapter, process, documentation, database, and private-artifact crates, are
+not part of this canonical Sedna Labs package family.
 
 ## Workspace crates
 
