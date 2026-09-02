@@ -14,7 +14,8 @@
 //! * Each component is opened relative to a held descriptor without following
 //!   symbolic links.
 //! * The final node must be a single-link regular file within a caller-defined
-//!   non-zero size bound.
+//!   size bound capped by [`MAX_PRIVATE_ARTIFACT_BYTES`]. Empty files are valid
+//!   exact artifacts.
 //! * Subsequent reads must match the admitted identity, metadata, length, and
 //!   SHA-256 digest.
 //! * Errors contain stable codes only; paths and artifact bytes are omitted.
@@ -45,6 +46,13 @@
 use std::fmt;
 use std::path::Path;
 
+/// Absolute ceiling for one in-memory private artifact read (256 MiB).
+///
+/// Callers must choose an equal or smaller limit through
+/// [`PrivateArtifactPolicy::new`]. This ceiling prevents an untrusted or
+/// mistaken caller from authorizing an effectively unbounded allocation.
+pub const MAX_PRIVATE_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Configures the maximum accepted artifact size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivateArtifactPolicy {
@@ -56,14 +64,14 @@ impl PrivateArtifactPolicy {
     ///
     /// # Errors
     /// Returns [`PrivateArtifactError::InvalidSizeLimit`] when `max_bytes` is
-    /// zero.
+    /// zero or exceeds [`MAX_PRIVATE_ARTIFACT_BYTES`].
     ///
     /// # Security
     /// Callers should choose the smallest bound that accommodates their
     /// artifact format. The bound is checked before allocation and again when
     /// the held descriptor is read.
     pub const fn new(max_bytes: u64) -> Result<Self, PrivateArtifactError> {
-        if max_bytes == 0 {
+        if max_bytes == 0 || max_bytes > MAX_PRIVATE_ARTIFACT_BYTES {
             return Err(PrivateArtifactError::InvalidSizeLimit);
         }
         Ok(Self { max_bytes })
@@ -107,6 +115,7 @@ impl ArtifactProof {
 }
 
 /// Couples bytes from a revalidated descriptor to their admission proof.
+#[derive(PartialEq, Eq)]
 pub struct ArtifactRead {
     bytes: Vec<u8>,
     proof: ArtifactProof,
@@ -477,7 +486,7 @@ mod linux {
         if metadata.nlink() != 1 {
             return Err(PrivateArtifactError::InputHardlinkAmbiguous);
         }
-        if metadata.len() == 0 || metadata.len() > policy.max_bytes() {
+        if metadata.len() > policy.max_bytes() {
             return Err(PrivateArtifactError::InputSizeInvalid);
         }
         Ok(())
@@ -711,7 +720,10 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::{DescriptorBoundArtifact, PrivateArtifactError, PrivateArtifactPolicy};
+        use crate::{
+            ArtifactProof, ArtifactRead, DescriptorBoundArtifact, PrivateArtifactError,
+            PrivateArtifactPolicy, MAX_PRIVATE_ARTIFACT_BYTES,
+        };
         use std::ffi::CString;
         use std::fs::Permissions;
         use std::io::Write;
@@ -789,6 +801,30 @@ mod linux {
             let debug = format!("{artifact:?}");
             assert!(!debug.contains(fixture.input.to_string_lossy().as_ref()));
             assert!(!debug.contains("synthetic artifact"));
+        }
+
+        #[test]
+        fn empty_artifact_is_an_exact_whole_read_product() {
+            let fixture = Fixture::new("empty-round-trip");
+            fs::write(&fixture.input, b"").expect("write empty candidate");
+            let artifact =
+                DescriptorBoundArtifact::open(&fixture.root, &fixture.input, fixture.policy())
+                    .expect("open empty artifact");
+            let expected_proof = ArtifactProof {
+                byte_count: 0,
+                sha256: sha256(b""),
+            };
+            let expected = ArtifactRead {
+                bytes: Vec::new(),
+                proof: expected_proof,
+            };
+
+            assert_eq!(artifact.proof(), expected_proof);
+            assert_eq!(artifact.read().expect("read empty artifact"), expected);
+            assert_eq!(
+                artifact.proof().sha256_hex(),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            );
         }
 
         #[test]
@@ -1023,12 +1059,13 @@ mod linux {
                 PrivateArtifactError::InputOutsideRoot
             );
 
-            let empty = Fixture::new("empty");
-            fs::write(&empty.input, b"").expect("empty candidate");
+            let exact_ceiling = PrivateArtifactPolicy::new(MAX_PRIVATE_ARTIFACT_BYTES)
+                .expect("absolute ceiling must be accepted without allocation");
+            assert_eq!(exact_ceiling.max_bytes(), MAX_PRIVATE_ARTIFACT_BYTES);
             assert_eq!(
-                DescriptorBoundArtifact::open(&empty.root, &empty.input, empty.policy())
-                    .expect_err("empty candidate must fail"),
-                PrivateArtifactError::InputSizeInvalid
+                PrivateArtifactPolicy::new(MAX_PRIVATE_ARTIFACT_BYTES + 1)
+                    .expect_err("one byte over the absolute ceiling must fail"),
+                PrivateArtifactError::InvalidSizeLimit
             );
 
             let oversized = Fixture::new("oversized");

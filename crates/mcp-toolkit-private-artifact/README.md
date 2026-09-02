@@ -12,15 +12,18 @@ The crate:
 - requires the effective user to own the root, nested directories, and file;
 - rejects group/world-accessible nodes, non-regular files, and files with more
   than one hard link;
-- reads an exact caller-bounded byte count, then rechecks descriptor metadata
-  and the complete namespace chain;
+- reads an exact caller-bounded byte count (including a valid zero-byte
+  artifact), then rechecks descriptor metadata and the complete namespace
+  chain;
 - binds later reads to the admitted device/inode, metadata snapshot, length,
   and SHA-256 digest; and
 - returns closed, path-free errors.
 
-The current implementation is Linux-specific and fails closed on other
-platforms. It does not browse directories, write files, manage manifests,
-authenticate callers, call providers, or authorize what the bytes mean.
+Every caller limit must be non-zero and no greater than the exported 256 MiB
+`MAX_PRIVATE_ARTIFACT_BYTES` absolute ceiling. The current implementation is
+Linux-specific and fails closed on other platforms. It does not browse
+directories, write files, manage manifests, authenticate callers, call
+providers, or authorize what the bytes mean.
 
 ```rust,no_run
 use mcp_toolkit_private_artifact::{DescriptorBoundArtifact, PrivateArtifactPolicy};
