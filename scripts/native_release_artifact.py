@@ -75,6 +75,13 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_text_file(path: Path) -> str:
+    """Hash text metadata independent of Git's platform line-ending checkout."""
+    digest = hashlib.sha256()
+    digest.update(path.read_text(encoding="utf-8").replace("\r\n", "\n").encode())
+    return digest.hexdigest()
+
+
 def write_json(path: Path, value: object) -> None:
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
@@ -607,7 +614,7 @@ def package(
     legacy_linux = target in TARGET_MACHINES
     runtime = inspect_glibc(binary, target) if legacy_linux else inspect_platform_runtime(binary, target)
     binary_digest = sha256(binary)
-    manifest_digest = sha256(manifest)
+    manifest_digest = sha256_text_file(manifest)
     lockfile_digest = sha256(lockfile)
     inventory_value = read_json(inventory)
     schema_value = read_json(schema)
@@ -784,7 +791,7 @@ def verify(
             },
             "inputs": {
                 "binary_sha256": sha256(root / binary_name),
-                "manifest_sha256": sha256(manifest),
+                "manifest_sha256": sha256_text_file(manifest),
                 "lockfile_sha256": sha256(lockfile),
             },
             "runtime": runtime,
@@ -796,7 +803,7 @@ def verify(
                 source_ref=source_ref, source_tree=source_tree,
                 source_main_proven=source_main_proven,
                 binary_digest=sha256(root / binary_name),
-                manifest_digest=sha256(manifest), lockfile_digest=sha256(lockfile),
+                manifest_digest=sha256_text_file(manifest), lockfile_digest=sha256(lockfile),
                 runtime=runtime,
             )
         if metadata != expected_metadata:
@@ -828,7 +835,7 @@ def verify(
             source_main_proven,
             sbom_binary_name,
             sha256(root / binary_name),
-            sha256(manifest),
+            sha256_text_file(manifest),
             sha256(lockfile),
             runtime,
             dependency_count,
