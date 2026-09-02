@@ -2,6 +2,7 @@
 name = "mcp-toolkit-process"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Process and signal helpers for Rust MCP services."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"

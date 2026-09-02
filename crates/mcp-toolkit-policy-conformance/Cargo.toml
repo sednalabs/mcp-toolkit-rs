@@ -2,6 +2,7 @@
 name = "mcp-toolkit-policy-conformance"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Conformance helpers for validating Rust MCP policy contracts."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"

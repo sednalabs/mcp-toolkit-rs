@@ -19,3 +19,6 @@ members = [
   "crates/mcp-toolkit-testing",
   "crates/mcp-toolkit-server",
 ]
+
+[workspace.package]
+rust-version = "1.88"
