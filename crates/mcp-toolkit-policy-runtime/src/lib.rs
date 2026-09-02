@@ -7,8 +7,8 @@
 //! and capability guards, enabling stateful evaluation of MCP authorization policies.
 //!
 //! ## Non-ownership
-//! This module does not define the fundamental authorization logic or proofs;
-//! it facilitates runtime execution of policy constraints.
+//! This module does not define the fundamental authorization logic or proofs; it
+//! facilitates runtime execution of policy constraints.
 //!
 //! ## Policy & Guarantees
 //! * **Stateful Enforcement**: Provides infrastructure for cached and stateful
@@ -31,6 +31,7 @@ pub mod capability_guard;
 #[cfg(feature = "http")]
 pub mod http_policy;
 pub mod policy_authority;
+pub mod route_scope;
 
 #[cfg(feature = "http")]
 pub use auth_control_plane::{
@@ -56,4 +57,9 @@ pub use policy_authority::{
     hello_server_policy_authority, sql_restricted_policy_authority, ClosurePolicyAuthority,
     HelloPolicyRequest, HelloServerProfile, PolicyAuthority, PolicyAuthorityDecision,
     PolicyProvenanceError, PolicyProvenanceRequirement, PolicyRuntimeMode, SharedPolicyAuthority,
+};
+pub use route_scope::{
+    evaluate_route_scope, route_scope_policy_authority, RouteScopePolicyConfig,
+    RouteScopePolicyRequest, ROUTE_SCOPE_POLICY_CONTRACT_VERSION,
+    ROUTE_SCOPE_POLICY_DECISION_SOURCE,
 };
