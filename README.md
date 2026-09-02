@@ -64,6 +64,7 @@ not part of this canonical Sedna Labs package family.
 | `mcp-toolkit-private-artifact` | Descriptor-bound, bounded reads of private local artifacts. |
 | `mcp-toolkit-process` | Process and signal helpers. |
 | `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions and bounded read-only SQL. |
+| `mcp-toolkit-tasks` | Principal-bound authority and observation around RMCP's native Tasks implementation. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition. |
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract-test helpers. |
 | `mcp-toolkit-docs` | Documentation and tool-metadata helpers. |
