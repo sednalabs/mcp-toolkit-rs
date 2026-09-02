@@ -35,6 +35,10 @@ The supported path in this toolkit is:
 4. review repository-specific wording so the queries stay neutral and accurate
    for the new service.
 
+This reuse model remains fork-safe because the service carries its scanner
+policy locally and forked pull requests resolve authoritative policy from the
+exact trusted base revision rather than trusting candidate-owned scanner files.
+
 The Rust toolkit-contract pack is not intended for automatic vendoring. Its
 queries name toolkit-owned source paths and source-of-truth functions, so a
 standalone service should create its own contract pack only for similarly
