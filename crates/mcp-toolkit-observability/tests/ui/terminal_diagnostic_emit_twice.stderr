@@ -1,7 +1,7 @@
 error[E0382]: use of moved value: `diagnostic`
   --> tests/ui/terminal_diagnostic_emit_twice.rs:15:5
    |
- 8  |     let diagnostic = ToolCallTerminalDiagnostic::success(
+8  |     let diagnostic = ToolCallTerminalDiagnostic::success(
    |         ---------- move occurs because `diagnostic` has type `ToolCallTerminalDiagnostic`, which does not implement the `Copy` trait
 ...
 14 |     diagnostic.emit();
