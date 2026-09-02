@@ -709,8 +709,7 @@ impl PostgresTransportError {
             code: "PG_SSLMODE_INVALID",
             reason: "sslmode_invalid",
             message: format!(
-                "invalid sslmode {:?} (expected disable|prefer|require|verify-ca|verify-full)",
-                value
+                "invalid sslmode {value:?} (expected disable|prefer|require|verify-ca|verify-full)"
             ),
             sqlstate: None,
         }
@@ -1257,21 +1256,18 @@ fn build_verified_tls_connector(
         if !path.trim().is_empty() {
             let certs = CertificateDer::pem_file_iter(path).map_err(|err| {
                 PostgresTransportError::tls_config_error(format!(
-                    "failed reading sslrootcert {:?}: {err}",
-                    path
+                    "failed reading sslrootcert {path:?}: {err}"
                 ))
             })?;
             for cert in certs {
                 let cert = cert.map_err(|err| {
                     PostgresTransportError::tls_config_error(format!(
-                        "failed parsing sslrootcert {:?}: {err}",
-                        path
+                        "failed parsing sslrootcert {path:?}: {err}"
                     ))
                 })?;
                 roots.add(cert).map_err(|err| {
                     PostgresTransportError::tls_config_error(format!(
-                        "failed adding sslrootcert {:?}: {err}",
-                        path
+                        "failed adding sslrootcert {path:?}: {err}"
                     ))
                 })?;
             }

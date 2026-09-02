@@ -301,7 +301,9 @@ fn validate_oidc_metadata(
 fn required_metadata_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str, AuthError> {
     let value = value.map(str::trim).unwrap_or("");
     if value.is_empty() {
-        return Err(AuthError::new(format!("Discovery metadata missing {field}")));
+        return Err(AuthError::new(format!(
+            "Discovery metadata missing {field}"
+        )));
     }
     Ok(value)
 }
