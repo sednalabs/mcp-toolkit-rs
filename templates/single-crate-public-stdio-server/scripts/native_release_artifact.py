@@ -800,6 +800,11 @@ def verify(
 
     with tempfile.TemporaryDirectory(prefix="native-release-verify-") as temporary:
         root = safe_extract(archive, Path(temporary))
+        expected_root_name = expected_archive_name.removesuffix(".tar.gz")
+        if root.name != expected_root_name:
+            raise ArtifactError(
+                f"archive root directory does not match canonical name: expected {expected_root_name}, got {root.name}"
+            )
         expected_files = set(PAYLOAD_FILES) | {payload_name, "MANIFEST.sha256"}
         actual_files = {path.name for path in root.iterdir() if path.is_file()}
         if actual_files != expected_files or any(path.is_dir() for path in root.iterdir()):
@@ -1759,6 +1764,28 @@ class ArtifactTests(unittest.TestCase):
                     archives, logical_name, list(RELEASE_TARGETS), candidate, "example/server", "push",
                     "refs/heads/main", source_tree, True, manifest, lockfile,
                 )
+            valid_archive = archives[0]
+            renamed_archive = root / valid_archive.name
+            with tarfile.open(valid_archive, mode="r:gz") as source_bundle:
+                source_members = source_bundle.getmembers()
+                original_root = PurePosixPath(source_members[0].name).parts[0]
+                renamed_root = f"{original_root}-tampered"
+                with tarfile.open(renamed_archive, mode="w:gz") as target_bundle:
+                    for member in source_members:
+                        member.name = renamed_root + member.name[len(original_root):]
+                        payload = source_bundle.extractfile(member.name.replace(renamed_root, original_root, 1))
+                        target_bundle.addfile(member, payload)
+            renamed_sidecar = renamed_archive.with_name(renamed_archive.name + ".sha256")
+            renamed_sidecar.write_text(
+                f"{sha256(renamed_archive)}  {renamed_archive.name}\n", encoding="utf-8"
+            )
+            with mock.patch(__name__ + ".inspect_glibc", return_value=linux_runtimes[RELEASE_TARGETS[0]]):
+                with self.assertRaisesRegex(ArtifactError, "root directory does not match"):
+                    verify(
+                        renamed_archive, logical_name, RELEASE_TARGETS[0], candidate,
+                        "example/server", "push", "refs/heads/main", source_tree, True,
+                        manifest, lockfile,
+                    )
             verification = root / "verification.json"
             write_json(verification, report)
             receipt = authorization_receipt(
