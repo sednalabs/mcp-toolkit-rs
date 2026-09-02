@@ -1297,8 +1297,8 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             replace_once_after(
                 &canonical_wrapper,
                 privileged_job,
-                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
-                "          cp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n",
+                "          cp trusted-template-verification.json downloaded/native-template-verification.json || {\n",
                 "root replaced privileged shell command",
             ),
             "run body must match the exact canonical command body",
