@@ -58,7 +58,8 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "auth")]
 use crate::auth::AuthSurfaceLayer;
 
-const SESSIONLESS_POST_PROBE_LIMIT: usize = 64 * 1024;
+/// Default maximum buffered MCP POST body size.
+pub const DEFAULT_REQUEST_BODY_LIMIT: usize = 64 * 1024;
 
 /// Bind safety policy for hosted HTTP MCP servers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -138,11 +139,23 @@ impl fmt::Display for HttpBindSafetyError {
 impl std::error::Error for HttpBindSafetyError {}
 
 /// Builder for a local Streamable HTTP MCP runtime.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LocalMcpHttpRuntimeBuilder {
     config: LocalStreamableHttpServiceConfig,
     stateless_fallback: bool,
     stateless_server_config: Option<StreamableHttpServerConfig>,
+    max_request_body_bytes: usize,
+}
+
+impl Default for LocalMcpHttpRuntimeBuilder {
+    fn default() -> Self {
+        Self {
+            config: LocalStreamableHttpServiceConfig::default(),
+            stateless_fallback: false,
+            stateless_server_config: None,
+            max_request_body_bytes: DEFAULT_REQUEST_BODY_LIMIT,
+        }
+    }
 }
 
 impl LocalMcpHttpRuntimeBuilder {
@@ -307,6 +320,22 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
+    /// Sets the maximum buffered body size for every MCP POST request.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The limit applies before both stateful and stateless services parse the
+    /// body. Keep it small enough for the deployment's concurrency budget.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+        self.max_request_body_bytes = max_request_body_bytes;
+        self
+    }
+
     /// Replaces the stateless fallback server configuration.
     ///
     /// # Errors
@@ -378,6 +407,7 @@ impl LocalMcpHttpRuntimeBuilder {
             stateless_service,
             allowed_hosts,
             allowed_origins,
+            max_request_body_bytes: self.max_request_body_bytes,
         }
     }
 }
@@ -394,6 +424,8 @@ pub struct LocalMcpHttpRuntime<S> {
     pub allowed_hosts: Vec<String>,
     /// Allowed Origin header values copied from the stateful server config.
     pub allowed_origins: Vec<String>,
+    /// Maximum buffered body size for every MCP POST request.
+    pub max_request_body_bytes: usize,
 }
 
 impl<S> LocalMcpHttpRuntime<S>
@@ -419,6 +451,7 @@ where
             allowed_hosts: self.allowed_hosts,
             allowed_origins: self.allowed_origins,
             auth_enabled,
+            max_request_body_bytes: self.max_request_body_bytes,
         }
     }
 }
@@ -437,6 +470,8 @@ pub struct LocalMcpHttpState<S> {
     pub allowed_origins: Vec<String>,
     /// True when bearer authentication is active above the route bundle.
     pub auth_enabled: bool,
+    /// Maximum buffered body size for every MCP POST request.
+    pub max_request_body_bytes: usize,
 }
 
 impl<S> Clone for LocalMcpHttpState<S> {
@@ -448,6 +483,7 @@ impl<S> Clone for LocalMcpHttpState<S> {
             allowed_hosts: self.allowed_hosts.clone(),
             allowed_origins: self.allowed_origins.clone(),
             auth_enabled: self.auth_enabled,
+            max_request_body_bytes: self.max_request_body_bytes,
         }
     }
 }
@@ -624,6 +660,22 @@ impl LocalMcpHttpServerBuilder {
     /// This function does not panic.
     pub fn stateless_fallback(mut self, enabled: bool) -> Self {
         self.runtime = self.runtime.stateless_fallback(enabled);
+        self
+    }
+
+    /// Sets the maximum buffered body size for every MCP POST request.
+    ///
+    /// # Errors
+    /// This function does not return errors.
+    ///
+    /// # Security
+    /// The limit is enforced before stateful or stateless request parsing.
+    /// Keep it small enough for the deployment's concurrency budget.
+    ///
+    /// # Panics
+    /// This function does not panic.
+    pub fn max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+        self.runtime = self.runtime.max_request_body_bytes(max_request_body_bytes);
         self
     }
 
@@ -1076,53 +1128,47 @@ async fn handle_post<S>(
 where
     S: Service<RoleServer> + Send + 'static,
 {
-    match session_route {
-        McpSessionRoute::Live(session_id) => {
-            return forward_live_service(state.stateful_service, req, session_id).await;
-        }
-        McpSessionRoute::InvalidOrExpired => {
-            log_route_rejection(
-                req.method(),
-                true,
-                "invalid_or_expired_session",
-                StatusCode::NOT_FOUND,
-            );
-            return session_error(
-                StatusCode::NOT_FOUND,
-                "Invalid or expired session ID.",
-                "Re-initialize with POST /mcp to obtain a new session id.",
-            );
-        }
-        McpSessionRoute::Headerless => {}
-    }
-
-    if content_length_exceeds(req.headers(), SESSIONLESS_POST_PROBE_LIMIT) {
+    if matches!(&session_route, McpSessionRoute::InvalidOrExpired) {
         log_route_rejection(
             req.method(),
-            false,
-            "sessionless_body_too_large",
+            true,
+            "invalid_or_expired_session",
+            StatusCode::NOT_FOUND,
+        );
+        return session_error(
+            StatusCode::NOT_FOUND,
+            "Invalid or expired session ID.",
+            "Re-initialize with POST /mcp to obtain a new session id.",
+        );
+    }
+
+    if content_length_exceeds(req.headers(), state.max_request_body_bytes) {
+        log_route_rejection(
+            req.method(),
+            session_route.header_present(),
+            "request_body_too_large",
             StatusCode::PAYLOAD_TOO_LARGE,
         );
-        return sessionless_body_too_large_response();
+        return request_body_too_large_response();
     }
 
     let (parts, body) = req.into_parts();
-    let bytes = match to_bytes(body, SESSIONLESS_POST_PROBE_LIMIT).await {
+    let bytes = match to_bytes(body, state.max_request_body_bytes).await {
         Ok(bytes) => bytes,
         Err(err) if is_body_limit_error(&err) => {
             log_route_rejection(
                 &parts.method,
-                false,
-                "sessionless_body_too_large",
+                session_route.header_present(),
+                "request_body_too_large",
                 StatusCode::PAYLOAD_TOO_LARGE,
             );
-            return sessionless_body_too_large_response();
+            return request_body_too_large_response();
         }
         Err(_) => {
             log_route_rejection(
                 &parts.method,
-                false,
-                "sessionless_body_read_failed",
+                session_route.header_present(),
+                "request_body_read_failed",
                 StatusCode::BAD_REQUEST,
             );
             return session_error(
@@ -1133,6 +1179,11 @@ where
         }
     };
     let req = Request::from_parts(parts, Body::from(bytes.clone()));
+
+    if let McpSessionRoute::Live(session_id) = session_route {
+        return forward_live_service(state.stateful_service, req, session_id).await;
+    }
+
     if is_initialize_payload(&bytes) {
         return forward_service(state.stateful_service, req, "initialize").await;
     }
@@ -1247,6 +1298,7 @@ where
         "transport": "streamable_http",
         "auth_enabled": state.auth_enabled,
         "stateless_fallback": state.stateless_service.is_some(),
+        "max_request_body_bytes": state.max_request_body_bytes,
         "session": session_stats_json(stats),
     }))
 }
@@ -1369,11 +1421,11 @@ fn session_error(status: StatusCode, message: &str, hint: &str) -> Response {
     )
 }
 
-fn sessionless_body_too_large_response() -> Response {
+fn request_body_too_large_response() -> Response {
     session_error(
         StatusCode::PAYLOAD_TOO_LARGE,
         "Request body too large.",
-        "Send a smaller initialization request or include a valid session id.",
+        "Send a smaller request body.",
     )
 }
 

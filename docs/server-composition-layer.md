@@ -116,7 +116,8 @@ Current public pieces:
 - `http::HttpBindSafety` for fail-closed non-loopback bind posture checks;
 - `http::LocalMcpHttpServerBuilder` for the common hosted HTTP route bundle;
 - `http::LocalMcpHttpRuntimeBuilder` for bounded Streamable HTTP sessions and
-  optional stateless fallback;
+  optional stateless fallback; every MCP POST body is buffered under one
+  fail-closed limit (64 KiB by default) before either service parses it;
 - `http::LocalMcpHttpRouterBuilder` for `/mcp`, `/mcp/`, `/health`, optional
   OAuth-not-configured placeholder discovery routes, and host/origin guarding.
 
