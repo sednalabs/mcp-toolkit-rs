@@ -735,7 +735,9 @@ where
     };
     let payload = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
     let is_initialize = payload.as_ref().is_some_and(is_initialize_payload);
-    let is_current = payload.as_ref().is_some_and(payload_declares_current_protocol);
+    let is_current = payload
+        .as_ref()
+        .is_some_and(payload_declares_current_protocol);
     let req = Request::from_parts(parts, Body::from(bytes));
 
     if is_initialize || is_current {

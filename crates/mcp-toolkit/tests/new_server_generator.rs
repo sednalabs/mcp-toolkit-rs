@@ -105,7 +105,7 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
             template.id
         );
         assert!(
-            source.contains("CallToolResult::error") && source.contains(".into());"),
+            source.contains("CallToolResult::error") && source.contains(".into()"),
             "{} should convert caller-visible tool errors into CallToolResponse",
             template.id
         );
