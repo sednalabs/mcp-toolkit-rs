@@ -1047,24 +1047,24 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     if jobs.len() != 3
         || job_names
             != [
-                "attest-native",
-                "build-native",
-                "verify-native",
+                "attest-native-linux",
+                "build-native-linux",
+                "verify-native-linux",
             ]
     {
         violations.push(
             "workflow jobs must contain only build, verification, and attestation jobs".to_string(),
         );
     }
-    let build = yaml_get(jobs, "build-native")
-        .ok_or_else(|| "build-native job is required".to_string())
-        .and_then(|value| yaml_mapping(value, "build-native"))?;
-    let verify = yaml_get(jobs, "verify-native")
-        .ok_or_else(|| "verify-native job is required".to_string())
-        .and_then(|value| yaml_mapping(value, "verify-native"))?;
-    let attest = yaml_get(jobs, "attest-native")
-        .ok_or_else(|| "attest-native job is required".to_string())
-        .and_then(|value| yaml_mapping(value, "attest-native"))?;
+    let build = yaml_get(jobs, "build-native-linux")
+        .ok_or_else(|| "build-native-linux job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "build-native-linux"))?;
+    let verify = yaml_get(jobs, "verify-native-linux")
+        .ok_or_else(|| "verify-native-linux job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "verify-native-linux"))?;
+    let attest = yaml_get(jobs, "attest-native-linux")
+        .ok_or_else(|| "attest-native-linux job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "attest-native-linux"))?;
 
     if !mapping_has_exact_keys(
         attest,
@@ -1117,12 +1117,12 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     {
         violations.push("attestation job must be gated to main or version-tag push events".to_string());
     }
-    let verify_needs = job_needs(verify, "verify-native")?;
-    if verify_needs != ["build-native"] {
+    let verify_needs = job_needs(verify, "verify-native-linux")?;
+    if verify_needs != ["build-native-linux"] {
         violations.push("verification must depend on native builds".to_string());
     }
-    let attest_needs = job_needs(attest, "attest-native")?;
-    if attest_needs != ["build-native", "verify-native"] {
+    let attest_needs = job_needs(attest, "attest-native-linux")?;
+    if attest_needs != ["build-native-linux", "verify-native-linux"] {
         violations
             .push("attestation must depend on successful build and verification jobs".to_string());
     }
@@ -1132,7 +1132,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         "native build architecture strategy",
     ));
 
-    let build_run = job_run_text(build, "build-native")?;
+    let build_run = job_run_text(build, "build-native-linux")?;
     if !has_active_command(&build_run, "git fetch --force --no-tags origin")
         || !has_active_command(
             &build_run,
@@ -1175,7 +1175,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             }
         }
     }
-    let verify_run = job_run_text(verify, "verify-native")?;
+    let verify_run = job_run_text(verify, "verify-native-linux")?;
     if !has_active_command(&verify_run, "git fetch --force --no-tags origin")
         || !has_active_command(
             &verify_run,
@@ -1199,7 +1199,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     } {
         violations.push("verification job must compare source-bound native artifacts".to_string());
     }
-    let attest_run = job_run_text(attest, "attest-native")?;
+    let attest_run = job_run_text(attest, "attest-native-linux")?;
     if !has_active_command(
         &attest_run,
         "python3 scripts/native_release_artifact.py compare",
@@ -1243,7 +1243,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
 
     violations.extend(validate_privileged_steps(
         attest,
-        "attest-native",
+        "attest-native-linux",
         GENERATED_PRIVILEGED_STEPS,
     )?);
 
@@ -1254,7 +1254,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             continue;
         };
         let job = yaml_mapping(value, &format!("workflow.jobs.{name}"))?;
-        if name == "attest-native" {
+        if name == "attest-native-linux" {
             continue;
         }
         for value in job_uses(job, name)? {
@@ -1282,8 +1282,8 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
             .push("only the trusted attestation job may invoke provenance attestation".to_string());
     }
     for (name, job) in [
-        ("build-native", build),
-        ("verify-native", verify),
+        ("build-native-linux", build),
+        ("verify-native-linux", verify),
     ] {
         let mut checkout_count = 0;
         for step in step_mappings(job, name)? {
@@ -1363,7 +1363,7 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
         .filter_map(YamlValue::as_str)
         .collect::<Vec<_>>();
     job_names.sort_unstable();
-    if jobs.len() != 2 || job_names != ["attest-native-template", "prove-native-template"] {
+    if jobs.len() != 2 || job_names != ["attest-native-linux-template", "prove-native-template"] {
         violations.push(
             "template attestation workflow jobs must contain only proof and attestation jobs"
                 .to_string(),
@@ -1372,9 +1372,9 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
     let prove = yaml_get(jobs, "prove-native-template")
         .ok_or_else(|| "prove-native-template job is required".to_string())
         .and_then(|value| yaml_mapping(value, "prove-native-template"))?;
-    let attest = yaml_get(jobs, "attest-native-template")
-        .ok_or_else(|| "attest-native-template job is required".to_string())
-        .and_then(|value| yaml_mapping(value, "attest-native-template"))?;
+    let attest = yaml_get(jobs, "attest-native-linux-template")
+        .ok_or_else(|| "attest-native-linux-template job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "attest-native-linux-template"))?;
 
     let mut prove_keys = prove
         .keys()
@@ -1422,7 +1422,7 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
                 .to_string(),
         );
     }
-    if job_needs(attest, "attest-native-template")? != ["prove-native-template"] {
+    if job_needs(attest, "attest-native-linux-template")? != ["prove-native-template"] {
         violations
             .push("template attestation must depend on successful template proof".to_string());
     }
@@ -1458,11 +1458,11 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
 
     violations.extend(validate_privileged_steps(
         attest,
-        "attest-native-template",
+        "attest-native-linux-template",
         ROOT_PRIVILEGED_STEPS,
     )?);
 
-    let attest_run = job_run_text(attest, "attest-native-template")?;
+    let attest_run = job_run_text(attest, "attest-native-linux-template")?;
     for required in [
         "git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main",
         "source_main_proven=$(python3 scripts/native_release_artifact.py prove-source",

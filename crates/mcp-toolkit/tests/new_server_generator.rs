@@ -409,8 +409,8 @@ fn release_preflight_rejects_untrusted_release_authority() {
     let workflow = read(&workflow_path)
         .replace("  push:\n", "  pull_request:\n  push:\n")
         .replace(
-            "  build-native:\n",
-            "  build-native:\n    permissions:\n      id-token: write\n      contents: read\n",
+            "  build-native-linux:\n",
+            "  build-native-linux:\n    permissions:\n      id-token: write\n      contents: read\n",
         );
     fs::write(&workflow_path, workflow).expect("grant untrusted release authority");
 
@@ -484,8 +484,8 @@ fn release_preflight_rejects_unexpected_release_runner() {
 
     let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
     let workflow = read(&workflow_path).replace(
-        "  verify-native:\n    name: Verify cross-architecture release contract\n    needs: build-native\n    runs-on: ubuntu-24.04",
-        "  verify-native:\n    name: Verify cross-architecture release contract\n    needs: build-native\n    runs-on: self-hosted",
+        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: ubuntu-24.04",
+        "  verify-native-linux:\n    name: Verify cross-architecture release contract\n    needs: build-native-linux\n    runs-on: self-hosted",
     );
     fs::write(&workflow_path, workflow).expect("change verifier runner");
 
@@ -769,8 +769,8 @@ fn release_preflight_rejects_attestation_before_consumer_verification() {
 
     let workflow_path = output.join(".github/workflows/native-release-artifacts.yml");
     let workflow = read(&workflow_path).replace(
-        "      - verify-native\n",
-        "      - build-native\n",
+        "      - verify-native-linux\n",
+        "      - build-native-linux\n",
     );
     fs::write(&workflow_path, workflow).expect("remove verification dependency");
 
@@ -816,7 +816,7 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
         "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
     let reverify_run =
         "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
-    let privileged_job = "  attest-native:\n";
+    let privileged_job = "  attest-native-linux:\n";
 
     let cases = vec![
         (
@@ -1167,7 +1167,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
     let reverify_run =
         "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
-    let privileged_job = "  attest-native-template:\n";
+    let privileged_job = "  attest-native-linux-template:\n";
     let structural_cases = vec![
         (
             "root extra privileged run",

@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  build-native:
+  build-native-linux:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -74,6 +74,7 @@ jobs:
           python3 scripts/workflow_runner_policy_check.py --self-test
 
       - name: Verify release helper contracts
+        shell: bash
         run: python3 scripts/native_release_artifact.py --self-test
 
       - name: Install Rust toolchain
@@ -109,6 +110,7 @@ jobs:
             --schema-output release-inputs/tool-schema.json
 
       - name: Install pinned CycloneDX generator
+        shell: bash
         run: cargo install cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION" --locked
 
       - name: Generate target-specific CycloneDX SBOM
@@ -171,9 +173,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  verify-native:
+  verify-native-linux:
     name: Verify cross-architecture release contract
-    needs: build-native
+    needs: build-native-linux
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -251,11 +253,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  attest-native:
+  attest-native-linux:
     name: Attest verified trusted release artifacts
     needs:
-      - build-native
-      - verify-native
+      - build-native-linux
+      - verify-native-linux
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
