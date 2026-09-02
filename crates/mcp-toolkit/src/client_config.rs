@@ -162,22 +162,34 @@ pub fn render_client_config(options: &ClientConfigOptions) -> Result<String, Cli
     let env_key = options.env_key.as_deref().unwrap_or_else(|| {
         // Derive the generated contract key while preserving the historical
         // EXAMPLE_MCP key for the example package.
-        if package_name == "example-mcp" { DEFAULT_PROFILE_ENV } else { "" }
+        if package_name == "example-mcp" {
+            DEFAULT_PROFILE_ENV
+        } else {
+            ""
+        }
     });
     let derived_key;
     let env_key = if env_key.is_empty() {
         derived_key = profile_env_key(&package_name);
         derived_key.as_str()
-    } else { env_key };
+    } else {
+        env_key
+    };
     validate_env_key(env_key)?;
     if let Some(value) = options.env_value.as_deref().or(Some(options.profile.as_str())) {
-        if value.chars().any(|c| c.is_control()) { return Err(ClientConfigError::InvalidEnvValue); }
+        if value.chars().any(|c| c.is_control()) {
+            return Err(ClientConfigError::InvalidEnvValue);
+        }
     }
 
     Ok(match transport {
-        ClientConfigTransport::Stdio => {
-            render_stdio_config(options, &package_name, &server_name, &canonical_root, env_key)
-        }
+        ClientConfigTransport::Stdio => render_stdio_config(
+            options,
+            &package_name,
+            &server_name,
+            &canonical_root,
+            env_key,
+        ),
         ClientConfigTransport::HostedHttp => render_hosted_http_config(options, &server_name),
     })
 }
@@ -220,7 +232,16 @@ fn render_stdio_config(
 }
 
 fn profile_env_key(package_name: &str) -> String {
-    let mut key = package_name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect::<String>();
+    let mut key = package_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
     key.push_str("_TOOL_PROFILE");
     key
 }

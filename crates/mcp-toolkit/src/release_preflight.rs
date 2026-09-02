@@ -244,15 +244,25 @@ fn file_check(root: &Path, label: &'static str, path: &'static str) -> ReleasePr
     }
 }
 
-fn probe_scenario_check(root: &Path, shape: DoctorShape, profile: ReleasePreflightProfile) -> ReleasePreflightCheck {
-    if matches!(profile, ReleasePreflightProfile::PublicStdio) && matches!(shape, DoctorShape::Unknown) {
+fn probe_scenario_check(
+    root: &Path,
+    shape: DoctorShape,
+    profile: ReleasePreflightProfile,
+) -> ReleasePreflightCheck {
+    if matches!(profile, ReleasePreflightProfile::PublicStdio)
+        && matches!(shape, DoctorShape::Unknown)
+    {
         let present = exists(root, "spec/mcp_probe_stdio_smoke.v1.json");
         return ReleasePreflightCheck {
             label: "MCP stdio probe scenario",
             target: "spec/mcp_probe_stdio_smoke.v1.json".to_string(),
             required: true,
             passed: present,
-            detail: if present { "explicit stdio probe scenario present".into() } else { "existing public stdio profile requires an explicit stdio probe scenario".into() },
+            detail: if present {
+                "explicit stdio probe scenario present".into()
+            } else {
+                "existing public stdio profile requires an explicit stdio probe scenario".into()
+            },
         };
     }
     let (target, detail) = match shape {
