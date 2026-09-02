@@ -1,6 +1,6 @@
 # Starter Templates
 
-The `templates/` directory contains maintained, copyable Rust MCP server
+The [`templates/`](../templates) directory contains maintained, copyable Rust MCP server
 starters. They are intentionally small applications, not hidden framework
 examples. Some are lightweight in-repo examples; others are full standalone
 repository skeletons.
@@ -67,7 +67,7 @@ are not the public-portability proof surface.
 
 ## Curated Stdio Intent Server
 
-Use `templates/curated-stdio-intent-server` when the server should run as a
+Use the [`curated-stdio-intent-server`](../templates/curated-stdio-intent-server) when the server should run as a
 process-local stdio MCP service with a small curated tool surface.
 
 It demonstrates:
@@ -122,7 +122,7 @@ governance, license, or release scaffolding.
 
 ## Single-Crate Public Stdio Server
 
-Use `templates/single-crate-public-stdio-server` when you are starting a new
+Use the [`single-crate-public-stdio-server`](../templates/single-crate-public-stdio-server) when you are starting a new
 public repository for a stdio MCP server and want the standalone public stdio
 starter to carry the public CI and security posture from the start.
 
@@ -178,7 +178,7 @@ receipt. The workflow does not publish a GitHub Release or install a binary.
 
 ## Hosted HTTP/Auth Server
 
-Use `templates/hosted-http-auth-server` when the server should expose MCP over
+Use the [`hosted-http-auth-server`](../templates/hosted-http-auth-server) when the server should expose MCP over
 Streamable HTTP with an explicit hosted auth surface.
 
 It demonstrates:

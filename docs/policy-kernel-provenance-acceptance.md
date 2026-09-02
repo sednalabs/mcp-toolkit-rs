@@ -93,6 +93,11 @@ Public policy-kernel targets can be consumed by the public workflow without an
 extra secret. Private or inaccessible targets require a trusted proof lane
 outside this public workflow.
 
+The consuming repository owns its manifest, policy-kernel ref, downloaded
+artifacts, claim-ledger reference, and deny-before-mutation evidence. This
+document defines the toolkit-side acceptance contract; it does not create or
+maintain those consumer-local files.
+
 ## Non-Claims
 
 This acceptance contract does not prove:

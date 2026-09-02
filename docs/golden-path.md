@@ -15,7 +15,7 @@ for protocol-adjacent substrate that an unrelated MCP server could also adopt.
 ## 1. Choose The Server Shape
 
 Start by naming the transport and trust boundary. Before designing a new
-abstraction, check `docs/reference-server-atlas.md` and record the closest
+abstraction, check the [reference-server atlas](reference-server-atlas.md) and record the closest
 living reference pattern. The atlas keeps reusable lessons tied to real MCP
 servers while this toolkit keeps provider and deployment semantics out of
 generic APIs. When a row fits, also check `docs/pattern-manifests.md` and
@@ -43,10 +43,10 @@ boundaries.
 
 Use one of the maintained templates when creating a new server:
 
-- `templates/curated-stdio-intent-server` for a stdio intent server.
-- `templates/single-crate-public-stdio-server` for a standalone public stdio
+- [`templates/curated-stdio-intent-server`](../templates/curated-stdio-intent-server) for a stdio intent server.
+- [`templates/single-crate-public-stdio-server`](../templates/single-crate-public-stdio-server) for a standalone public stdio
   server repository with GitHub CI and security scaffolding included.
-- `templates/hosted-http-auth-server` for hosted Streamable HTTP with OAuth
+- [`templates/hosted-http-auth-server`](../templates/hosted-http-auth-server) for hosted Streamable HTTP with OAuth
   metadata, bearer challenges, host guarding, and session support.
 
 The quickest copy-paste path from this checkout is:
