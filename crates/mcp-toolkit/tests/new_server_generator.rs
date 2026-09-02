@@ -702,7 +702,7 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             &canonical,
             label,
             mutated,
-            "exact ordered x86_64 and arm64 matrix.include",
+            "exact ordered five-target matrix.include",
         );
     }
 

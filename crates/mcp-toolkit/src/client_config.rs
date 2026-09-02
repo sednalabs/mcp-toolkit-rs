@@ -24,6 +24,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::doctor::{inspect_project, DoctorShape};
 use mcp_toolkit_core::tool_inventory::READ_ONLY_PROFILE_KEY;
@@ -365,7 +366,12 @@ mod tests {
     use std::fs;
 
     fn project_legacy() -> PathBuf {
-        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-legacy");
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = PathBuf::from(format!(
+            "/tmp/mcp-toolkit-client-config-legacy-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -377,7 +383,12 @@ mod tests {
     }
 
     fn project_overrides() -> PathBuf {
-        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-overrides");
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = PathBuf::from(format!(
+            "/tmp/mcp-toolkit-client-config-overrides-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(

@@ -70,7 +70,7 @@ jobs:
       - name: Enforce standard GitHub-hosted runner labels
         shell: bash
         run: |
-          python3 -m pip install --user PyYAML
+          python3 -m pip install --user --break-system-packages PyYAML
           python3 scripts/workflow_runner_policy_check.py --self-test
 
       - name: Verify release helper contracts

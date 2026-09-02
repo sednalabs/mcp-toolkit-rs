@@ -891,6 +891,9 @@ fn validate_exact_native_architecture_strategy(job: &YamlMapping, context: &str)
                                         let expected = [
                                             ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
                                             ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
+                                            ("macos-15-intel", "x86_64-apple-darwin"),
+                                            ("macos-15", "aarch64-apple-darwin"),
+                                            ("windows-2025", "x86_64-pc-windows-msvc"),
                                         ];
                                         include.len() == expected.len()
                                             && include.iter().zip(expected).all(
@@ -916,7 +919,7 @@ fn validate_exact_native_architecture_strategy(job: &YamlMapping, context: &str)
         Vec::new()
     } else {
         vec![format!(
-            "{context} must use only runs-on: ${{{{ matrix.runner }}}}, fail-fast: false, and the exact ordered x86_64 and arm64 matrix.include hosted runner/target rows with no extra keys or dimensions"
+            "{context} must use only runs-on: ${{{{ matrix.runner }}}}, fail-fast: false, and the exact ordered five-target matrix.include hosted runner/target rows with no extra keys or dimensions"
         )]
     }
 }
