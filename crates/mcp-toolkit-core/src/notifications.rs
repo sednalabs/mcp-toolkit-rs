@@ -35,6 +35,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use serde::Serialize;
+
 /// MCP method name for tool list change notifications.
 pub const TOOLS_LIST_CHANGED_METHOD: &str = "notifications/tools/list_changed";
 
@@ -88,6 +90,33 @@ impl ToolListTracker {
         S: AsRef<str>,
     {
         let fingerprint = fingerprint_tools(tools);
+        self.observe_fingerprint(session_id, fingerprint)
+    }
+
+    /// Observe complete serialized tool descriptors for a session.
+    ///
+    /// The descriptor fingerprint includes every serialized field, so changing
+    /// an input/output schema, annotation, description, or provider metadata is
+    /// reported as a tool-list change even when the tool names are unchanged.
+    /// Use this method when the session publishes the full `tools/list`
+    /// descriptors rather than names only.
+    ///
+    /// # Errors
+    /// Returns a serialization error when a descriptor cannot be converted to
+    /// the canonical JSON fingerprint.
+    pub fn observe_descriptors<T>(
+        &self,
+        session_id: &str,
+        descriptors: &[T],
+    ) -> Result<ToolListUpdate, serde_json::Error>
+    where
+        T: Serialize,
+    {
+        let fingerprint = crate::tool_schema::tool_schema_fingerprint(descriptors)?;
+        Ok(self.observe_fingerprint(session_id, fingerprint))
+    }
+
+    fn observe_fingerprint(&self, session_id: &str, fingerprint: u64) -> ToolListUpdate {
         let mut guard = match self.fingerprints.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -170,5 +199,70 @@ mod tests {
         let update = tracker.observe("sess-1", ["alpha", "gamma"]);
         assert!(matches!(update, ToolListUpdate::Changed { .. }));
         assert!(update.changed());
+    }
+
+    #[test]
+    fn observe_descriptors_detects_schema_changes_with_same_name() {
+        let tracker = ToolListTracker::new();
+        let first = tracker
+            .observe_descriptors(
+                "sess-1",
+                &[serde_json::json!({
+                    "name": "items.read",
+                    "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
+                })],
+            )
+            .expect("first descriptor observation");
+        assert!(matches!(first, ToolListUpdate::NewSession { .. }));
+
+        let unchanged = tracker
+            .observe_descriptors(
+                "sess-1",
+                &[serde_json::json!({
+                    "name": "items.read",
+                    "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
+                })],
+            )
+            .expect("unchanged descriptor observation");
+        assert!(matches!(unchanged, ToolListUpdate::Unchanged { .. }));
+
+        let changed = tracker
+            .observe_descriptors(
+                "sess-1",
+                &[serde_json::json!({
+                    "name": "items.read",
+                    "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}}
+                })],
+            )
+            .expect("changed descriptor observation");
+        assert!(changed.changed());
+    }
+
+    #[test]
+    fn observe_descriptors_detects_metadata_changes_with_same_name_and_schema() {
+        let tracker = ToolListTracker::new();
+        let first = tracker
+            .observe_descriptors(
+                "sess-1",
+                &[serde_json::json!({
+                    "name": "items.read",
+                    "inputSchema": {"type": "object"},
+                    "annotations": {"readOnlyHint": true}
+                })],
+            )
+            .expect("first descriptor observation");
+        assert!(matches!(first, ToolListUpdate::NewSession { .. }));
+
+        let changed = tracker
+            .observe_descriptors(
+                "sess-1",
+                &[serde_json::json!({
+                    "name": "items.read",
+                    "inputSchema": {"type": "object"},
+                    "annotations": {"readOnlyHint": false}
+                })],
+            )
+            .expect("changed descriptor observation");
+        assert!(changed.changed());
     }
 }

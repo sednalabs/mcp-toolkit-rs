@@ -16,7 +16,9 @@ use mcp_toolkit::patterns::{
     conformance_findings, find_pattern, manifests_for_pattern, pattern_manifests, patterns,
     PatternConformanceSeverity, PatternManifestSpec,
 };
-use mcp_toolkit::release_preflight::inspect_release_preflight;
+use mcp_toolkit::release_preflight::{
+    inspect_release_preflight_with_profile, ReleasePreflightProfile,
+};
 
 fn main() {
     if let Err(error) = run(env::args().skip(1).collect()) {
@@ -218,12 +220,15 @@ fn run_client_config(args: &[String]) -> Result<(), String> {
             "--command" => {
                 options.command = Some(take_value(args, &mut index, "--command")?);
             }
+            "--installed" | "--path" => options.installed = true,
             "--url" => {
                 options.url = Some(take_value(args, &mut index, "--url")?);
             }
             "--profile" => {
                 options.profile = take_value(args, &mut index, "--profile")?;
             }
+            "--env-key" => options.env_key = Some(take_value(args, &mut index, "--env-key")?),
+            "--env-value" => options.env_value = Some(take_value(args, &mut index, "--env-value")?),
             "--help" | "-h" => {
                 print_client_config_help();
                 return Ok(());
@@ -289,17 +294,42 @@ fn run_doctor(args: &[String]) -> Result<(), String> {
 }
 
 fn run_release_preflight(args: &[String]) -> Result<(), String> {
-    let root = match args {
+    let mut profile = ReleasePreflightProfile::GeneratedTemplateStrict;
+    let mut positional = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--profile" => {
+                let value = take_value(args, &mut index, "--profile")?;
+                profile = match value.as_str() {
+                    "generated-template-strict" | "strict" => {
+                        ReleasePreflightProfile::GeneratedTemplateStrict
+                    }
+                    "public-stdio" | "existing-public-stdio" => {
+                        ReleasePreflightProfile::PublicStdio
+                    }
+                    _ => return Err(format!("unknown release-preflight profile `{value}`")),
+                };
+            }
+            "--help" | "-h" if args.len() == 1 => {
+                print_release_preflight_help();
+                return Ok(());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown release-preflight option `{value}`"))
+            }
+            value => positional.push(value.to_string()),
+        }
+        index += 1;
+    }
+    let root = match positional.as_slice() {
         [] => PathBuf::from("."),
-        [flag] if flag == "--help" || flag == "-h" => {
-            print_release_preflight_help();
-            return Ok(());
+        [path] => PathBuf::from(path),
+        _ => {
+            return Err(
+                "usage: mcp-toolkit release-preflight [--profile PROFILE] [path]".to_string(),
+            )
         }
-        [path] if !path.starts_with('-') => PathBuf::from(path),
-        [flag] if flag.starts_with('-') => {
-            return Err(format!("unknown release-preflight option `{flag}`"));
-        }
-        _ => return Err("usage: mcp-toolkit release-preflight [path]".to_string()),
     };
 
     if !root.exists() {
@@ -315,7 +345,7 @@ fn run_release_preflight(args: &[String]) -> Result<(), String> {
         ));
     }
 
-    let report = inspect_release_preflight(root);
+    let report = inspect_release_preflight_with_profile(root, profile);
     print!("{}", report.render());
 
     if report.ready() {
@@ -727,7 +757,10 @@ fn print_doctor_help() {
 
 fn print_release_preflight_help() {
     println!("Usage:");
-    println!("  mcp-toolkit release-preflight [generated-server-dir]");
+    println!("  mcp-toolkit release-preflight [--profile PROFILE] [generated-server-dir]");
+    println!(
+        "      --profile PROFILE     generated-template-strict (default) or existing-public-stdio"
+    );
     println!();
     println!("Checks a generated Rust MCP server for public-ready README, license,");
     println!("CI, CodeQL, dependency governance, schema/probe proof, and obvious");
@@ -757,6 +790,9 @@ fn print_client_config_help() {
     println!("      --name <server-name>  MCP client server name (default: Cargo package name)");
     println!("      --transport <kind>    stdio or http (default: infer from generated files)");
     println!("      --command <path>      Stdio command path (default: target/release/<package>)");
+    println!("      --installed            Use the package binary resolved from PATH");
+    println!("      --env-key <name>       Override the stdio environment variable name");
+    println!("      --env-value <value>    Override the stdio environment variable value");
     println!(
         "      --url <url>           Hosted HTTP MCP URL (default: http://127.0.0.1:9411/mcp)"
     );

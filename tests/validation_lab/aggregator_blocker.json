@@ -1,0 +1,6 @@
+{
+  "schema": "toolkit_frontier_aggregate_case",
+  "case": "blocker",
+  "lanes": [{"lane_id": "lane-blocker", "status": "blocker", "finding": "target identity mismatch"}],
+  "expected": {"decision": "fail", "ranked_failures": ["lane-blocker"]}
+}

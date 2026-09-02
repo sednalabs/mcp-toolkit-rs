@@ -1,0 +1,627 @@
+//! # Bound opaque token storage
+//!
+//! In-memory, process-local state for bounded continuation and reservation
+//! tokens used by MCP servers.
+//!
+//! ## Security Boundaries
+//! * Tokens are unguessable UUIDv4 values and reveal no stored state.
+//! * Exact optional session and principal bindings prevent cross-context use.
+//! * TTL and capacity limits bound retention and memory growth.
+//! * Consumption is one-shot; restoration preserves the original expiry.
+//!
+//! ```
+//! use std::time::Duration;
+//! use mcp_toolkit_server::opaque_token::{OpaqueTokenStore, TokenBinding};
+//!
+//! let store = OpaqueTokenStore::new(Duration::from_secs(60), 32)?;
+//! let binding = TokenBinding::new(Some("session-1"), Some("principal-1"));
+//! let token = store.create("continuation", binding.clone())?;
+//! let consumed = store.consume(&token, &binding)?;
+//! assert_eq!(consumed.payload(), &"continuation");
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+
+use std::collections::{BTreeSet, HashMap};
+use std::fmt;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use uuid::Uuid;
+
+/// Identifies the request context allowed to use an opaque token.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TokenBinding {
+    session_id: Option<String>,
+    principal: Option<String>,
+}
+
+impl TokenBinding {
+    /// Creates a binding from optional session and principal identifiers.
+    ///
+    /// Empty identifiers are normalized to absent bindings. Non-empty values,
+    /// including leading or trailing whitespace, are preserved exactly.
+    #[must_use]
+    pub fn new(session_id: Option<&str>, principal: Option<&str>) -> Self {
+        Self {
+            session_id: normalize_binding(session_id),
+            principal: normalize_binding(principal),
+        }
+    }
+
+    /// Returns the normalized session identifier.
+    #[must_use]
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Returns the normalized principal identifier.
+    #[must_use]
+    pub fn principal(&self) -> Option<&str> {
+        self.principal.as_deref()
+    }
+}
+
+/// Describes an opaque-token store failure without disclosing stored state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpaqueTokenError {
+    InvalidConfiguration,
+    InvalidOrExpired,
+    BindingMismatch,
+    Unavailable,
+}
+
+impl fmt::Display for OpaqueTokenError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::InvalidConfiguration => "token store limits must be positive",
+            Self::InvalidOrExpired => "opaque token is invalid or expired",
+            Self::BindingMismatch => "opaque token does not match the active context",
+            Self::Unavailable => "opaque token store is unavailable",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for OpaqueTokenError {}
+
+/// Reports bounded store occupancy without exposing tokens or payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OpaqueTokenStats {
+    pub entries: usize,
+    pub max_entries: usize,
+    pub ttl: Duration,
+}
+
+/// Holds a consumed token reservation that can be restored after a safe retry.
+///
+/// Keeping the fields private prevents callers from changing bindings, token
+/// identity, or expiry between consumption and restoration.
+pub struct ConsumedOpaqueToken<T> {
+    token: String,
+    record: TokenRecord<T>,
+    origin: Arc<()>,
+}
+
+impl<T> ConsumedOpaqueToken<T> {
+    /// Returns the reserved payload.
+    #[must_use]
+    pub fn payload(&self) -> &T {
+        &self.record.payload
+    }
+
+    /// Consumes the reservation and returns its payload without restoring it.
+    #[must_use]
+    pub fn into_payload(self) -> T {
+        self.record.payload
+    }
+}
+
+/// Stores bounded, opaque, context-bound tokens in process memory.
+pub struct OpaqueTokenStore<T> {
+    ttl: Duration,
+    max_entries: usize,
+    origin: Arc<()>,
+    inner: Mutex<StoreState<T>>,
+}
+
+struct TokenRecord<T> {
+    payload: T,
+    binding: TokenBinding,
+    expires_at: Instant,
+    generation: u64,
+}
+
+struct StoreState<T> {
+    entries: HashMap<String, TokenRecord<T>>,
+    expirations: BTreeSet<(Instant, u64, String)>,
+    capacity_order: BTreeSet<(u64, String)>,
+    next_generation: u64,
+}
+
+impl<T> Default for StoreState<T> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            expirations: BTreeSet::new(),
+            capacity_order: BTreeSet::new(),
+            next_generation: 1,
+        }
+    }
+}
+
+impl<T> OpaqueTokenStore<T> {
+    /// Creates a store with fixed retention and capacity bounds.
+    ///
+    /// # Errors
+    /// Returns [`OpaqueTokenError::InvalidConfiguration`] when either bound is
+    /// zero.
+    pub fn new(ttl: Duration, max_entries: usize) -> Result<Self, OpaqueTokenError> {
+        if ttl.is_zero() || max_entries == 0 {
+            return Err(OpaqueTokenError::InvalidConfiguration);
+        }
+        Ok(Self {
+            ttl,
+            max_entries,
+            origin: Arc::new(()),
+            inner: Mutex::new(StoreState::default()),
+        })
+    }
+
+    /// Stores a payload and returns a new opaque token.
+    ///
+    /// # Errors
+    /// Returns [`OpaqueTokenError::Unavailable`] if synchronized state is
+    /// poisoned or secure randomness is unavailable. Returns
+    /// [`OpaqueTokenError::InvalidConfiguration`] when the configured TTL
+    /// cannot be represented from the current monotonic instant.
+    ///
+    /// # Security
+    /// The returned token carries no payload or binding data. Callers must avoid
+    /// logging it because possession still grants use within the bound context.
+    pub fn create(&self, payload: T, binding: TokenBinding) -> Result<String, OpaqueTokenError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| OpaqueTokenError::Unavailable)?;
+        sweep_expired(&mut state, Instant::now());
+        let token = next_token(&state)?;
+        let generation = take_generation(&mut state)?;
+        let expires_at = Instant::now()
+            .checked_add(self.ttl)
+            .ok_or(OpaqueTokenError::InvalidConfiguration)?;
+        state.entries.insert(
+            token.clone(),
+            TokenRecord {
+                payload,
+                binding,
+                expires_at,
+                generation,
+            },
+        );
+        index_record(&mut state, token.clone(), generation, expires_at);
+        trim_to_capacity(&mut state, self.max_entries);
+        Ok(token)
+    }
+
+    /// Returns bounded store occupancy.
+    ///
+    /// # Errors
+    /// Returns [`OpaqueTokenError::Unavailable`] if synchronized state is
+    /// poisoned.
+    pub fn stats(&self) -> Result<OpaqueTokenStats, OpaqueTokenError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| OpaqueTokenError::Unavailable)?;
+        sweep_expired(&mut state, Instant::now());
+        Ok(OpaqueTokenStats {
+            entries: state.entries.len(),
+            max_entries: self.max_entries,
+            ttl: self.ttl,
+        })
+    }
+
+    /// Removes and reserves a token for one-shot use.
+    ///
+    /// # Errors
+    /// Returns a closed error for missing, expired, mismatched, or unavailable
+    /// state. A binding mismatch does not consume the token.
+    ///
+    /// # Security
+    /// Exact binding equality is checked before the record is removed.
+    pub fn consume(
+        &self,
+        token: &str,
+        binding: &TokenBinding,
+    ) -> Result<ConsumedOpaqueToken<T>, OpaqueTokenError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| OpaqueTokenError::Unavailable)?;
+        sweep_expired(&mut state, Instant::now());
+        if remove_target_if_expired(&mut state, token, Instant::now()) {
+            return Err(OpaqueTokenError::InvalidOrExpired);
+        }
+        let record = state
+            .entries
+            .get(token)
+            .ok_or(OpaqueTokenError::InvalidOrExpired)?;
+        if record.binding != *binding {
+            return Err(OpaqueTokenError::BindingMismatch);
+        }
+        let record = state
+            .entries
+            .remove(token)
+            .ok_or(OpaqueTokenError::Unavailable)?;
+        remove_record_indexes(&mut state, token, record.generation, record.expires_at);
+        Ok(ConsumedOpaqueToken {
+            token: token.to_owned(),
+            record,
+            origin: Arc::clone(&self.origin),
+        })
+    }
+
+    /// Restores a consumed reservation if its original lifetime remains valid.
+    ///
+    /// Returns `false` if the token expired, came from a different store, or
+    /// another record already occupies the same token identity.
+    ///
+    /// # Errors
+    /// Returns [`OpaqueTokenError::Unavailable`] if synchronized state is
+    /// poisoned.
+    ///
+    /// # Security
+    /// Restoration preserves the original token, binding, and expiry; retries
+    /// cannot extend token lifetime or change authority.
+    pub fn restore(&self, consumed: ConsumedOpaqueToken<T>) -> Result<bool, OpaqueTokenError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| OpaqueTokenError::Unavailable)?;
+        sweep_expired(&mut state, Instant::now());
+        if !Arc::ptr_eq(&consumed.origin, &self.origin)
+            || consumed.record.expires_at <= Instant::now()
+            || state.entries.contains_key(&consumed.token)
+        {
+            return Ok(false);
+        }
+        let generation = take_generation(&mut state)?;
+        let token = consumed.token;
+        let mut record = consumed.record;
+        record.generation = generation;
+        let expires_at = record.expires_at;
+        state.entries.insert(token.clone(), record);
+        index_record(&mut state, token, generation, expires_at);
+        trim_to_capacity(&mut state, self.max_entries);
+        Ok(true)
+    }
+}
+
+impl<T: Clone> OpaqueTokenStore<T> {
+    /// Resolves a token without consuming it.
+    ///
+    /// # Errors
+    /// Returns a closed error for missing, expired, mismatched, or unavailable
+    /// state. Successful resolution changes neither expiry nor capacity order.
+    ///
+    /// # Security
+    /// Exact binding equality is checked before the payload is cloned.
+    pub fn resolve(&self, token: &str, binding: &TokenBinding) -> Result<T, OpaqueTokenError> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| OpaqueTokenError::Unavailable)?;
+        sweep_expired(&mut state, Instant::now());
+        if remove_target_if_expired(&mut state, token, Instant::now()) {
+            return Err(OpaqueTokenError::InvalidOrExpired);
+        }
+        {
+            let record = state
+                .entries
+                .get(token)
+                .ok_or(OpaqueTokenError::InvalidOrExpired)?;
+            if record.binding != *binding {
+                return Err(OpaqueTokenError::BindingMismatch);
+            }
+            Ok(record.payload.clone())
+        }
+    }
+}
+
+fn normalize_binding(value: Option<&str>) -> Option<String> {
+    value
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn next_token<T>(state: &StoreState<T>) -> Result<String, OpaqueTokenError> {
+    loop {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).map_err(|_| OpaqueTokenError::Unavailable)?;
+        random[6] = (random[6] & 0x0f) | 0x40;
+        random[8] = (random[8] & 0x3f) | 0x80;
+        let token = Uuid::from_bytes(random).to_string();
+        if !state.entries.contains_key(&token) {
+            return Ok(token);
+        }
+    }
+}
+
+fn take_generation<T>(state: &mut StoreState<T>) -> Result<u64, OpaqueTokenError> {
+    let generation = state.next_generation;
+    state.next_generation = state
+        .next_generation
+        .checked_add(1)
+        .ok_or(OpaqueTokenError::Unavailable)?;
+    Ok(generation)
+}
+
+fn index_record<T>(state: &mut StoreState<T>, token: String, generation: u64, expires_at: Instant) {
+    state
+        .expirations
+        .insert((expires_at, generation, token.clone()));
+    state.capacity_order.insert((generation, token));
+}
+
+fn remove_record_indexes<T>(
+    state: &mut StoreState<T>,
+    token: &str,
+    generation: u64,
+    expires_at: Instant,
+) {
+    state
+        .expirations
+        .remove(&(expires_at, generation, token.to_owned()));
+    state.capacity_order.remove(&(generation, token.to_owned()));
+}
+
+fn sweep_expired<T>(state: &mut StoreState<T>, now: Instant) {
+    while let Some((expires_at, _, _)) = state.expirations.first() {
+        if *expires_at > now {
+            break;
+        }
+        let Some((_, generation, token)) = state.expirations.pop_first() else {
+            break;
+        };
+        if state
+            .entries
+            .get(&token)
+            .is_some_and(|record| record.generation == generation)
+        {
+            state.entries.remove(&token);
+            state.capacity_order.remove(&(generation, token));
+        }
+    }
+}
+
+fn remove_target_if_expired<T>(state: &mut StoreState<T>, token: &str, now: Instant) -> bool {
+    let Some((generation, expires_at)) = state
+        .entries
+        .get(token)
+        .filter(|record| record.expires_at <= now)
+        .map(|record| (record.generation, record.expires_at))
+    else {
+        return false;
+    };
+    state.entries.remove(token);
+    remove_record_indexes(state, token, generation, expires_at);
+    true
+}
+
+fn trim_to_capacity<T>(state: &mut StoreState<T>, max_entries: usize) {
+    while state.entries.len() > max_entries {
+        let Some((generation, token)) = state.capacity_order.pop_first() else {
+            break;
+        };
+        if state
+            .entries
+            .get(&token)
+            .is_some_and(|record| record.generation == generation)
+        {
+            let Some(record) = state.entries.remove(&token) else {
+                break;
+            };
+            state
+                .expirations
+                .remove(&(record.expires_at, generation, token));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        remove_target_if_expired, sweep_expired, OpaqueTokenError, OpaqueTokenStore, TokenBinding,
+    };
+    use std::thread;
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    #[test]
+    fn token_is_bound_and_consumed_once() {
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let owner = TokenBinding::new(Some("session-a"), Some("principal-a"));
+        let token = store
+            .create("payload", owner.clone())
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+
+        assert!(matches!(
+            store.consume(
+                &token,
+                &TokenBinding::new(Some("session-b"), Some("principal-a"))
+            ),
+            Err(OpaqueTokenError::BindingMismatch)
+        ));
+        let consumed = store
+            .consume(&token, &owner)
+            .unwrap_or_else(|error| panic!("owner should consume: {error}"));
+        assert_eq!(consumed.payload(), &"payload");
+        assert!(matches!(
+            store.consume(&token, &owner),
+            Err(OpaqueTokenError::InvalidOrExpired)
+        ));
+        assert_eq!(
+            Uuid::parse_str(&token)
+                .expect("token should be a UUID")
+                .get_version_num(),
+            4
+        );
+    }
+
+    #[test]
+    fn binding_preserves_nonempty_identifiers_exactly() {
+        let spaced = TokenBinding::new(Some("session-a "), Some(" principal-a"));
+        let unspaced = TokenBinding::new(Some("session-a"), Some("principal-a"));
+        assert_ne!(spaced, unspaced);
+
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let token = store
+            .create("payload", spaced.clone())
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        assert_eq!(
+            store.consume(&token, &unspaced).err(),
+            Some(OpaqueTokenError::BindingMismatch)
+        );
+        assert!(store.consume(&token, &spaced).is_ok());
+    }
+
+    #[test]
+    fn restoration_preserves_binding_and_original_expiry() {
+        let store = OpaqueTokenStore::new(Duration::from_millis(25), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let owner = TokenBinding::new(Some("session-a"), Some("principal-a"));
+        let token = store
+            .create(7, owner.clone())
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        let consumed = store
+            .consume(&token, &owner)
+            .unwrap_or_else(|error| panic!("consume should succeed: {error}"));
+
+        assert!(store.restore(consumed).unwrap_or(false));
+        assert_eq!(
+            store.resolve(
+                &token,
+                &TokenBinding::new(Some("session-a"), Some("principal-b"))
+            ),
+            Err(OpaqueTokenError::BindingMismatch)
+        );
+        thread::sleep(Duration::from_millis(35));
+        assert_eq!(
+            store.resolve(&token, &owner),
+            Err(OpaqueTokenError::InvalidOrExpired)
+        );
+    }
+
+    #[test]
+    fn restoration_is_bound_to_the_originating_store() {
+        let first = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("first store should be valid: {error}"));
+        let second = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("second store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        let token = first
+            .create(7, binding.clone())
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        let consumed = first
+            .consume(&token, &binding)
+            .unwrap_or_else(|error| panic!("consume should succeed: {error}"));
+
+        assert!(!second.restore(consumed).unwrap_or(true));
+        assert_eq!(
+            second.resolve(&token, &binding),
+            Err(OpaqueTokenError::InvalidOrExpired)
+        );
+    }
+
+    #[test]
+    fn capacity_evicts_oldest_live_token_without_resolve_extending_retention() {
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 2)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        let first = store
+            .create(1, binding.clone())
+            .unwrap_or_else(|error| panic!("first create should succeed: {error}"));
+        let second = store
+            .create(2, binding.clone())
+            .unwrap_or_else(|error| panic!("second create should succeed: {error}"));
+        assert_eq!(store.resolve(&first, &binding), Ok(1));
+        let third = store
+            .create(3, binding.clone())
+            .unwrap_or_else(|error| panic!("third create should succeed: {error}"));
+
+        assert_eq!(
+            store.resolve(&first, &binding),
+            Err(OpaqueTokenError::InvalidOrExpired)
+        );
+        assert_eq!(store.resolve(&second, &binding), Ok(2));
+        assert_eq!(store.resolve(&third, &binding), Ok(3));
+    }
+
+    #[test]
+    fn consuming_tokens_removes_all_auxiliary_index_state() {
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        for value in 0..100 {
+            let token = store
+                .create(value, binding.clone())
+                .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+            store
+                .consume(&token, &binding)
+                .unwrap_or_else(|error| panic!("consume should succeed: {error}"));
+        }
+
+        let state = store
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(state.entries.is_empty());
+        assert!(state.expirations.is_empty());
+        assert!(state.capacity_order.is_empty());
+    }
+
+    #[test]
+    fn target_expiry_is_rechecked_after_an_earlier_sweep_boundary() {
+        let store = OpaqueTokenStore::new(Duration::from_secs(60), 8)
+            .unwrap_or_else(|error| panic!("store should be valid: {error}"));
+        let binding = TokenBinding::default();
+        let token = store
+            .create(7, binding)
+            .unwrap_or_else(|error| panic!("create should succeed: {error}"));
+        let mut state = store
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let expires_at = state.entries[&token].expires_at;
+        let before_expiry = expires_at
+            .checked_sub(Duration::from_nanos(1))
+            .expect("expiry should have a preceding instant");
+
+        sweep_expired(&mut state, before_expiry);
+        assert!(state.entries.contains_key(&token));
+        assert!(remove_target_if_expired(&mut state, &token, expires_at));
+        assert!(state.entries.is_empty());
+        assert!(state.expirations.is_empty());
+        assert!(state.capacity_order.is_empty());
+    }
+
+    #[test]
+    fn rejects_zero_limits() {
+        assert_eq!(
+            OpaqueTokenStore::<()>::new(Duration::ZERO, 1).err(),
+            Some(OpaqueTokenError::InvalidConfiguration)
+        );
+        assert_eq!(
+            OpaqueTokenStore::<()>::new(Duration::from_secs(1), 0).err(),
+            Some(OpaqueTokenError::InvalidConfiguration)
+        );
+        let store = OpaqueTokenStore::<()>::new(Duration::MAX, 1)
+            .unwrap_or_else(|error| panic!("nonzero limit is accepted initially: {error}"));
+        assert_eq!(
+            store.create((), TokenBinding::default()).err(),
+            Some(OpaqueTokenError::InvalidConfiguration)
+        );
+    }
+}

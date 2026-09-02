@@ -38,6 +38,15 @@ jobs:
             --root templates/curated-stdio-intent-server \
             --root templates/hosted-http-auth-server \
             --root templates/single-crate-public-stdio-server
+          for template in \
+            curated-stdio-intent-server \
+            hosted-http-auth-server \
+            single-crate-public-stdio-server
+          do
+            helper="templates/$template/scripts/workflow_runner_policy_check.py"
+            cmp scripts/workflow_runner_policy_check.py "$helper"
+            python3 "$helper" --self-test --root "templates/$template"
+          done
 
   rust-baseline-lane:
     name: Rust baseline / ${{ matrix.lane.target_name }} / ${{ matrix.lane.phase_name }}
