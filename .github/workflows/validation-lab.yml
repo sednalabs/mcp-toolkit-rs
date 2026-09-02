@@ -185,6 +185,7 @@ jobs:
       TOOLKIT_VALIDATION_SUMMARY_FAMILY: ${{ matrix.summary_family }}
       TOOLKIT_VALIDATION_FRONTIER_ROLE: ${{ matrix.frontier_role }}
       TOOLKIT_VALIDATION_ARTIFACT_DIR: validation-artifacts/${{ matrix.lane_id }}
+      TOOLKIT_VALIDATION_SCRIPT_ARGS: ${{ toJSON(matrix.script_args) }}
     steps:
       - name: Checkout exact target
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -209,31 +210,28 @@ jobs:
         run: |
           set +e
           mkdir -p "${TOOLKIT_VALIDATION_ARTIFACT_DIR}"
-          status=0
-          if [[ ! -f "${SCRIPT_PATH}" ]]; then
-            echo "lane script is missing: ${SCRIPT_PATH}" >&2
-            status=1
-          else
-            (cd "${WORKING_DIRECTORY}" && bash "${GITHUB_WORKSPACE}/${SCRIPT_PATH}")
-            status=$?
-          fi
-          python3 - "${TOOLKIT_VALIDATION_ARTIFACT_DIR}/lane-receipt.json" "${status}" <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          Path(sys.argv[1]).write_text(json.dumps({
-              "lane_id": os.environ["TOOLKIT_VALIDATION_LANE_ID"],
-              "target_sha": os.environ["TOOLKIT_VALIDATION_TARGET_SHA"],
-              "target_tree": os.environ["TOOLKIT_VALIDATION_TARGET_TREE"],
-              "profile": os.environ["TOOLKIT_VALIDATION_PROFILE"],
-              "lane_set": os.environ["TOOLKIT_VALIDATION_LANE_SET"],
-              "summary_family": os.environ["TOOLKIT_VALIDATION_SUMMARY_FAMILY"],
-              "frontier_role": os.environ["TOOLKIT_VALIDATION_FRONTIER_ROLE"],
-              "exit_code": int(sys.argv[2]),
-          }, sort_keys=True) + "\n", encoding="utf-8")
-          PY
+          python3 .github/scripts/run_validation_lane.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --working-directory "$WORKING_DIRECTORY" \
+            --script-path "$SCRIPT_PATH" \
+            --script-args-json "${TOOLKIT_VALIDATION_SCRIPT_ARGS:-[]}" \
+            --lane-id "$TOOLKIT_VALIDATION_LANE_ID" \
+            --summary-family "$TOOLKIT_VALIDATION_SUMMARY_FAMILY" \
+            --frontier-role "$TOOLKIT_VALIDATION_FRONTIER_ROLE" \
+            --status-class "${{ matrix.status_class }}" \
+            --frontier-default "${{ matrix.frontier_default }}" \
+            --lane-phase "$TOOLKIT_VALIDATION_PROFILE" \
+            --profile "$TOOLKIT_VALIDATION_PROFILE" \
+            --lane-set "$TOOLKIT_VALIDATION_LANE_SET" \
+            --candidate-ref "$TOOLKIT_VALIDATION_TARGET_SHA" \
+            --candidate-sha "$TOOLKIT_VALIDATION_TARGET_SHA" \
+            --target-ref "$TOOLKIT_VALIDATION_TARGET_SHA" \
+            --target-sha "$TOOLKIT_VALIDATION_TARGET_SHA" \
+            --head-sha "$TOOLKIT_VALIDATION_TARGET_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --artifact-dir "$TOOLKIT_VALIDATION_ARTIFACT_DIR"
+          status=$?
           exit "${status}"
 
       - name: Upload lane evidence (including failures)
@@ -276,18 +274,30 @@ jobs:
           LANES_RESULT: ${{ needs.lanes.result }}
         run: |
           set -euo pipefail
-          if [[ "${PLANNER_RESULT}" != success || -z "${TARGET_SHA}" ]]; then
-            echo "target resolution/planning failed; refusing aggregate success" >&2
-            exit 1
-          fi
-          python3 .github/scripts/aggregate_validation_lanes.py \
-            --artifacts-dir validation-artifacts \
-            --target-sha "${TARGET_SHA}" \
-            --target-tree "${TARGET_TREE}" \
-            --profile "${PROFILE}" \
-            --lane-set "${LANE_SET}" \
-            --lanes-result "${LANES_RESULT}" \
+          selected='${{ needs.metadata.outputs.selected_lane_ids }}'
+          set +e
+          python3 .github/scripts/aggregate_validation_summary.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --candidate-ref "${TARGET_SHA:+$TARGET_SHA}" \
+            --candidate-sha "${TARGET_SHA}" \
+            --host-ref "$GITHUB_REF" \
+            --checkout-ref "${TARGET_SHA:+$TARGET_SHA}" \
+            --head-sha "${TARGET_SHA}" \
+            --profile "${PROFILE:-unknown}" \
+            --lane-set "${LANE_SET:-unknown}" \
+            --lane-summary-dir validation-artifacts \
+            --selected-lane-ids-json "$selected" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --workflow-result "$PLANNER_RESULT" \
+            --artifact-result "${LANES_RESULT:-unknown}" \
+            --matrix-fail-fast "${{ needs.metadata.outputs.matrix_fail_fast || 'false' }}" \
+            --run-selected-lanes "${{ needs.metadata.outputs.planned_job_count != '' && 'true' || 'false' }}" \
             --output validation-summary.json
+          aggregate_status=$?
+          set -e
+          exit "$aggregate_status"
 
       - name: Upload aggregate evidence
         if: ${{ always() }}

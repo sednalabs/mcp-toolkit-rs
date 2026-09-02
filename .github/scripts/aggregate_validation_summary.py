@@ -74,7 +74,7 @@ def load_artifacts(directory: Path) -> tuple[dict[str, dict[str, Any]], list[dic
     problems: list[dict[str, Any]] = []
     if not directory.is_dir():
         return {}, [{"kind": "artifact", "reason": "summary directory is missing"}]
-    for path in sorted(directory.glob("*.json")):
+    for path in sorted(directory.rglob("*.json")):
         if path.name == "batch-results.json":
             continue
         try:
