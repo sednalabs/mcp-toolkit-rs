@@ -1580,12 +1580,27 @@ class ArtifactTests(unittest.TestCase):
                     "interpreter", TARGET_INTERPRETERS["aarch64-unknown-linux-gnu"]
                 ),
                 "macOS runtime missing platform": lambda value: value["archives"][2]["runtime"].pop("platform"),
+                "macOS runtime wrong platform": lambda value: value["archives"][2]["runtime"].__setitem__(
+                    "platform", "windows"
+                ),
+                "macOS runtime missing architecture": lambda value: value["archives"][2]["runtime"].pop(
+                    "architecture"
+                ),
                 "macOS runtime wrong architecture": lambda value: value["archives"][2]["runtime"].__setitem__(
                     "architecture", "aarch64"
+                ),
+                "Windows runtime missing platform": lambda value: value["archives"][4]["runtime"].pop(
+                    "platform"
                 ),
                 "Windows runtime missing ABI": lambda value: value["archives"][4]["runtime"].pop("abi"),
                 "Windows runtime wrong platform": lambda value: value["archives"][4]["runtime"].__setitem__(
                     "platform", "apple"
+                ),
+                "Windows runtime wrong architecture": lambda value: value["archives"][4]["runtime"].__setitem__(
+                    "architecture", "aarch64"
+                ),
+                "Windows runtime wrong ABI": lambda value: value["archives"][4]["runtime"].__setitem__(
+                    "abi", "gnu"
                 ),
             }
             for label, mutate in mutations.items():
