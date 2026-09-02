@@ -364,7 +364,7 @@ mod tests {
         })
         .unwrap();
         assert!(output.contains("target/release/demo-server"));
-        assert!(output.contains("EXAMPLE_MCP_TOOL_PROFILE = \"read_only\""));
+        assert!(output.contains("DEMO_SERVER_TOOL_PROFILE = \"read_only\""));
         let _ = fs::remove_dir_all(root);
     }
 
