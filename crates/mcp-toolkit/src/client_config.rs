@@ -346,8 +346,8 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("mcp-toolkit-client-config-{name}"));
+    fn project() -> PathBuf {
+        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-tests");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn defaults_preserve_legacy_profile_and_local_binary() {
-        let root = project("legacy");
+        let root = project();
         let output = render_client_config(&ClientConfigOptions {
             root: root.clone(),
             transport: Some(ClientConfigTransport::Stdio),
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn installed_and_environment_overrides_are_rendered() {
-        let root = project("overrides");
+        let root = project();
         let output = render_client_config(&ClientConfigOptions {
             root: root.clone(),
             transport: Some(ClientConfigTransport::Stdio),
