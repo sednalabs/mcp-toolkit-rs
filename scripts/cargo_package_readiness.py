@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -57,6 +58,9 @@ REQUIRED_PACKAGE_FIELDS = {
     "repository",
     "readme",
 }
+
+README_START = "<!-- canonical-sedna-labs-first-wave:start -->"
+README_END = "<!-- canonical-sedna-labs-first-wave:end -->"
 
 WRITE_GITHUB_SUMMARY = True
 
@@ -155,6 +159,10 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
             f"{package.name}: package.metadata.docs.rs.all-features must be true"
         )
 
+    description = metadata.get("description")
+    if description is not None and not isinstance(description, str):
+        errors.append(f"{package.name}: package.description must be a string")
+
     if metadata.get("publish") is not False:
         errors.append(
             f"{package.name}: routine readiness checks must keep publish = false"
@@ -176,6 +184,28 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
             )
 
     return errors
+
+
+def validate_readme(repo_root: Path, first_wave: list[str]) -> list[str]:
+    """Validate the canonical first-wave inventory markers and contents."""
+
+    readme_path = repo_root / "README.md"
+    text = readme_path.read_text(encoding="utf-8")
+    start_idx = text.find(README_START)
+    end_idx = text.find(README_END)
+    if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+        return [
+            "README.md: canonical first-wave inventory markers are missing or out of order"
+        ]
+
+    block = text[start_idx + len(README_START) : end_idx]
+    inventory = re.findall(r"^\| `([^`]+)` \|", block, flags=re.MULTILINE)
+    if inventory != first_wave:
+        return [
+            "README.md: canonical first-wave inventory mismatch; "
+            f"expected={first_wave} observed={inventory}"
+        ]
+    return []
 
 
 def parse_args() -> argparse.Namespace:
@@ -216,12 +246,11 @@ def main() -> int:
         return 1
 
     packages = [load_package(crates_root / name) for name in FIRST_WAVE]
-    package_names = {package.name for package in packages}
-    if package_names != first_wave:
-        missing = sorted(first_wave - package_names)
-        extra = sorted(package_names - first_wave)
+    package_names_ordered = [package.name for package in packages]
+    if package_names_ordered != FIRST_WAVE:
         print(
-            f"First-wave package mismatch. missing={missing} extra={extra}",
+            "First-wave package name/order mismatch. "
+            f"expected={FIRST_WAVE} observed={package_names_ordered}",
             file=sys.stderr,
         )
         return 1
@@ -229,6 +258,7 @@ def main() -> int:
     errors: list[str] = []
     for package in packages:
         errors.extend(validate_manifest(package, first_wave))
+    errors.extend(validate_readme(repo_root, FIRST_WAVE))
 
     if errors:
         for error in errors:
