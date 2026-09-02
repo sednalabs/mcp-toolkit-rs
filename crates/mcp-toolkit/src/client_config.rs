@@ -62,10 +62,16 @@ pub struct ClientConfigOptions {
     pub transport: Option<ClientConfigTransport>,
     /// Optional stdio command path. Defaults to `<root>/target/release/<package>`.
     pub command: Option<String>,
+    /// Use the installed command name resolved from `PATH`.
+    pub installed: bool,
     /// Optional hosted MCP URL. Defaults to the hosted starter local URL.
     pub url: Option<String>,
     /// Tool profile value for stdio process environment configuration.
     pub profile: String,
+    /// Optional stdio environment variable name.
+    pub env_key: Option<String>,
+    /// Optional stdio environment variable value.
+    pub env_value: Option<String>,
 }
 
 /// Errors returned while rendering client configuration.
@@ -85,6 +91,12 @@ pub enum ClientConfigError {
     MissingPackageName(PathBuf),
     /// The transport could not be inferred from generated proof files.
     UnknownTransport,
+    /// An environment key is not a valid TOML bare key.
+    InvalidEnvKey(String),
+    /// An environment value contains a control character unsupported by TOML strings.
+    InvalidEnvValue,
+    /// A caller-supplied rendered field contains a TOML control character.
+    InvalidControlCharacter(&'static str),
 }
 
 impl fmt::Display for ClientConfigError {
@@ -107,6 +119,9 @@ impl fmt::Display for ClientConfigError {
                 formatter,
                 "could not infer generated-server transport; pass --transport stdio or --transport http"
             ),
+            Self::InvalidEnvKey(key) => write!(formatter, "invalid client-config environment key `{key}`"),
+            Self::InvalidEnvValue => write!(formatter, "client-config environment value contains a control character"),
+            Self::InvalidControlCharacter(field) => write!(formatter, "client-config {field} contains a control character"),
         }
     }
 }
@@ -142,15 +157,54 @@ pub fn render_client_config(options: &ClientConfigOptions) -> Result<String, Cli
         .server_name
         .clone()
         .unwrap_or_else(|| package_name.clone());
+    validate_text("server name", &server_name)?;
+    if let Some(command) = options.command.as_deref() {
+        validate_text("command", command)?;
+    }
+    if let Some(url) = options.url.as_deref() {
+        validate_text("url", url)?;
+    }
+    validate_text("profile", &options.profile)?;
     let transport = match options.transport {
         Some(transport) => transport,
         None => infer_transport(&canonical_root)?,
     };
 
-    Ok(match transport {
-        ClientConfigTransport::Stdio => {
-            render_stdio_config(options, &package_name, &server_name, &canonical_root)
+    let env_key = options.env_key.as_deref().unwrap_or_else(|| {
+        // Derive the generated contract key while preserving the historical
+        // EXAMPLE_MCP key for the example package.
+        if package_name == "example-mcp" {
+            DEFAULT_PROFILE_ENV
+        } else {
+            ""
         }
+    });
+    let derived_key;
+    let env_key = if env_key.is_empty() {
+        derived_key = profile_env_key(&package_name);
+        derived_key.as_str()
+    } else {
+        env_key
+    };
+    validate_env_key(env_key)?;
+    if let Some(value) = options
+        .env_value
+        .as_deref()
+        .or(Some(options.profile.as_str()))
+    {
+        if value.chars().any(|c| c.is_control()) {
+            return Err(ClientConfigError::InvalidEnvValue);
+        }
+    }
+
+    Ok(match transport {
+        ClientConfigTransport::Stdio => render_stdio_config(
+            options,
+            &package_name,
+            &server_name,
+            &canonical_root,
+            env_key,
+        ),
         ClientConfigTransport::HostedHttp => render_hosted_http_config(options, &server_name),
     })
 }
@@ -168,8 +222,12 @@ fn render_stdio_config(
     package_name: &str,
     server_name: &str,
     canonical_root: &Path,
+    env_key: &str,
 ) -> String {
     let command = options.command.clone().unwrap_or_else(|| {
+        if options.installed {
+            return package_name.to_string();
+        }
         canonical_root
             .join("target")
             .join("release")
@@ -183,9 +241,38 @@ fn render_stdio_config(
         toml_string(server_name),
         toml_string_value(&command),
         toml_string(server_name),
-        DEFAULT_PROFILE_ENV,
-        toml_string_value(&options.profile),
+        env_key,
+        toml_string_value(options.env_value.as_deref().unwrap_or(&options.profile)),
     )
+}
+
+fn profile_env_key(package_name: &str) -> String {
+    let mut key = package_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    key.push_str("_TOOL_PROFILE");
+    key
+}
+
+fn validate_env_key(key: &str) -> Result<(), ClientConfigError> {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ClientConfigError::InvalidEnvKey(key.to_string()));
+    }
+    Ok(())
+}
+
+fn validate_text(field: &'static str, value: &str) -> Result<(), ClientConfigError> {
+    if value.chars().any(|c| c.is_control()) {
+        return Err(ClientConfigError::InvalidControlCharacter(field));
+    }
+    Ok(())
 }
 
 fn render_hosted_http_config(options: &ClientConfigOptions, server_name: &str) -> String {
@@ -263,8 +350,85 @@ impl Default for ClientConfigOptions {
             server_name: None,
             transport: None,
             command: None,
+            installed: false,
             url: None,
             profile: READ_ONLY_PROFILE_KEY.to_string(),
+            env_key: None,
+            env_value: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn project_legacy() -> PathBuf {
+        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-legacy");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = 'demo-server'\nversion = '0.1.0'\n",
+        )
+        .unwrap();
+        root
+    }
+
+    fn project_overrides() -> PathBuf {
+        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-overrides");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = 'demo-server'\nversion = '0.1.0'\n",
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn defaults_preserve_legacy_profile_and_local_binary() {
+        let root = project_legacy();
+        let output = render_client_config(&ClientConfigOptions {
+            root: root.clone(),
+            transport: Some(ClientConfigTransport::Stdio),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(output.contains("target/release/demo-server"));
+        assert!(output.contains("DEMO_SERVER_TOOL_PROFILE = \"read_only\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_and_environment_overrides_are_rendered() {
+        let root = project_overrides();
+        let output = render_client_config(&ClientConfigOptions {
+            root: root.clone(),
+            transport: Some(ClientConfigTransport::Stdio),
+            installed: true,
+            env_key: Some("DEMO_PROFILE".into()),
+            env_value: Some("operator".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(output.contains("command = \"demo-server\""));
+        assert!(output.contains("DEMO_PROFILE = \"operator\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_characters_are_rejected_from_rendered_fields() {
+        let root = project_overrides();
+        let error = render_client_config(&ClientConfigOptions {
+            root,
+            transport: Some(ClientConfigTransport::Stdio),
+            env_value: Some("operator\ninjected = true".into()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(matches!(error, ClientConfigError::InvalidEnvValue));
     }
 }

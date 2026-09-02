@@ -124,6 +124,15 @@ pub struct ReleasePreflightReport {
     pub checks: Vec<ReleasePreflightCheck>,
 }
 
+/// Selects the release-preflight contract applied to a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleasePreflightProfile {
+    /// Require the complete generated-template proof surface (the default).
+    GeneratedTemplateStrict,
+    /// Check an existing public stdio repository without requiring generated-template metadata.
+    PublicStdio,
+}
+
 impl ReleasePreflightReport {
     /// Returns true when all required checks pass.
     pub fn ready(&self) -> bool {
@@ -177,6 +186,14 @@ impl ReleasePreflightReport {
 /// This check is intentionally static and credential-free. It is suitable for
 /// use before a build, before a PR, or in generated-project CI.
 pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightReport {
+    inspect_release_preflight_with_profile(root, ReleasePreflightProfile::GeneratedTemplateStrict)
+}
+
+/// Inspects a project using an explicit release-preflight profile.
+pub fn inspect_release_preflight_with_profile(
+    root: impl AsRef<Path>,
+    profile: ReleasePreflightProfile,
+) -> ReleasePreflightReport {
     let root = root.as_ref().to_path_buf();
     let doctor = inspect_project(&root);
     let mut checks = Vec::new();
@@ -184,7 +201,7 @@ pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightRepo
     checks.push(ReleasePreflightCheck {
         label: "Generated scaffold doctor",
         target: "mcp-toolkit doctor".to_string(),
-        required: true,
+        required: matches!(profile, ReleasePreflightProfile::GeneratedTemplateStrict),
         passed: doctor.ready(),
         detail: if doctor.ready() {
             "starter source, schema, transport proof, and workflow are present".to_string()
@@ -197,7 +214,7 @@ pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightRepo
         checks.push(file_check(&root, label, path));
     }
 
-    checks.push(probe_scenario_check(&root, doctor.shape));
+    checks.push(probe_scenario_check(&root, doctor.shape, profile));
     checks.push(manifest_metadata_check(&root));
     checks.push(portable_toolkit_dependencies_check(&root));
     checks.push(cargo_local_path_overrides_check(&root));
@@ -227,7 +244,27 @@ fn file_check(root: &Path, label: &'static str, path: &'static str) -> ReleasePr
     }
 }
 
-fn probe_scenario_check(root: &Path, shape: DoctorShape) -> ReleasePreflightCheck {
+fn probe_scenario_check(
+    root: &Path,
+    shape: DoctorShape,
+    profile: ReleasePreflightProfile,
+) -> ReleasePreflightCheck {
+    if matches!(profile, ReleasePreflightProfile::PublicStdio)
+        && matches!(shape, DoctorShape::Unknown)
+    {
+        let present = exists(root, "spec/mcp_probe_stdio_smoke.v1.json");
+        return ReleasePreflightCheck {
+            label: "MCP stdio probe scenario",
+            target: "spec/mcp_probe_stdio_smoke.v1.json".to_string(),
+            required: true,
+            passed: present,
+            detail: if present {
+                "explicit stdio probe scenario present".into()
+            } else {
+                "existing public stdio profile requires an explicit stdio probe scenario".into()
+            },
+        };
+    }
     let (target, detail) = match shape {
         DoctorShape::HostedHttpAuth => (
             HTTP_AUTH_PROBE_SCENARIO,
