@@ -346,8 +346,20 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn project() -> PathBuf {
-        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-tests");
+    fn project_legacy() -> PathBuf {
+        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-legacy");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = 'demo-server'\nversion = '0.1.0'\n",
+        )
+        .unwrap();
+        root
+    }
+
+    fn project_overrides() -> PathBuf {
+        let root = PathBuf::from("/tmp/mcp-toolkit-client-config-overrides");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -360,7 +372,7 @@ mod tests {
 
     #[test]
     fn defaults_preserve_legacy_profile_and_local_binary() {
-        let root = project();
+        let root = project_legacy();
         let output = render_client_config(&ClientConfigOptions {
             root: root.clone(),
             transport: Some(ClientConfigTransport::Stdio),
@@ -374,7 +386,7 @@ mod tests {
 
     #[test]
     fn installed_and_environment_overrides_are_rendered() {
-        let root = project();
+        let root = project_overrides();
         let output = render_client_config(&ClientConfigOptions {
             root: root.clone(),
             transport: Some(ClientConfigTransport::Stdio),
