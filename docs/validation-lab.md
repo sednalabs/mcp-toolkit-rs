@@ -9,10 +9,13 @@ or grant production authority. Results labelled `sandbox-dogfoodable` or
 
 ## Candidate and profile contract
 
-Every invocation resolves one exact candidate before planning:
+Every invocation resolves one exact candidate before planning. The workflow
+checks out the immutable invocation SHA (`github.sha`); an optional requested
+`candidate_sha` and `ref` must identify that same SHA, so a mutable branch or
+tag cannot select executable validation code during a run:
 
 * repository owner/name;
-* ref (including whether it is a branch, tag, or immutable SHA);
+* ref/display identity (when supplied, it must equal the immutable SHA);
 * 40-character commit SHA; and
 * the candidate tree identity.
 

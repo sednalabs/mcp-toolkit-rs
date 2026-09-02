@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       ref:
-        description: Branch, tag, or commit to validate.
+        description: Optional exact invocation SHA used as the display ref.
         required: false
         type: string
         default: ""
@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, tag, or commit to validate.
+        description: Optional exact invocation SHA used as the display ref.
         required: false
         type: string
         default: ""
@@ -101,7 +101,10 @@ jobs:
       - name: Checkout exact validation target
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          # The workflow invocation SHA is immutable for this run.  Requested
+          # refs remain display/identity inputs and are checked below; they do
+          # not select executable code from a mutable branch or tag.
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
           path: validation-target
@@ -115,10 +118,15 @@ jobs:
           LANES: ${{ inputs.lanes }}
           FANOUT_TIER: ${{ inputs.fanout_tier || 'enterprise' }}
           EXPECTED_SHA: ${{ inputs.candidate_sha }}
+          REQUESTED_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           target_sha="$(git -C validation-target rev-parse HEAD)"
           target_tree="$(git -C validation-target rev-parse HEAD^{tree})"
+          if [[ -n "${REQUESTED_REF}" && "${REQUESTED_REF}" != "${target_sha}" ]]; then
+            echo "requested ref must equal the immutable workflow SHA ${target_sha}" >&2
+            exit 1
+          fi
           if [[ -n "${EXPECTED_SHA}" && "${target_sha}" != "${EXPECTED_SHA}" ]]; then
             echo "expected candidate ${EXPECTED_SHA}, resolved ${target_sha}" >&2
             exit 1
@@ -190,7 +198,7 @@ jobs:
       - name: Checkout exact target
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: ${{ needs.metadata.outputs.target_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -252,7 +260,7 @@ jobs:
       - name: Checkout exact target
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: ${{ needs.metadata.outputs.target_sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
