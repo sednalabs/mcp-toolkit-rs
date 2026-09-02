@@ -1,0 +1,14 @@
+{
+  "schema": "toolkit_frontier_artifact_origin_negative",
+  "candidate": {
+    "repository": "sednalabs/mcp-toolkit-rs",
+    "ref": "refs/heads/main",
+    "sha": "dd72f5cee203c8497ab43574e8dcdf506987f995",
+    "tree": "bc51f72d2bada062ef14036931ee612150c09084"
+  },
+  "artifacts": [
+    {"name": "frontier-lane", "run_id": "2001", "run_attempt": 1, "head_sha": "dd72f5cee203c8497ab43574e8dcdf506987f995", "repository": "sednalabs/mcp-toolkit-rs", "ref": "refs/heads/main", "tree": "bc51f72d2bada062ef14036931ee612150c09084"},
+    {"name": "frontier-lane", "run_id": "2001", "run_attempt": 2, "head_sha": "dd72f5cee203c8497ab43574e8dcdf506987f995", "repository": "sednalabs/mcp-toolkit-rs", "ref": "refs/heads/main", "tree": "bc51f72d2bada062ef14036931ee612150c09084"}
+  ],
+  "expected": {"accepted": false, "reason": "same-name artifact from a different run attempt is not interchangeable"}
+}
