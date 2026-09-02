@@ -447,18 +447,9 @@ fn signal_raw(target: i32, signal: i32, name: &'static str) -> Result<(), Proces
 
 #[cfg(unix)]
 fn errno_code() -> i32 {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    unsafe {
-        *libc::__errno_location()
-    }
-    #[cfg(target_os = "macos")]
-    unsafe {
-        *libc::__error()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-    {
-        libc::EINVAL
-    }
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .expect("last_os_error must contain a raw OS error")
 }
 
 #[cfg(test)]
