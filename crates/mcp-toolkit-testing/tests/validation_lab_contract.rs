@@ -5,8 +5,7 @@ const PLANNER: &str = include_str!("../../../tests/validation_lab/planner.json")
 const CATALOG: &str = include_str!("../../../tests/validation_lab/catalog.json");
 const ARTIFACT_ORIGIN: &str =
     include_str!("../../../tests/validation_lab/artifact_origin_negative.json");
-const WORKFLOW: &str =
-    include_str!("../../../tests/validation_lab/workflow_contract.json");
+const WORKFLOW: &str = include_str!("../../../tests/validation_lab/workflow_contract.json");
 const AGGREGATOR_CASES: [(&str, &str); 4] = [
     (
         "no-op",
@@ -113,11 +112,9 @@ fn planner_pins_profiles_lanes_and_exact_candidate_identity() {
         assert!(target_set.contains(string_field(lane, "target")));
         assert!(!string_field(artifact, "name").is_empty());
         assert!(!string_field(artifact, "run_id").is_empty());
-        assert!(
-            field(artifact, "run_attempt")
-                .as_u64()
-                .is_some_and(|attempt| attempt > 0)
-        );
+        assert!(field(artifact, "run_attempt")
+            .as_u64()
+            .is_some_and(|attempt| attempt > 0));
         if string_field(lane, "lane_id") == "frontier-five-target" {
             let artifact_targets: BTreeSet<_> = field(artifact, "targets")
                 .as_array()
@@ -138,11 +135,9 @@ fn planner_pins_profiles_lanes_and_exact_candidate_identity() {
             sentinels.insert(string_field(summary, "sentinel")),
             "sentinels must be unique"
         );
-        assert!(
-            field(summary, "depth")
-                .as_u64()
-                .is_some_and(|depth| depth > 0)
-        );
+        assert!(field(summary, "depth")
+            .as_u64()
+            .is_some_and(|depth| depth > 0));
     }
 }
 
@@ -190,10 +185,7 @@ fn aggregator_ranks_independently_actionable_failures_before_optional_evidence()
         .iter()
         .map(|id| id.as_str().expect("lane ID string"))
         .collect();
-    assert_eq!(
-        ranked,
-        ["lane-blocker", "lane-unknown", "lane-noop"]
-    );
+    assert_eq!(ranked, ["lane-blocker", "lane-unknown", "lane-noop"]);
     assert!(!ranked.contains(&"lane-optional"));
 }
 
