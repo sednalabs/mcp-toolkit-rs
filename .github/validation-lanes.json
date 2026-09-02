@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "name": "mcp-toolkit-validation-frontier",
+  "repository": "sednalabs/mcp-toolkit-rs",
+  "description": "Catalog-only definitions for bounded hosted Toolkit validation.",
+  "lane_sets": ["all", "workflow", "core", "packages", "attestation"],
+  "profiles": ["targeted", "frontier", "checkpoint"],
+  "lanes": [
+    {
+      "lane_id": "toolkit-workflow-contract",
+      "groups": ["workflow"],
+      "lane_sets": ["all", "workflow"],
+      "frontier_lane_sets": ["workflow"],
+      "frontier_default": true,
+      "status_class": "active",
+      "summary_family": "workflow-contract",
+      "frontier_role": "sentinel",
+      "setup_class": "workflow",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/workflow-contract.sh",
+      "script_args": [],
+      "timeout_minutes": 15,
+      "always_upload_artifact": true
+    },
+    {
+      "lane_id": "toolkit-rust-baseline",
+      "groups": ["core"],
+      "lane_sets": ["all", "core"],
+      "frontier_lane_sets": ["core"],
+      "frontier_default": true,
+      "status_class": "active",
+      "summary_family": "rust-baseline",
+      "frontier_role": "sentinel",
+      "setup_class": "rust",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/rust-baseline.sh",
+      "script_args": [],
+      "timeout_minutes": 45,
+      "always_upload_artifact": true
+    },
+    {
+      "lane_id": "toolkit-package-readiness",
+      "groups": ["packages"],
+      "lane_sets": ["all", "packages"],
+      "frontier_lane_sets": ["packages"],
+      "frontier_default": true,
+      "status_class": "active",
+      "summary_family": "package-readiness",
+      "frontier_role": "sentinel",
+      "setup_class": "package",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/package-readiness.sh",
+      "script_args": [],
+      "timeout_minutes": 45,
+      "always_upload_artifact": true
+    },
+    {
+      "lane_id": "toolkit-native-attestation-five-target",
+      "groups": ["attestation"],
+      "lane_sets": ["all", "attestation"],
+      "frontier_lane_sets": ["attestation"],
+      "frontier_default": true,
+      "status_class": "active",
+      "summary_family": "native-attestation",
+      "frontier_role": "sentinel",
+      "setup_class": "attestation",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/native-attestation-five-target.sh",
+      "script_args": [],
+      "timeout_minutes": 60,
+      "always_upload_artifact": true,
+      "contract": {
+        "source_workflows": [
+          ".github/workflows/native-stdio-release-template-proof.yml",
+          ".github/workflows/native-stdio-release-template-attest.yml"
+        ],
+        "journey": [
+          "package",
+          "verify",
+          "compare",
+          "authorize",
+          "root",
+          "PAX"
+        ],
+        "targets": [
+          "x86_64-unknown-linux-gnu",
+          "aarch64-unknown-linux-gnu",
+          "x86_64-apple-darwin",
+          "aarch64-apple-darwin",
+          "x86_64-pc-windows-msvc"
+        ],
+        "generated_workflow_coupling": "the attestation lane mirrors the existing proof workflow's five target package/verify/compare/authorize/root/PAX journey",
+        "publication_authority": false
+      }
+    },
+    {
+      "lane_id": "toolkit-native-attestation-artifact-origin-negative",
+      "groups": ["attestation"],
+      "lane_sets": ["all", "attestation"],
+      "frontier_lane_sets": ["attestation"],
+      "frontier_default": true,
+      "status_class": "active",
+      "summary_family": "native-attestation",
+      "frontier_role": "depth",
+      "setup_class": "attestation",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/native-attestation-artifact-origin-negative.sh",
+      "script_args": [],
+      "timeout_minutes": 30,
+      "always_upload_artifact": true,
+      "contract": {
+        "negative_seams": [
+          "run_attempt must be bound to the authorization receipt",
+          "same-name artifacts from another run must be rejected"
+        ],
+        "publication_authority": false
+      }
+    },
+    {
+      "lane_id": "toolkit-target-identity",
+      "groups": ["core"],
+      "lane_sets": ["all", "core"],
+      "frontier_lane_sets": ["core"],
+      "frontier_default": true,
+      "status_class": "active",
+      "summary_family": "target-identity",
+      "frontier_role": "sentinel",
+      "setup_class": "workflow",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/target-identity.sh",
+      "script_args": [],
+      "timeout_minutes": 15,
+      "always_upload_artifact": true
+    },
+    {
+      "lane_id": "toolkit-rmcp-compatibility",
+      "groups": ["core"],
+      "lane_sets": ["all", "core"],
+      "frontier_lane_sets": [],
+      "frontier_default": false,
+      "status_class": "catalog-only",
+      "summary_family": "rmcp-compatibility",
+      "frontier_role": "depth",
+      "setup_class": "rust",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/rmcp-compatibility.sh",
+      "script_args": [],
+      "timeout_minutes": 45,
+      "always_upload_artifact": true,
+      "catalog_only_reason": "Reserve the lane until an implementation and acceptance contract exist."
+    },
+    {
+      "lane_id": "toolkit-package-publish",
+      "groups": ["packages"],
+      "lane_sets": ["all", "packages"],
+      "frontier_lane_sets": [],
+      "frontier_default": false,
+      "status_class": "catalog-only",
+      "summary_family": "package-publish",
+      "frontier_role": "depth",
+      "setup_class": "package",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/package-publish.sh",
+      "script_args": [],
+      "timeout_minutes": 45,
+      "always_upload_artifact": true,
+      "catalog_only_reason": "Catalog only; no publication, registry, or release authority is granted."
+    }
+  ]
+}
