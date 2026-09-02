@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -1770,10 +1772,16 @@ class ArtifactTests(unittest.TestCase):
                 source_members = source_bundle.getmembers()
                 original_root = PurePosixPath(source_members[0].name).parts[0]
                 renamed_root = f"{original_root}-tampered"
+                renamed_members = []
+                for original_member in source_members:
+                    original_payload = source_bundle.extractfile(original_member)
+                    payload_bytes = original_payload.read() if original_payload is not None else None
+                    renamed_member = copy.copy(original_member)
+                    renamed_member.name = renamed_root + original_member.name[len(original_root):]
+                    renamed_members.append((renamed_member, payload_bytes))
                 with tarfile.open(renamed_archive, mode="w:gz") as target_bundle:
-                    for member in source_members:
-                        member.name = renamed_root + member.name[len(original_root):]
-                        payload = source_bundle.extractfile(member.name.replace(renamed_root, original_root, 1))
+                    for member, payload_bytes in renamed_members:
+                        payload = io.BytesIO(payload_bytes) if payload_bytes is not None else None
                         target_bundle.addfile(member, payload)
             renamed_sidecar = renamed_archive.with_name(renamed_archive.name + ".sha256")
             renamed_sidecar.write_text(

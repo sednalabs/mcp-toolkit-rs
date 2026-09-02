@@ -936,8 +936,8 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
             replace_once_after(
                 &canonical,
                 privileged_job,
-                "          source_tree=$(git rev-parse HEAD^{tree})\n          x86_archive=",
-                "          source_tree=$(git rev-parse HEAD^{tree})\n          echo injected\n          x86_archive=",
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          archive_name() {",
+                "          source_tree=$(git rev-parse HEAD^{tree})\n          echo injected\n          archive_name() {",
                 "injected privileged shell command",
             ),
             "run body must match the exact canonical command body",
