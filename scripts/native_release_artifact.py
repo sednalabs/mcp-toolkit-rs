@@ -804,8 +804,12 @@ def verify(
                 key for key in expected_metadata
                 if metadata.get(key) != expected_metadata.get(key)
             ] if isinstance(metadata, dict) else ["<metadata>"]
+            details = {
+                key: (metadata.get(key), expected_metadata.get(key))
+                for key in differing
+            } if isinstance(metadata, dict) else {}
             raise ArtifactError(
-                f"release metadata does not match the requested candidate for {target}: {differing}"
+                f"release metadata does not match the requested candidate for {target}: {details}"
             )
         verify_platform_binary(root / binary_name, target)
         sbom = read_json(root / "sbom.cdx.json")
