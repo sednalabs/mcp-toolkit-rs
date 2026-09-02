@@ -11,7 +11,7 @@ use rmcp::task_manager::{TaskContext, TaskExit, TaskFuture, TaskManager, TaskOpt
 use tokio::sync::Notify;
 
 mod panic_future;
-use panic_future::contain_task_future;
+use panic_future::{contain_task_future, discard_panic_payload};
 
 const OBSERVATION_TICK: Duration = Duration::from_millis(250);
 
@@ -400,7 +400,8 @@ impl TaskAuthority {
             };
             let future: TaskFuture = match catch_unwind(AssertUnwindSafe(|| make_future(managed))) {
                 Ok(future) => contain_task_future(future),
-                Err(_panic) => {
+                Err(panic) => {
+                    discard_panic_payload(panic);
                     Box::pin(async { Err(panic_task_exit("task operation factory panicked")) })
                 }
             };

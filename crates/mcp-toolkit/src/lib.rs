@@ -59,7 +59,6 @@ pub use mcp_toolkit_scratchpad as scratchpad;
 pub use mcp_toolkit_tasks as tasks;
 
 #[cfg(any(
-    feature = "tasks",
     feature = "server",
     feature = "server-stdio",
     feature = "server-http",

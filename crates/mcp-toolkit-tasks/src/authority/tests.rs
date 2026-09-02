@@ -272,7 +272,7 @@ async fn synchronous_factory_panic_is_contained_as_failed_task() {
         .spawn_for_principal(
             owner.clone(),
             TaskOptions::new().with_ttl_ms(None),
-            |_ctx| panic!("factory panic"),
+            |_ctx| std::panic::panic_any(PanicOnDrop),
         )
         .expect("factory panic should be contained");
 
@@ -302,7 +302,7 @@ async fn asynchronous_operation_panic_is_contained_as_failed_task() {
             |_ctx| {
                 Box::pin(async {
                     tokio::task::yield_now().await;
-                    panic!("future panic");
+                    std::panic::panic_any(PanicOnDrop);
                     #[allow(unreachable_code)]
                     Ok(ok_result("never"))
                 })
@@ -325,6 +325,14 @@ async fn asynchronous_operation_panic_is_contained_as_failed_task() {
     assert_eq!(authority.running_task_count(), 0);
 }
 
+struct PanicOnDrop;
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        panic!("panic payload destructor panic")
+    }
+}
+
 struct ReadyDropPanicFuture;
 
 impl Future for ReadyDropPanicFuture {
@@ -337,7 +345,7 @@ impl Future for ReadyDropPanicFuture {
 
 impl Drop for ReadyDropPanicFuture {
     fn drop(&mut self) {
-        panic!("future destructor panic")
+        std::panic::panic_any(PanicOnDrop)
     }
 }
 

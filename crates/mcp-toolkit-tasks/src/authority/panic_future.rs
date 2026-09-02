@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::future::Future;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
@@ -5,6 +6,20 @@ use std::task::{Context, Poll};
 
 use rmcp::model::CallToolResult;
 use rmcp::task_manager::{TaskExit, TaskFuture};
+
+/// Drops a panic payload without allowing a panic from its destructor to
+/// escape the existing panic boundary.
+///
+/// A caller can use `panic_any` with a payload whose `Drop` implementation
+/// panics. Dropping the `Err` returned by `catch_unwind` would otherwise unwind
+/// through the RMCP/Tokio boundary after the original panic was caught. If the
+/// payload destructor panics, its replacement payload is intentionally leaked
+/// because attempting to drop that replacement could recurse indefinitely.
+pub(super) fn discard_panic_payload(payload: Box<dyn Any + Send>) {
+    if let Err(drop_panic) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+        std::mem::forget(drop_panic);
+    }
+}
 
 fn panic_task_exit(message: &'static str) -> TaskExit {
     TaskExit::Error(rmcp::ErrorData::internal_error(message.to_string(), None))
@@ -31,7 +46,13 @@ impl PanicContainedTaskFuture {
         let Some(future) = self.inner.take() else {
             return false;
         };
-        catch_unwind(AssertUnwindSafe(|| drop(future))).is_err()
+        match catch_unwind(AssertUnwindSafe(|| drop(future))) {
+            Ok(()) => false,
+            Err(panic) => {
+                discard_panic_payload(panic);
+                true
+            }
+        }
     }
 }
 
@@ -57,10 +78,11 @@ impl Future for PanicContainedTaskFuture {
                     Poll::Ready(result)
                 }
             }
-            Err(_panic) => {
+            Err(panic) => {
                 // A future that panicked while being polled is not polled
                 // again. Destroy it behind its own panic boundary and report
                 // one stable task failure to RMCP.
+                discard_panic_payload(panic);
                 let _drop_panicked = this.drop_inner();
                 Poll::Ready(Err(panic_task_exit("task operation panicked")))
             }
