@@ -103,6 +103,32 @@ Toolkit route may inspect a bounded request body only to distinguish:
 
 After that bounded classification, RMCP remains the protocol engine.
 
+## Tasks and durability boundary
+
+MCP Tasks are an RMCP-owned protocol extension. RMCP owns the task methods and
+result models, statuses and status-specific payloads, `input_required` and
+`tasks/update` behavior, cooperative cancellation, TTL behavior, and terminal
+result/error projection. Toolkit must not reintroduce removed legacy methods
+such as `tasks/list` or `tasks/result` as wire protocol.
+
+Production authority around Tasks remains a Toolkit integration concern, but it
+must use RMCP's native `TaskManager`. The principal-bound authority work in
+[#186](https://github.com/sednalabs/mcp-toolkit-rs/pull/186) adds only reusable
+concerns such as principal binding, concealed cross-principal access, race-safe
+observation generations, bounded waiting, and stale authority-record cleanup.
+A Toolkit task revision is an observed snapshot generation, not a duplicate
+task event log; it advances only after an authoritative RMCP `DetailedTask`
+read actually changes.
+
+RMCP 3.2.0's native task manager is process-local. A process restart cannot
+honestly resurrect an in-flight Rust future merely because its last task record
+was persisted. Durable task support must first define an RMCP-native
+persistence/restoration boundary and explicit crash semantics; that work is
+tracked in [#191](https://github.com/sednalabs/mcp-toolkit-rs/issues/191).
+Future implementations must preserve principal ownership, TTL semantics,
+terminal integrity, and duplicate-execution safety without copying RMCP's task
+state machine into Toolkit.
+
 ## Replay and event retention
 
 Do not conflate Toolkit's existing legacy session recorder with RMCP 3 native

@@ -115,6 +115,32 @@ or server-authoring policy:
 - OAuth metadata and protected-resource helpers;
 - provider-auth UX helpers that sit outside the MCP transport itself.
 
+## MCP Tasks and durability boundary
+
+MCP Tasks are the official `io.modelcontextprotocol/tasks` extension. RMCP
+owns the task protocol methods and result models, statuses and
+status-specific payloads, `input_required` and `tasks/update` behavior,
+cooperative cancellation, TTL behavior, and terminal result/error projection.
+Toolkit must not reintroduce removed legacy methods such as `tasks/list` or
+`tasks/result` as wire protocol.
+
+Toolkit may add production authority around RMCP. The task-authority work in
+[#186](https://github.com/sednalabs/mcp-toolkit-rs/pull/186) therefore uses
+RMCP's native `TaskManager` and adds only reusable concerns such as principal
+binding, concealed cross-principal access, race-safe observation generations,
+bounded waiting, and stale authority-record cleanup. A Toolkit task revision
+is an observed snapshot generation, not a duplicate task event log; it advances
+only after an authoritative RMCP `DetailedTask` read actually changes.
+
+RMCP 3.2.0's native task manager is process-local. A process restart cannot
+honestly resurrect an in-flight Rust future merely because its last task record
+was persisted. Durable task support must first define an RMCP-native
+persistence/restoration boundary and explicit crash semantics. That work is
+tracked in [#191](https://github.com/sednalabs/mcp-toolkit-rs/issues/191).
+Any future implementation must preserve principal ownership, TTL semantics,
+terminal integrity, and duplicate-execution safety without copying RMCP's task
+state machine into Toolkit.
+
 ## Alignment Inventory
 
 | Area | Toolkit behavior | Alignment decision |
