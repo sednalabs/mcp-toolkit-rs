@@ -98,6 +98,18 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
             template.id
         );
 
+        let source = read(&output.join("src/lib.rs"));
+        assert!(
+            source.contains("Result<CallToolResponse, rmcp::ErrorData>"),
+            "{} should use rmcp 3 CallToolResponse in its ServerHandler",
+            template.id
+        );
+        assert!(
+            source.contains("CallToolResult::error") && source.contains(".into());"),
+            "{} should convert caller-visible tool errors into CallToolResponse",
+            template.id
+        );
+
         if template.id == "hosted-http-auth" {
             assert!(
                 output.join("tests/http_auth_contract.rs").exists(),
