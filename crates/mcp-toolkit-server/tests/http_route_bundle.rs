@@ -329,7 +329,7 @@ async fn route_bundle_rejects_present_unusable_sessions_before_stateless_fallbac
             serde_json::json!({
                 "status": "error",
                 "error": "Invalid or expired session ID.",
-                "hint": "Re-initialize with POST /mcp to obtain a new session id.",
+                "hint": "Re-initialize a legacy session or use MCP 2026-07-28 stateless requests.",
             })
         );
     }
