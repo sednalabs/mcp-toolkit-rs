@@ -176,7 +176,10 @@ impl McpAppsOAuthSecurityScheme {
 ///     json!([{"type":"oauth2","scopes":["openid","profile","ops:read"]}])
 /// );
 /// ```
-pub fn with_mcp_apps_oauth_security_scheme<I, S>(existing: Option<MetaObject>, scopes: I) -> MetaObject
+pub fn with_mcp_apps_oauth_security_scheme<I, S>(
+    existing: Option<MetaObject>,
+    scopes: I,
+) -> MetaObject
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,

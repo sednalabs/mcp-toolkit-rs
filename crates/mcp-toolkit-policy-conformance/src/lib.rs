@@ -426,7 +426,7 @@ fn adapter_for_op<'a>(
 ) -> Result<&'a dyn PolicyOperationAdapter, String> {
     match adapter {
         Some(adapter) => Ok(adapter),
-        None => Err(format!("{}: no adapter supplied for non-SQL operation", op)),
+        None => Err(format!("{op}: no adapter supplied for non-SQL operation")),
     }
 }
 

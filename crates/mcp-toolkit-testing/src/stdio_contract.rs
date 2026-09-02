@@ -398,12 +398,8 @@ mod tests {
     #[test]
     fn current_tool_call_request_carries_request_meta() {
         let meta = current_request_meta("contract-client", super::DEFAULT_PROTOCOL_VERSION);
-        let request = tool_call_request_with_meta(
-            4,
-            "brief_target",
-            json!({"target": "probe"}),
-            Some(&meta),
-        );
+        let request =
+            tool_call_request_with_meta(4, "brief_target", json!({"target": "probe"}), Some(&meta));
 
         assert_eq!(request["params"]["_meta"], meta);
         assert_eq!(
