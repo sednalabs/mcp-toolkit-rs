@@ -571,8 +571,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "matrix exclude",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!("{include_rows}        exclude: []\n"),
+                "            target: x86_64-pc-windows-msvc\n    env:\n",
+                "            target: x86_64-pc-windows-msvc\n        exclude: []\n    env:\n",
                 "matrix exclude",
             ),
         ),
@@ -580,8 +580,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "unknown matrix key",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!("{include_rows}        unexpected: true\n"),
+                "            target: x86_64-pc-windows-msvc\n    env:\n",
+                "            target: x86_64-pc-windows-msvc\n        unexpected: true\n    env:\n",
                 "unknown matrix key",
             ),
         ),
