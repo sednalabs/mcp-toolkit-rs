@@ -263,6 +263,7 @@ def validate_readme(repo_root: Path, first_wave: list[str]) -> list[str]:
 
     readme_path = repo_root / "README.md"
     text = readme_path.read_text(encoding="utf-8")
+    normalized_text = " ".join(text.split())
     errors: list[str] = []
 
     required_phrases = {
@@ -273,7 +274,7 @@ def validate_readme(repo_root: Path, first_wave: list[str]) -> list[str]:
         "not the official Model Context Protocol implementation": "official-implementation boundary",
     }
     for phrase, label in required_phrases.items():
-        if phrase not in text:
+        if phrase not in normalized_text:
             errors.append(f"README.md: missing {label}")
 
     if README_START not in text or README_END not in text:
