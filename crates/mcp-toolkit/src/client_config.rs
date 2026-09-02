@@ -95,6 +95,8 @@ pub enum ClientConfigError {
     InvalidEnvKey(String),
     /// An environment value contains a control character unsupported by TOML strings.
     InvalidEnvValue,
+    /// A caller-supplied rendered field contains a TOML control character.
+    InvalidControlCharacter(&'static str),
 }
 
 impl fmt::Display for ClientConfigError {
@@ -119,6 +121,7 @@ impl fmt::Display for ClientConfigError {
             ),
             Self::InvalidEnvKey(key) => write!(formatter, "invalid client-config environment key `{key}`"),
             Self::InvalidEnvValue => write!(formatter, "client-config environment value contains a control character"),
+            Self::InvalidControlCharacter(field) => write!(formatter, "client-config {field} contains a control character"),
         }
     }
 }
@@ -154,6 +157,14 @@ pub fn render_client_config(options: &ClientConfigOptions) -> Result<String, Cli
         .server_name
         .clone()
         .unwrap_or_else(|| package_name.clone());
+    validate_text("server name", &server_name)?;
+    if let Some(command) = options.command.as_deref() {
+        validate_text("command", command)?;
+    }
+    if let Some(url) = options.url.as_deref() {
+        validate_text("url", url)?;
+    }
+    validate_text("profile", &options.profile)?;
     let transport = match options.transport {
         Some(transport) => transport,
         None => infer_transport(&canonical_root)?,
@@ -253,6 +264,13 @@ fn profile_env_key(package_name: &str) -> String {
 fn validate_env_key(key: &str) -> Result<(), ClientConfigError> {
     if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(ClientConfigError::InvalidEnvKey(key.to_string()));
+    }
+    Ok(())
+}
+
+fn validate_text(field: &'static str, value: &str) -> Result<(), ClientConfigError> {
+    if value.chars().any(|c| c.is_control()) {
+        return Err(ClientConfigError::InvalidControlCharacter(field));
     }
     Ok(())
 }
@@ -399,5 +417,18 @@ mod tests {
         assert!(output.contains("command = \"demo-server\""));
         assert!(output.contains("DEMO_PROFILE = \"operator\""));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_characters_are_rejected_from_rendered_fields() {
+        let root = project_overrides();
+        let error = render_client_config(&ClientConfigOptions {
+            root,
+            transport: Some(ClientConfigTransport::Stdio),
+            env_value: Some("operator\ninjected = true".into()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(matches!(error, ClientConfigError::InvalidEnvValue));
     }
 }
