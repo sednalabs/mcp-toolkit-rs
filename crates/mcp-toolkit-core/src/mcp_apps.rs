@@ -24,7 +24,7 @@
 //! * Keeping host-facing descriptor metadata aligned with the app descriptor
 //!   contract they target.
 
-use rmcp::model::{Meta, Tool};
+use rmcp::model::{MetaObject, Tool};
 use serde::ser::Error as _;
 use serde_json::{json, Map, Value};
 
@@ -158,11 +158,11 @@ impl McpAppsOAuthSecurityScheme {
 /// replaced with a single OAuth 2 security scheme using the provided scopes.
 ///
 /// ```
-/// use rmcp::model::Meta;
+/// use rmcp::model::MetaObject;
 /// use serde_json::json;
 /// use mcp_toolkit_core::mcp_apps::with_mcp_apps_oauth_security_scheme;
 ///
-/// let mut existing = Meta::new();
+/// let mut existing = MetaObject::new();
 /// existing.0.insert("ui".to_string(), json!({"visibility":["model"]}));
 ///
 /// let meta = with_mcp_apps_oauth_security_scheme(
@@ -176,7 +176,7 @@ impl McpAppsOAuthSecurityScheme {
 ///     json!([{"type":"oauth2","scopes":["openid","profile","ops:read"]}])
 /// );
 /// ```
-pub fn with_mcp_apps_oauth_security_scheme<I, S>(existing: Option<Meta>, scopes: I) -> Meta
+pub fn with_mcp_apps_oauth_security_scheme<I, S>(existing: Option<MetaObject>, scopes: I) -> MetaObject
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -190,14 +190,14 @@ where
 /// replaced with the supplied scheme array.
 ///
 /// ```
-/// use rmcp::model::Meta;
+/// use rmcp::model::MetaObject;
 /// use serde_json::json;
 /// use mcp_toolkit_core::mcp_apps::{
 ///     with_mcp_apps_security_schemes, McpAppsSecurityScheme,
 /// };
 ///
 /// let meta = with_mcp_apps_security_schemes(
-///     Some(Meta::new()),
+///     Some(MetaObject::new()),
 ///     [
 ///         McpAppsSecurityScheme::noauth(),
 ///         McpAppsSecurityScheme::oauth2(["items:read"]),
@@ -215,7 +215,7 @@ where
 ///
 /// # Errors
 /// This function does not return errors.
-pub fn with_mcp_apps_security_schemes<I>(existing: Option<Meta>, schemes: I) -> Meta
+pub fn with_mcp_apps_security_schemes<I>(existing: Option<MetaObject>, schemes: I) -> MetaObject
 where
     I: IntoIterator<Item = McpAppsSecurityScheme>,
 {
@@ -233,9 +233,9 @@ where
 /// tools that are non-mutating but may reveal unredacted secrets or admin
 /// configuration values after an explicit approval gate.
 pub fn with_mcp_apps_sensitive_output_metadata(
-    existing: Option<Meta>,
+    existing: Option<MetaObject>,
     sensitivity: impl Into<String>,
-) -> Meta {
+) -> MetaObject {
     let mut meta = with_mcp_apps_security_schemes(existing, [McpAppsSecurityScheme::noauth()]);
     meta.0
         .insert(MCP_APPS_APPROVAL_REQUIRED_META_KEY.to_string(), json!(true));
@@ -257,9 +257,9 @@ pub fn with_mcp_apps_sensitive_output_metadata(
 /// tools that may approach a hazardous boundary for proof while prohibiting
 /// the final mutation, send, publish, trigger, or schedule action.
 pub fn with_mcp_apps_no_mutation_proof_metadata(
-    existing: Option<Meta>,
+    existing: Option<MetaObject>,
     proof_boundary: impl Into<String>,
-) -> Meta {
+) -> MetaObject {
     let mut meta = with_mcp_apps_security_schemes(existing, [McpAppsSecurityScheme::noauth()]);
     meta.0.insert(
         MCP_APPS_OPERATION_CLASS_META_KEY.to_string(),
@@ -442,7 +442,7 @@ where
     )
 }
 
-fn upsert_model_only_ui_visibility(meta: &mut Meta) {
+fn upsert_model_only_ui_visibility(meta: &mut MetaObject) {
     let mut ui = meta
         .0
         .remove("ui")
@@ -470,7 +470,7 @@ mod tests {
         MCP_APPS_SECURITY_SCHEMES_META_KEY, MCP_APPS_SENSITIVITY_META_KEY,
         MCP_APPS_WIDGET_ACCESSIBLE_META_KEY,
     };
-    use rmcp::model::{JsonObject, Meta, Tool};
+    use rmcp::model::{JsonObject, MetaObject, Tool};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn sensitive_output_metadata_marks_model_only_approval_required_tools() {
-        let mut existing = Meta::new();
+        let mut existing = MetaObject::new();
         existing
             .0
             .insert("owner".to_string(), json!("service-owned"));
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn no_mutation_proof_metadata_marks_model_only_non_mutating_boundary() {
-        let mut existing = Meta::new();
+        let mut existing = MetaObject::new();
         existing
             .0
             .insert("owner".to_string(), json!("service-owned"));
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn oauth_security_scheme_meta_preserves_unrelated_metadata() {
-        let mut existing = Meta::new();
+        let mut existing = MetaObject::new();
         existing
             .0
             .insert("ui".to_string(), json!({"visibility": ["model"]}));
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn generic_security_scheme_meta_replaces_only_security_schemes() {
-        let mut existing = Meta::new();
+        let mut existing = MetaObject::new();
         existing
             .0
             .insert("ui".to_string(), json!({"visibility": ["model"]}));
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn apps_tool_descriptor_mirrors_security_schemes() {
-        let mut meta = Meta::new();
+        let mut meta = MetaObject::new();
         meta.0
             .insert("ui".to_string(), json!({"resourceUri": "ui://search.html"}));
         let tool = Tool::new(

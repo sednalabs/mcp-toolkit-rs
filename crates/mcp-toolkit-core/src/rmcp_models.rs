@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn read_resource_result_wraps_contents() {
-        let contents = vec![ResourceContents::text("memo://test", "ok")];
+        let contents = vec![ResourceContents::text("ok", "memo://test")];
         let result = read_resource_result(contents.clone());
         assert_eq!(result.contents, contents);
     }
