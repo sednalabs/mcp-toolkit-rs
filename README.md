@@ -24,6 +24,7 @@ crates.io yet, so adopters should consume it from Git for now.
 | `mcp-toolkit-policy-ffi` | Optional dynamic policy-runtime loader. |
 | `mcp-toolkit-policy-kernel-adapters` | Compatibility adapters for exact external policy-kernel parity work. |
 | `mcp-toolkit-postgres` | PostgreSQL connection, TLS, and target-identity helpers. |
+| `mcp-toolkit-private-artifact` | Descriptor-bound, bounded, content-hashed reads of private local artifacts. |
 | `mcp-toolkit-process` | Process and signal helpers. |
 | `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions for large analytical result sets, bounded read-only SQL, table inventory, and evidence handles. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition helpers. |
