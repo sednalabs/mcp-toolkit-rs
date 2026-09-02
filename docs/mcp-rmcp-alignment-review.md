@@ -1,5 +1,9 @@
 # MCP/rmcp Alignment Review
 
+> Retirement note (2026-08-17): `mcp-toolkit-gemini` has been removed from the
+> active workspace. Gemini references below are preserved as evidence of the
+> 2026-07-11 review state and do not describe current Toolkit availability.
+
 This review records the custom MCP-adjacent layers the toolkit maintains on
 top of `rmcp` and the invariants that keep those layers aligned with the
 official MCP specification and the official Rust SDK.

@@ -55,9 +55,6 @@ pub use mcp_toolkit_process as process;
 #[cfg(feature = "scratchpad")]
 pub use mcp_toolkit_scratchpad as scratchpad;
 
-#[cfg(feature = "gemini")]
-pub use mcp_toolkit_gemini as gemini;
-
 #[cfg(any(
     feature = "server",
     feature = "server-stdio",
