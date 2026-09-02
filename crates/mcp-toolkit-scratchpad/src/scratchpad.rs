@@ -621,8 +621,7 @@ impl ScratchpadSessionManager {
              FROM information_schema.tables
              WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
              ORDER BY table_schema, table_name
-             LIMIT {}",
-            limit
+             LIMIT {limit}"
         );
         let mut stmt = conn.prepare(&sql).map_err(|err| {
             ScratchpadError::ScratchpadEngine(format!(
@@ -1060,8 +1059,7 @@ impl ScratchpadSessionManager {
             return Err(ScratchpadError::scratchpad_limit(
                 "tables",
                 format!(
-                    "max tables per session exceeded ({})",
-                    max_tables_per_session
+                    "max tables per session exceeded ({max_tables_per_session})"
                 ),
             ));
         }
@@ -1208,7 +1206,7 @@ impl ScratchpadSessionManager {
             emit_scratchpad_quota_breach(session_id, "sessions", max_sessions_limit);
             return Err(ScratchpadError::scratchpad_limit(
                 "sessions",
-                format!("max active sessions exceeded ({})", max_sessions_limit),
+                format!("max active sessions exceeded ({max_sessions_limit})"),
             ));
         }
 
@@ -1249,8 +1247,7 @@ impl ScratchpadSessionManager {
             return Err(ScratchpadError::scratchpad_limit(
                 "tables",
                 format!(
-                    "max tables per session exceeded ({})",
-                    max_tables_per_session
+                    "max tables per session exceeded ({max_tables_per_session})"
                 ),
             ));
         }
@@ -1720,7 +1717,7 @@ fn validate_append_target_columns(
     table_name: &str,
     columns: &[ScratchpadIngestColumn],
 ) -> Result<(), ScratchpadError> {
-    let pragma_sql = format!("PRAGMA table_info('{}')", table_name);
+    let pragma_sql = format!("PRAGMA table_info('{table_name}')");
     let mut stmt = conn.prepare(&pragma_sql).map_err(|err| {
         ScratchpadError::ScratchpadEngine(format!(
             "failed to inspect existing table '{table_name}': {err}"
@@ -1776,8 +1773,7 @@ fn validate_append_target_columns(
         return Err(ScratchpadError::invalid(
             "columns",
             format!(
-                "append mode requires identical column order; existing={:?}, incoming={:?}",
-                existing_column_names, incoming_columns
+                "append mode requires identical column order; existing={existing_column_names:?}, incoming={incoming_columns:?}"
             ),
         ));
     }
@@ -1846,8 +1842,7 @@ fn fetch_table_column_preview(
          FROM information_schema.columns
          WHERE table_schema = ?1 AND table_name = ?2
          ORDER BY ordinal_position
-         LIMIT {}",
-        max_columns
+         LIMIT {max_columns}"
     );
     let mut columns_stmt = conn.prepare(&preview_sql).map_err(|err| {
         ScratchpadError::ScratchpadEngine(format!(
