@@ -62,7 +62,7 @@ jobs:
           name: native-stdio-template-source-inputs-${{ github.sha }}
           path: templates/single-crate-public-stdio-server
 
-      - name: Download exact native template artifacts
+      - name: Download exact Linux native template artifacts
         # actions/download-artifact v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:

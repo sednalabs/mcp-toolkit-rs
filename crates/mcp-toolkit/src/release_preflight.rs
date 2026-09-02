@@ -740,7 +740,7 @@ const ROOT_LOCKFILE_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
         ExpectedStepValue::String("templates/single-crate-public-stdio-server"),
     ),
 ];
-const ROOT_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+const ROOT_LINUX_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
         ExpectedStepValue::String("native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}"),
@@ -855,10 +855,10 @@ const ROOT_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
         },
     },
     PrivilegedStepContract {
-        name: "Download exact native template artifacts",
+        name: "Download exact Linux native template artifacts",
         body: PrivilegedStepBody::Action {
             uses: DOWNLOAD_ACTION,
-            inputs: ROOT_ARTIFACT_DOWNLOAD_INPUTS,
+            inputs: ROOT_LINUX_ARTIFACT_DOWNLOAD_INPUTS,
         },
     },
     PrivilegedStepContract {
