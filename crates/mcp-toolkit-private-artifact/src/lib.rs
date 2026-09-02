@@ -823,9 +823,16 @@ mod linux {
                 bytes: Vec::new(),
                 proof: expected_proof,
             };
+            let hex_digits = b"0123456789abcdef";
+            let mut expected_hex = String::with_capacity(64);
+            for byte in empty_sha256 {
+                expected_hex.push(char::from(hex_digits[usize::from(byte >> 4)]));
+                expected_hex.push(char::from(hex_digits[usize::from(byte & 0x0f)]));
+            }
 
             assert_eq!(artifact.proof(), expected_proof);
             assert_eq!(artifact.read().expect("read empty artifact"), expected);
+            assert_eq!(artifact.proof().sha256_hex(), expected_hex);
         }
 
         #[test]
