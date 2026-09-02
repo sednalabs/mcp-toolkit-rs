@@ -10,6 +10,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     import tomllib
@@ -227,8 +228,15 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
         errors.append(
             f"{package.name}: package.homepage must be absent or the public repo URL"
         )
-    if isinstance(homepage, str) and "sednalabs.io" in homepage.lower():
-        errors.append(f"{package.name}: unresolved sednalabs.io homepage is not allowed")
+    if isinstance(homepage, str):
+        try:
+            hostname = urlsplit(homepage).hostname
+        except ValueError:
+            hostname = None
+        if hostname is not None and hostname.casefold() == "sednalabs.io":
+            errors.append(
+                f"{package.name}: unresolved sednalabs.io homepage is not allowed"
+            )
 
     description = metadata.get("description")
     if (
