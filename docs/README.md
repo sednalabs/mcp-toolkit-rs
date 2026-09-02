@@ -19,7 +19,7 @@ question at hand.
 - [Easy server ergonomics](easy-server-ergonomics.md) and [provider auth/client configuration](provider-auth-and-client-config.md) — first-run setup and diagnostics.
 - [Tool inventory migration](tool-inventory-migration.md), [tool schema snapshots](tool-schema-snapshots.md), and [contract testing](contract-testing.md) — stable tool contracts.
 - [Deferred loading and tool search](deferred-loading-and-tool-search.md) — large catalogues and discovery.
-- [Server composition layer](server-composition-layer.md) and [scratchpad](scratchpad.md) — reusable runtime composition and bounded analytical state.
+- [Server composition layer](server-composition-layer.md), [SEP-2243 HTTP headers](sep-2243-http-headers.md), and [scratchpad](scratchpad.md) — reusable runtime composition, the current Streamable HTTP header contract, and bounded analytical state.
 - [Legacy-system adapter pattern](legacy-system-adapter-pattern.md) — safe integration of partial or legacy APIs.
 
 ## Security and policy adopters

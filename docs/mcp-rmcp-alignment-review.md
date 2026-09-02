@@ -24,6 +24,7 @@ Primary references:
 - MCP tools: <https://modelcontextprotocol.io/specification/2025-11-25/server/tools>
 - MCP pagination: <https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination>
 - MCP transports: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
+- SEP-2243 HTTP header contract: [dedicated header contract](sep-2243-http-headers.md)
 - `rmcp` Rust SDK: <https://github.com/modelcontextprotocol/rust-sdk>
 - `rmcp` API docs: <https://docs.rs/rmcp>
 
@@ -78,6 +79,70 @@ alignment review and specifically compare:
 - feature flags needed by the facade versus template dependencies;
 - migration guidance from the official SDK release notes.
 
+### Upgrade checklist
+
+An RMCP upgrade is a coordinated Toolkit migration. The following comparisons
+and proofs are part of the migration record; a successful compilation alone is
+not acceptance.
+
+1. **Pin and lockfile:** confirm every direct `rmcp` dependency uses the one
+   exact workspace pin, keep any `rmcp-macros` pin in lockstep, and inspect the
+   resulting lockfile for duplicate or unintended SDK versions.
+2. **Facade features:** compare the Toolkit facade feature set with the SDK's
+   feature requirements, including transport, server, client, task, and macro
+   surfaces used by the workspace. Remove no feature merely because a default
+   happens to compile one crate.
+3. **Macros and generated code:** compare `#[tool_router]`, `#[tool_handler]`,
+   and related macro output and crate paths. Re-run starter-template integrity
+   checks so generated services continue to import the authoring surface via
+   `mcp_toolkit::rmcp` and do not acquire an independent SDK policy.
+4. **Models and results:** compare metadata wrappers, `CallToolResponse`
+   variants, `ListToolsResult` constructors and fields, task models, and native
+   future aliases. Preserve SDK-owned extension variants instead of rebuilding
+   old structures in Toolkit.
+5. **Transports and protocol eras:** compare stdio lifecycle selection,
+   Streamable HTTP current/legacy classification, response framing, protocol
+   version handling, SEP-2243 headers, session-manager behavior, SSE event IDs,
+   and `EventStore`/resume semantics. Keep the current and legacy contracts
+   explicit and do not infer policy from a conservative SDK alias.
+6. **Maintained templates:** exercise each maintained starter through its
+   supported stdio or hosted HTTP path, checking imports, feature flags,
+   generated handlers, tool-list pagination, and documented configuration
+   boundaries.
+7. **Contract tests:** cover current-protocol requests with complete metadata
+   and standard headers, deliberate negative header cases, explicit legacy
+   compatibility requests, list pagination, and any RMCP Tasks wrapper's
+   status, cancellation, TTL, and ownership behavior. A test that only proves
+   compilation is not a protocol contract test.
+8. **Migration and promotion proof:** run the repository's hosted dependency,
+   formatting, lint, test, compatibility, security, and query checks on the
+   exact candidate head. Record the exact head and synthetic merge identities;
+   evidence from an older head, base, or merge result does not promote the new
+   candidate.
+
+The checklist is intentionally bounded to SDK alignment. A migration must not
+silently add a new protocol state machine, authority boundary, credential
+surface, or production claim under the heading of an SDK upgrade.
+
+### Post-merge follow-up boundary
+
+After an upgrade lands, record the landed commit and a fresh post-main proof
+before treating the migration as integrated. Follow-up work remains separately
+bounded:
+
+- Re-check `StreamableHttpService`, standard headers, session management,
+  `EventStore`, and route preflight when a later SDK change affects those
+  surfaces.
+- Keep native current-protocol replay work under [#190](https://github.com/sednalabs/mcp-toolkit-rs/issues/190)
+  and durable task persistence/recovery under [#191](https://github.com/sednalabs/mcp-toolkit-rs/issues/191);
+  this document does not make either capability available.
+- Require a new implementation and review record for behavior, authority,
+  credential, lifecycle, or live-deployment changes. Documentation of the
+  contract is not evidence that such a change was implemented.
+- If hosted checks expose a regression, repair the exact affected candidate
+  and repeat only the causally affected review and proof; do not extend this
+  checklist into an unbounded re-review loop.
+
 ## Automated Guardrails
 
 The dependency-governance workflow now treats rmcp alignment as a workspace-wide
@@ -114,6 +179,35 @@ or server-authoring policy:
 - bounded session manager composition;
 - OAuth metadata and protected-resource helpers;
 - provider-auth UX helpers that sit outside the MCP transport itself.
+
+## RMCP 3.2.0 model and result rationale
+
+The model boundary follows the exact RMCP `3.2.0` API. Toolkit adds policy and
+composition around these types; it does not recreate protocol-facing models.
+
+- `MetaObject` is the general MCP `_meta` map for descriptors and results.
+  Request envelopes use `RequestMetaObject`, while notification envelopes use
+  `NotificationMetaObject`; the distinction preserves the SDK's different
+  reserved-key and lifecycle contracts. Do not collapse request and
+  notification metadata into one untyped helper.
+- `CallToolResult` remains the completed tool payload. Handlers return the
+  RMCP `CallToolResponse` outcome union so a call can remain a completed result,
+  request client input through `InputRequiredResult`, or materialize a task as
+  `CreateTaskResult`. Converting every outcome to `CallToolResult` would discard
+  protocol state and prevent native extension variants from reaching the peer.
+- `ListToolsResult::with_all_items` is the SDK constructor for a complete page.
+  Set `next_cursor` and other result metadata through the current SDK fields or
+  builders; do not hand-build a stale result shape. The same rule applies to
+  other paginated result constructors.
+- Native task state stays in `Task`, `DetailedTask`, `TaskStatus`,
+  `CreateTaskResult`, `GetTaskResult`, and `TaskAckResult`. Native execution
+  uses `TaskManager`, `TaskOptions`, `TaskContext`, `TaskExit`, and
+  `TaskFuture`. Toolkit task authority may bind principals, observation
+  generations, waiting, and cleanup around those surfaces, but it must not
+  fork the RMCP task state machine or substitute a second future contract.
+
+These choices keep the facade compatible with RMCP's current task and result
+variants while leaving protocol ownership with the SDK.
 
 ## MCP Tasks and durability boundary
 
