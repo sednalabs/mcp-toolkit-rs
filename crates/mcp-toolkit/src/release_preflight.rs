@@ -743,7 +743,23 @@ const ROOT_LOCKFILE_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
 const ROOT_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
-        ExpectedStepValue::String("native-stdio-template-*-*-${{ github.sha }}"),
+        ExpectedStepValue::String("native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}"),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+    ("merge-multiple", ExpectedStepValue::Bool(true)),
+];
+const ROOT_APPLE_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "pattern",
+        ExpectedStepValue::String("native-stdio-template-*-apple-darwin-${{ github.sha }}"),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+    ("merge-multiple", ExpectedStepValue::Bool(true)),
+];
+const ROOT_WINDOWS_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "pattern",
+        ExpectedStepValue::String("native-stdio-template-*-pc-windows-msvc-${{ github.sha }}"),
     ),
     ("path", ExpectedStepValue::String("downloaded")),
     ("merge-multiple", ExpectedStepValue::Bool(true)),
@@ -839,10 +855,24 @@ const ROOT_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
         },
     },
     PrivilegedStepContract {
-        name: "Download verified template artifact set",
+        name: "Download exact native template artifacts",
         body: PrivilegedStepBody::Action {
             uses: DOWNLOAD_ACTION,
             inputs: ROOT_ARTIFACT_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Download exact Apple native template artifacts",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_APPLE_ARTIFACT_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Download exact Windows native template artifacts",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_WINDOWS_ARTIFACT_DOWNLOAD_INPUTS,
         },
     },
     PrivilegedStepContract {

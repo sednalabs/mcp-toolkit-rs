@@ -1081,6 +1081,27 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(canonical_contract.passed, "{}", canonical_contract.detail);
+    for pattern in [
+        "pattern: native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}",
+        "pattern: native-stdio-template-*-apple-darwin-${{ github.sha }}",
+        "pattern: native-stdio-template-*-pc-windows-msvc-${{ github.sha }}",
+    ] {
+        assert_eq!(
+            canonical_wrapper.matches(pattern).count(),
+            1,
+            "canonical wrapper must contain exactly one {pattern} download"
+        );
+    }
+    assert!(
+        !canonical_wrapper.contains("pattern: native-stdio-template-*-*-${{ github.sha }}"),
+        "canonical wrapper must not use a broad artifact pattern that includes source inputs"
+    );
+    assert!(
+        !canonical_wrapper.contains(
+            "native-stdio-template-source-inputs-${{ github.sha }}\n          path: downloaded"
+        ),
+        "source-input artifact must not be downloaded into the consumer directory"
+    );
 
     let weakened_cases = [
         (
@@ -1130,6 +1151,12 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             "          python3 scripts/native_release_artifact.py authorize \\\n",
             "          echo skipped-authorization \\\n",
             "authorization path is missing active command",
+        ),
+        (
+            "broad artifact pattern",
+            "          pattern: native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}\n",
+            "          pattern: native-stdio-template-*-*-${{ github.sha }}\n",
+            "exact permitted key/value contract",
         ),
     ];
 
