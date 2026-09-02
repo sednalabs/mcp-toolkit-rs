@@ -1297,8 +1297,8 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             replace_once_after(
                 &canonical_wrapper,
                 privileged_job,
-                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
-                "          cp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n",
+                "          cp trusted-template-verification.json downloaded/native-template-verification.json || {\n",
                 "root replaced privileged shell command",
             ),
             "run body must match the exact canonical command body",
@@ -1319,8 +1319,8 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             replace_once_after(
                 &canonical_wrapper,
                 privileged_job,
-                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
-                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n            python3 -c 'import json; a=json.load(open(\"trusted-template-verification.json\")); b=json.load(open(\"downloaded/native-template-verification.json\")); print(json.dumps({k:{\"computed\":a.get(k),\"downloaded\":b.get(k)} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k)}, sort_keys=True))'\n            exit 1\n          }\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n            python3 -c 'import json; a=json.load(open(\"trusted-template-verification.json\")); b=json.load(open(\"downloaded/native-template-verification.json\")); print(json.dumps({k:{\"computed\":a.get(k),\"downloaded\":b.get(k)} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k)}, sort_keys=True))'\n            exit 1\n          }\n",
                 "root reordered privileged shell commands",
             ),
             "run body must match the exact canonical command body",
