@@ -312,7 +312,7 @@ where
             LogFormat::Logfmt => render_logfmt(&payload),
         };
         let redacted = (self.redactor)(&rendered);
-        writeln!(writer, "{}", redacted)?;
+        writeln!(writer, "{redacted}")?;
         Ok(())
     }
 }
