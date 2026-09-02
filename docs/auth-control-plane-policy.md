@@ -74,4 +74,4 @@ plumbing.
 Use `docs/policy-kernel-provenance-acceptance.md` before claiming
 policy-kernel adoption for a server. It names the runtime metadata, hosted
 manifest, artifact identity, and deny-before-mutation evidence that consumers
-must preserve.
+must preserve; the consuming repository owns that evidence.

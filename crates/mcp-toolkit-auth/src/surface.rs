@@ -1919,6 +1919,7 @@ mod tests {
                 "authorization_code".to_string(),
                 "urn:ietf:params:oauth:grant-type:device_code".to_string(),
             ]),
+            response_types_supported: Some(vec!["code".to_string()]),
             client_id_metadata_document_supported: Some(true),
             token_endpoint_auth_methods_supported: Some(vec![
                 "none".to_string(),

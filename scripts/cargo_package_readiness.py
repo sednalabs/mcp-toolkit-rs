@@ -31,6 +31,8 @@ FIRST_WAVE = [
     "mcp-toolkit-testing",
     "mcp-toolkit-policy-conformance",
     "mcp-toolkit-auth",
+    "mcp-toolkit-scratchpad",
+    "mcp-toolkit-server",
 ]
 
 FULL_VERIFY = {
@@ -44,6 +46,8 @@ REGISTRY_DEFERRED = [
     "mcp-toolkit-testing",
     "mcp-toolkit-policy-conformance",
     "mcp-toolkit-auth",
+    "mcp-toolkit-scratchpad",
+    "mcp-toolkit-server",
 ]
 
 REQUIRED_PACKAGE_FIELDS = {

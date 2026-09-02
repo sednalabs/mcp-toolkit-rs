@@ -49,6 +49,9 @@ CANONICAL_ARCHITECTURE_STRATEGY = {
         "include": [
             {"runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu"},
             {"runner": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+            {"runner": "macos-15-intel", "target": "x86_64-apple-darwin"},
+            {"runner": "macos-15", "target": "aarch64-apple-darwin"},
+            {"runner": "windows-2025", "target": "x86_64-pc-windows-msvc"},
         ]
     },
 }
@@ -239,6 +242,9 @@ class RunnerPolicyTests(unittest.TestCase):
                     "include": [
                         {"runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu"},
                         {"runner": "ubuntu-24.04-arm", "target": "aarch64-unknown-linux-gnu"},
+                        {"runner": "macos-15-intel", "target": "x86_64-apple-darwin"},
+                        {"runner": "macos-15", "target": "aarch64-apple-darwin"},
+                        {"runner": "windows-2025", "target": "x86_64-pc-windows-msvc"},
                     ]
                 },
             },

@@ -62,7 +62,7 @@ const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
         "docs/dependency-governance.md",
     ),
     (
-        "Native Linux release workflow",
+        "Native release workflow",
         ".github/workflows/native-release-artifacts.yml",
     ),
     (
@@ -124,6 +124,15 @@ pub struct ReleasePreflightReport {
     pub checks: Vec<ReleasePreflightCheck>,
 }
 
+/// Selects the release-preflight contract applied to a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleasePreflightProfile {
+    /// Require the complete generated-template proof surface (the default).
+    GeneratedTemplateStrict,
+    /// Check an existing public stdio repository without requiring generated-template metadata.
+    PublicStdio,
+}
+
 impl ReleasePreflightReport {
     /// Returns true when all required checks pass.
     pub fn ready(&self) -> bool {
@@ -177,6 +186,14 @@ impl ReleasePreflightReport {
 /// This check is intentionally static and credential-free. It is suitable for
 /// use before a build, before a PR, or in generated-project CI.
 pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightReport {
+    inspect_release_preflight_with_profile(root, ReleasePreflightProfile::GeneratedTemplateStrict)
+}
+
+/// Inspects a project using an explicit release-preflight profile.
+pub fn inspect_release_preflight_with_profile(
+    root: impl AsRef<Path>,
+    profile: ReleasePreflightProfile,
+) -> ReleasePreflightReport {
     let root = root.as_ref().to_path_buf();
     let doctor = inspect_project(&root);
     let mut checks = Vec::new();
@@ -184,7 +201,7 @@ pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightRepo
     checks.push(ReleasePreflightCheck {
         label: "Generated scaffold doctor",
         target: "mcp-toolkit doctor".to_string(),
-        required: true,
+        required: matches!(profile, ReleasePreflightProfile::GeneratedTemplateStrict),
         passed: doctor.ready(),
         detail: if doctor.ready() {
             "starter source, schema, transport proof, and workflow are present".to_string()
@@ -197,7 +214,7 @@ pub fn inspect_release_preflight(root: impl AsRef<Path>) -> ReleasePreflightRepo
         checks.push(file_check(&root, label, path));
     }
 
-    checks.push(probe_scenario_check(&root, doctor.shape));
+    checks.push(probe_scenario_check(&root, doctor.shape, profile));
     checks.push(manifest_metadata_check(&root));
     checks.push(portable_toolkit_dependencies_check(&root));
     checks.push(cargo_local_path_overrides_check(&root));
@@ -227,7 +244,27 @@ fn file_check(root: &Path, label: &'static str, path: &'static str) -> ReleasePr
     }
 }
 
-fn probe_scenario_check(root: &Path, shape: DoctorShape) -> ReleasePreflightCheck {
+fn probe_scenario_check(
+    root: &Path,
+    shape: DoctorShape,
+    profile: ReleasePreflightProfile,
+) -> ReleasePreflightCheck {
+    if matches!(profile, ReleasePreflightProfile::PublicStdio)
+        && matches!(shape, DoctorShape::Unknown)
+    {
+        let present = exists(root, "spec/mcp_probe_stdio_smoke.v1.json");
+        return ReleasePreflightCheck {
+            label: "MCP stdio probe scenario",
+            target: "spec/mcp_probe_stdio_smoke.v1.json".to_string(),
+            required: true,
+            passed: present,
+            detail: if present {
+                "explicit stdio probe scenario present".into()
+            } else {
+                "existing public stdio profile requires an explicit stdio probe scenario".into()
+            },
+        };
+    }
     let (target, detail) = match shape {
         DoctorShape::HostedHttpAuth => (
             HTTP_AUTH_PROBE_SCENARIO,
@@ -571,11 +608,20 @@ test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 source_tree=$(git rev-parse HEAD^{tree})
 x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
 arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
 python3 scripts/native_release_artifact.py compare \
   --archive "$x86_archive" \
   --target x86_64-unknown-linux-gnu \
   --archive "$arm_archive" \
   --target aarch64-unknown-linux-gnu \
+  --archive "$mac_x86_archive" \
+  --target x86_64-apple-darwin \
+  --archive "$mac_arm_archive" \
+  --target aarch64-apple-darwin \
+  --archive "$windows_archive" \
+  --target x86_64-pc-windows-msvc \
   --binary-name "$BINARY_NAME" \
   --candidate "$GITHUB_SHA" \
   --source-repository "$GITHUB_REPOSITORY" \
@@ -587,7 +633,7 @@ python3 scripts/native_release_artifact.py compare \
   --lockfile Cargo.lock \
   --output trusted-verification.json
 cmp trusted-verification.json downloaded/native-release-verification.json
-test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
 python3 scripts/native_release_artifact.py authorize \
   --verification trusted-verification.json \
   --binary-name "$BINARY_NAME" \
@@ -611,11 +657,20 @@ test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 source_tree=$(git rev-parse HEAD^{tree})
 x86_archive="downloaded/$BINARY_NAME-x86_64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
 arm_archive="downloaded/$BINARY_NAME-aarch64-unknown-linux-gnu-$GITHUB_SHA.tar.gz"
+mac_x86_archive="downloaded/$BINARY_NAME-x86_64-apple-darwin-$GITHUB_SHA.tar.gz"
+mac_arm_archive="downloaded/$BINARY_NAME-aarch64-apple-darwin-$GITHUB_SHA.tar.gz"
+windows_archive="downloaded/$BINARY_NAME-x86_64-pc-windows-msvc-$GITHUB_SHA.tar.gz"
 python3 scripts/native_release_artifact.py compare \
   --archive "$x86_archive" \
   --target x86_64-unknown-linux-gnu \
   --archive "$arm_archive" \
   --target aarch64-unknown-linux-gnu \
+  --archive "$mac_x86_archive" \
+  --target x86_64-apple-darwin \
+  --archive "$mac_arm_archive" \
+  --target aarch64-apple-darwin \
+  --archive "$windows_archive" \
+  --target x86_64-pc-windows-msvc \
   --binary-name "$BINARY_NAME" \
   --candidate "$GITHUB_SHA" \
   --source-repository "$GITHUB_REPOSITORY" \
@@ -626,8 +681,11 @@ python3 scripts/native_release_artifact.py compare \
   --manifest "$MANIFEST_PATH" \
   --lockfile templates/single-crate-public-stdio-server/Cargo.lock \
   --output trusted-template-verification.json
-cmp trusted-template-verification.json downloaded/native-template-verification.json
-test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 5
+cmp trusted-template-verification.json downloaded/native-template-verification.json || {
+  python3 -c 'import json; a=json.load(open("trusted-template-verification.json")); b=json.load(open("downloaded/native-template-verification.json")); print(json.dumps({k:{"computed":a.get(k),"downloaded":b.get(k)} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k)}, sort_keys=True))'
+  exit 1
+}
+test "$(find downloaded -maxdepth 1 -type f | wc -l)" -eq 11
 python3 scripts/native_release_artifact.py authorize \
   --verification trusted-template-verification.json \
   --binary-name "$BINARY_NAME" \
@@ -649,7 +707,7 @@ const CHECKOUT_INPUTS: &[(&str, ExpectedStepValue)] = &[
 const GENERATED_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
-        ExpectedStepValue::String("native-linux-*-${{ github.sha }}"),
+        ExpectedStepValue::String("native-*-${{ github.sha }}"),
     ),
     ("path", ExpectedStepValue::String("downloaded")),
     ("merge-multiple", ExpectedStepValue::Bool(true)),
@@ -682,10 +740,26 @@ const ROOT_LOCKFILE_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
         ExpectedStepValue::String("templates/single-crate-public-stdio-server"),
     ),
 ];
-const ROOT_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+const ROOT_LINUX_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
     (
         "pattern",
         ExpectedStepValue::String("native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}"),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+    ("merge-multiple", ExpectedStepValue::Bool(true)),
+];
+const ROOT_APPLE_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "pattern",
+        ExpectedStepValue::String("native-stdio-template-*-apple-darwin-${{ github.sha }}"),
+    ),
+    ("path", ExpectedStepValue::String("downloaded")),
+    ("merge-multiple", ExpectedStepValue::Bool(true)),
+];
+const ROOT_WINDOWS_ARTIFACT_DOWNLOAD_INPUTS: &[(&str, ExpectedStepValue)] = &[
+    (
+        "pattern",
+        ExpectedStepValue::String("native-stdio-template-*-pc-windows-msvc-${{ github.sha }}"),
     ),
     ("path", ExpectedStepValue::String("downloaded")),
     ("merge-multiple", ExpectedStepValue::Bool(true)),
@@ -781,10 +855,24 @@ const ROOT_PRIVILEGED_STEPS: &[PrivilegedStepContract] = &[
         },
     },
     PrivilegedStepContract {
-        name: "Download verified template artifact set",
+        name: "Download exact Linux native template artifacts",
         body: PrivilegedStepBody::Action {
             uses: DOWNLOAD_ACTION,
-            inputs: ROOT_ARTIFACT_DOWNLOAD_INPUTS,
+            inputs: ROOT_LINUX_ARTIFACT_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Download exact Apple native template artifacts",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_APPLE_ARTIFACT_DOWNLOAD_INPUTS,
+        },
+    },
+    PrivilegedStepContract {
+        name: "Download exact Windows native template artifacts",
+        body: PrivilegedStepBody::Action {
+            uses: DOWNLOAD_ACTION,
+            inputs: ROOT_WINDOWS_ARTIFACT_DOWNLOAD_INPUTS,
         },
     },
     PrivilegedStepContract {
@@ -854,6 +942,9 @@ fn validate_exact_native_architecture_strategy(job: &YamlMapping, context: &str)
                                         let expected = [
                                             ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
                                             ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
+                                            ("macos-15-intel", "x86_64-apple-darwin"),
+                                            ("macos-15", "aarch64-apple-darwin"),
+                                            ("windows-2025", "x86_64-pc-windows-msvc"),
                                         ];
                                         include.len() == expected.len()
                                             && include.iter().zip(expected).all(
@@ -879,7 +970,7 @@ fn validate_exact_native_architecture_strategy(job: &YamlMapping, context: &str)
         Vec::new()
     } else {
         vec![format!(
-            "{context} must use only runs-on: ${{{{ matrix.runner }}}}, fail-fast: false, and the exact ordered x86_64 and arm64 matrix.include hosted runner/target rows with no extra keys or dimensions"
+            "{context} must use only runs-on: ${{{{ matrix.runner }}}}, fail-fast: false, and the exact ordered five-target matrix.include hosted runner/target rows with no extra keys or dimensions"
         )]
     }
 }
@@ -1323,7 +1414,7 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
         .filter_map(YamlValue::as_str)
         .collect::<Vec<_>>();
     job_names.sort_unstable();
-    if jobs.len() != 2 || job_names != ["attest-native-template", "prove-native-template"] {
+    if jobs.len() != 2 || job_names != ["attest-native-linux-template", "prove-native-template"] {
         violations.push(
             "template attestation workflow jobs must contain only proof and attestation jobs"
                 .to_string(),
@@ -1332,9 +1423,9 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
     let prove = yaml_get(jobs, "prove-native-template")
         .ok_or_else(|| "prove-native-template job is required".to_string())
         .and_then(|value| yaml_mapping(value, "prove-native-template"))?;
-    let attest = yaml_get(jobs, "attest-native-template")
-        .ok_or_else(|| "attest-native-template job is required".to_string())
-        .and_then(|value| yaml_mapping(value, "attest-native-template"))?;
+    let attest = yaml_get(jobs, "attest-native-linux-template")
+        .ok_or_else(|| "attest-native-linux-template job is required".to_string())
+        .and_then(|value| yaml_mapping(value, "attest-native-linux-template"))?;
 
     let mut prove_keys = prove
         .keys()
@@ -1382,7 +1473,7 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
                 .to_string(),
         );
     }
-    if job_needs(attest, "attest-native-template")? != ["prove-native-template"] {
+    if job_needs(attest, "attest-native-linux-template")? != ["prove-native-template"] {
         violations
             .push("template attestation must depend on successful template proof".to_string());
     }
@@ -1418,11 +1509,11 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
 
     violations.extend(validate_privileged_steps(
         attest,
-        "attest-native-template",
+        "attest-native-linux-template",
         ROOT_PRIVILEGED_STEPS,
     )?);
 
-    let attest_run = job_run_text(attest, "attest-native-template")?;
+    let attest_run = job_run_text(attest, "attest-native-linux-template")?;
     for required in [
         "git fetch --force --no-tags origin +refs/heads/main:refs/remotes/origin/main",
         "source_main_proven=$(python3 scripts/native_release_artifact.py prove-source",
@@ -1539,7 +1630,7 @@ fn native_release_contract_check(root: &Path) -> ReleasePreflightCheck {
     };
 
     ReleasePreflightCheck {
-        label: "Native Linux release contract",
+        label: "Native release contract",
         target:
             ".github/workflows/native-release-artifacts.yml + optional native template attestation workflow + scripts/native_release_artifact.py"
                 .to_string(),

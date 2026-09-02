@@ -151,6 +151,8 @@ pub struct OidcDiscovery {
     pub device_authorization_endpoint: Option<String>,
     #[serde(rename = "grant_types_supported")]
     pub grant_types_supported: Option<Vec<String>>,
+    #[serde(rename = "response_types_supported")]
+    pub response_types_supported: Option<Vec<String>>,
     #[serde(rename = "client_id_metadata_document_supported")]
     pub client_id_metadata_document_supported: Option<bool>,
     #[serde(rename = "token_endpoint_auth_methods_supported")]
@@ -427,6 +429,7 @@ mod profile_tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            response_types_supported: None,
             client_id_metadata_document_supported: None,
             token_endpoint_auth_methods_supported: None,
             code_challenge_methods_supported: None,
@@ -459,6 +462,7 @@ mod profile_tests {
             introspection_endpoint: None,
             device_authorization_endpoint: None,
             grant_types_supported: None,
+            response_types_supported: None,
             client_id_metadata_document_supported: None,
             token_endpoint_auth_methods_supported: None,
             code_challenge_methods_supported: None,
@@ -536,6 +540,7 @@ mod profile_tests {
                 introspection_endpoint: None,
                 device_authorization_endpoint: None,
                 grant_types_supported: None,
+                response_types_supported: None,
                 client_id_metadata_document_supported: None,
                 token_endpoint_auth_methods_supported: None,
                 code_challenge_methods_supported: None,

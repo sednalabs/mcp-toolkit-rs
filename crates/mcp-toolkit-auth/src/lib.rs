@@ -37,6 +37,7 @@ mod authenticator;
 mod claims;
 mod config;
 mod context;
+mod discovery_validation;
 mod dpop;
 mod error;
 mod providers;
@@ -52,6 +53,9 @@ pub use config::{
 pub use context::{
     auth_context_from_parts, auth_context_ref_from_parts, verified_auth_context_from_parts,
     verified_auth_context_ref_from_parts, AuthContext, VerifiedAuthContext,
+};
+pub use discovery_validation::{
+    OidcDiscoveryEndpoint, OidcDiscoveryRequirements, OidcDiscoveryValidationError,
 };
 pub use dpop::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, DpopParseError, DpopProof,

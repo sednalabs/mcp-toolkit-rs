@@ -229,8 +229,8 @@ fn release_preflight_accepts_public_stdio_generated_project() {
     assert!(stdout.contains("Public ready: yes"));
     assert!(stdout.contains("CodeQL workflow"));
     assert!(stdout.contains("Dependency governance workflow"));
-    assert!(stdout.contains("Native Linux release workflow"));
-    assert!(stdout.contains("Native Linux release contract"));
+    assert!(stdout.contains("Native release workflow"));
+    assert!(stdout.contains("Native release contract"));
     assert!(stdout.contains("Portable toolkit dependencies"));
     assert!(stdout.contains("High-confidence secret marker scan"));
 
@@ -266,7 +266,7 @@ fn release_preflight_rejects_incomplete_native_release_semantics() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(contract.detail.contains("cargo build --release --locked"));
@@ -302,7 +302,7 @@ fn release_preflight_rejects_unpinned_native_release_actions() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(contract.detail.contains("not pinned"));
@@ -338,7 +338,7 @@ fn release_preflight_rejects_folded_unpinned_native_release_actions() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -377,7 +377,7 @@ fn release_preflight_rejects_inert_release_semantics() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -418,7 +418,7 @@ fn release_preflight_rejects_untrusted_release_authority() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(contract.detail.contains("trusted push events"));
@@ -454,7 +454,7 @@ fn release_preflight_rejects_extra_privileged_release_job() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -493,7 +493,7 @@ fn release_preflight_rejects_unexpected_release_runner() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -544,10 +544,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "self-hosted extra runner dimension",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!(
-                    "{include_rows}        runner: [ubuntu-24.04, self-hosted]\n"
-                ),
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: [ubuntu-24.04, self-hosted]\n            target: x86_64-unknown-linux-gnu\n",
                 "self-hosted extra runner dimension",
             ),
         ),
@@ -555,10 +553,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "extra target dimension",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!(
-                    "{include_rows}        target: [x86_64-unknown-linux-gnu]\n"
-                ),
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n            target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]\n",
                 "extra target dimension",
             ),
         ),
@@ -566,8 +562,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "extra os dimension",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!("{include_rows}        os: [linux]\n"),
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "          - runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n            os: linux\n",
                 "extra os dimension",
             ),
         ),
@@ -575,8 +571,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "matrix exclude",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!("{include_rows}        exclude: []\n"),
+                "            target: x86_64-pc-windows-msvc\n    env:\n",
+                "            target: x86_64-pc-windows-msvc\n        exclude: []\n    env:\n",
                 "matrix exclude",
             ),
         ),
@@ -584,8 +580,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "unknown matrix key",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!("{include_rows}        unexpected: true\n"),
+                "            target: x86_64-pc-windows-msvc\n    env:\n",
+                "            target: x86_64-pc-windows-msvc\n        unexpected: true\n    env:\n",
                 "unknown matrix key",
             ),
         ),
@@ -702,7 +698,7 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             &canonical,
             label,
             mutated,
-            "exact ordered x86_64 and arm64 matrix.include",
+            "exact ordered five-target matrix.include",
         );
     }
 
@@ -738,7 +734,7 @@ fn release_preflight_rejects_incomplete_tag_ancestry_proof() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -778,7 +774,7 @@ fn release_preflight_rejects_attestation_before_consumer_verification() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed);
     assert!(
@@ -973,8 +969,8 @@ fn release_preflight_rejects_generated_privileged_step_and_subject_drift() {
             replace_once_after(
                 &canonical,
                 privileged_job,
-                "          cmp trusted-verification.json downloaded/native-release-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n",
-                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n          cmp trusted-verification.json downloaded/native-release-verification.json\n",
+                "          cmp trusted-verification.json downloaded/native-release-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-verification.json downloaded/native-release-verification.json\n",
                 "reordered privileged shell commands",
             ),
             "run body must match the exact canonical command body",
@@ -1082,9 +1078,30 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
     let canonical_contract = canonical_report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(canonical_contract.passed, "{}", canonical_contract.detail);
+    for pattern in [
+        "pattern: native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}",
+        "pattern: native-stdio-template-*-apple-darwin-${{ github.sha }}",
+        "pattern: native-stdio-template-*-pc-windows-msvc-${{ github.sha }}",
+    ] {
+        assert_eq!(
+            canonical_wrapper.matches(pattern).count(),
+            1,
+            "canonical wrapper must contain exactly one {pattern} download"
+        );
+    }
+    assert!(
+        !canonical_wrapper.contains("pattern: native-stdio-template-*-*-${{ github.sha }}"),
+        "canonical wrapper must not use a broad artifact pattern that includes source inputs"
+    );
+    assert!(
+        !canonical_wrapper.contains(
+            "native-stdio-template-source-inputs-${{ github.sha }}\n          path: downloaded"
+        ),
+        "source-input artifact must not be downloaded into the consumer directory"
+    );
 
     let weakened_cases = [
         (
@@ -1135,6 +1152,12 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             "          echo skipped-authorization \\\n",
             "authorization path is missing active command",
         ),
+        (
+            "broad artifact pattern",
+            "          pattern: native-stdio-template-*-unknown-linux-gnu-${{ github.sha }}\n",
+            "          pattern: native-stdio-template-*-*-${{ github.sha }}\n",
+            "exact permitted key/value contract",
+        ),
     ];
 
     for (label, original, replacement, expected_detail) in weakened_cases {
@@ -1151,7 +1174,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         let contract = report
             .checks
             .iter()
-            .find(|check| check.label == "Native Linux release contract")
+            .find(|check| check.label == "Native release contract")
             .expect("native release contract check");
         assert!(!contract.passed, "{label} weakening should fail preflight");
         assert!(
@@ -1167,7 +1190,7 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
         "        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8\n";
     let reverify_run =
         "      - name: Reverify trusted consumer artifact set\n        shell: bash\n";
-    let privileged_job = "  attest-native-template:\n";
+    let privileged_job = "  attest-native-linux-template:\n";
     let structural_cases = vec![
         (
             "root extra privileged run",
@@ -1301,8 +1324,8 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             replace_once_after(
                 &canonical_wrapper,
                 privileged_job,
-                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
-                "          cp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n",
+                "          cp trusted-template-verification.json downloaded/native-template-verification.json || {\n",
                 "root replaced privileged shell command",
             ),
             "run body must match the exact canonical command body",
@@ -1323,8 +1346,8 @@ fn release_preflight_rejects_weakened_native_template_attestation_wrapper() {
             replace_once_after(
                 &canonical_wrapper,
                 privileged_job,
-                "          cmp trusted-template-verification.json downloaded/native-template-verification.json\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n",
-                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 5\n          cmp trusted-template-verification.json downloaded/native-template-verification.json\n",
+                "          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n            python3 -c 'import json; a=json.load(open(\"trusted-template-verification.json\")); b=json.load(open(\"downloaded/native-template-verification.json\")); print(json.dumps({k:{\"computed\":a.get(k),\"downloaded\":b.get(k)} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k)}, sort_keys=True))'\n            exit 1\n          }\n          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n",
+                "          test \"$(find downloaded -maxdepth 1 -type f | wc -l)\" -eq 11\n          cmp trusted-template-verification.json downloaded/native-template-verification.json || {\n            python3 -c 'import json; a=json.load(open(\"trusted-template-verification.json\")); b=json.load(open(\"downloaded/native-template-verification.json\")); print(json.dumps({k:{\"computed\":a.get(k),\"downloaded\":b.get(k)} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k)}, sort_keys=True))'\n            exit 1\n          }\n",
                 "root reordered privileged shell commands",
             ),
             "run body must match the exact canonical command body",
@@ -1435,7 +1458,7 @@ fn release_preflight_accepts_local_native_release_actions() {
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(contract.passed, "{}", contract.detail);
     assert!(report.ready());
@@ -2437,7 +2460,7 @@ fn assert_native_release_contract_rejects(
     let contract = report
         .checks
         .iter()
-        .find(|check| check.label == "Native Linux release contract")
+        .find(|check| check.label == "Native release contract")
         .expect("native release contract check");
     assert!(!contract.passed, "{label} weakening should fail preflight");
     assert!(

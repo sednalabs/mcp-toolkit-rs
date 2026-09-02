@@ -63,20 +63,46 @@ tracing::info!("tool finished");
 After:
 
 ```rust
-use mcp_toolkit_observability::{emit_event, safe_text, EventContext, Level};
+use std::time::Duration;
+use mcp_toolkit_observability::{
+    DiagnosticToolName, RequestCorrelationId, ToolCallTerminalDiagnostic,
+};
 
-let ctx = EventContext::new()
-    .with_tool_name("example.search")
-    .with_session_id(session_id);
-
-emit_event(Level::INFO, "tool.call.started", &ctx, &[]);
-emit_event(
-    Level::INFO,
-    "tool.call.finished",
-    &ctx,
-    &[safe_text("outcome", "success")],
-);
+ToolCallTerminalDiagnostic::success(
+    RequestCorrelationId::parse("018f3f8e-7b9a-4d12-8c34-1234567890ab")?,
+    DiagnosticToolName::new("example.search")?,
+    Duration::from_millis(12),
+)
+.emit();
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+The typed terminal record is the preferred tool-call completion boundary. It
+emits one `mcp.tool_call.terminal` event with a fixed schema and consumes the
+record. This guarantees at-most-once emission for that record instance; the
+server lifecycle remains responsible for constructing one record per real tool
+call. Failure records accept only toolkit-owned error code and class enum
+variants. There is deliberately no API for arguments, request or response
+bodies, tokens, claims, raw errors, or dynamic error identifiers. Request
+correlation accepts only canonical lowercase RFC4122 UUID v4 values.
+Schema/catalogue revisions accept only a fixed-width SHA-256 fingerprint.
+
+UUID v4 validation checks syntax, version, and variant; it cannot prove that a
+caller used a secure random source or establish trusted origin. Generate the
+identifier with a cryptographically secure random source. Treat it only as a
+correlation value, never as identity, authentication, authorization,
+provenance, replay, or audit authority.
+
+`DiagnosticToolName` validates only the identifier alphabet and byte bound; it
+does not prove catalogue membership. Each server integration must source the
+value from its registered catalogue entry and prove that mapping in its own
+lifecycle tests.
+
+Principal and session correlation are intentionally outside this initial
+generic contract. Adding either requires a separately reviewed identity and
+cryptographic substrate that owns key management, domain separation, rotation,
+and correlation policy. Callers must not overload the request UUID, tool name,
+or catalogue fingerprint with principal or session data.
 
 ## Server Migration Checklist
 
@@ -94,10 +120,12 @@ Use this checklist per server.
    - Startup listening event.
    - Auth failure path.
    - Transport/session replay failures.
-4. Replace tool lifecycle logs.
-   - `tool.call.started`.
-   - `tool.call.finished`.
-   - `tool.call.failed`.
+4. Replace tool completion logs with one typed terminal record.
+   - `mcp.tool_call.terminal` with `outcome=success`.
+   - `mcp.tool_call.terminal` with `outcome=failure` and closed error enums.
+   - Keep start/progress events separate and low-volume only when operationally required.
+   - Make the server lifecycle construct and consume one terminal record on
+     every success, denial, failure, cancellation, and panic-safe exit path.
 5. Add task lifecycle logs if the server uses tasks.
 6. Add metrics facade calls if metrics are enabled.
 7. Validate with toolkit tests, server smoke tests, and log redaction checks.
@@ -125,7 +153,13 @@ After deploying a migrated server, verify:
    - Trigger an auth failure and confirm no raw token or secret appears.
 2. Tool lifecycle diagnostics.
    - Run at least one successful tool call and one failing tool call.
-   - Confirm start and finish/fail events exist.
+   - Confirm the server integration creates exactly one terminal record for
+     each call; the toolkit enforces only at-most-once emission per record.
+   - Confirm the terminal event has the same request correlation identifier as
+     the enclosing request path.
+   - Confirm no identity, authorization, provenance, or replay decision relies
+     on the request correlation identifier.
+   - Confirm no principal, session, or other identity value is present.
 3. Metrics health if `metrics-facade` is enabled.
    - Confirm metrics exist and labels are bounded.
 4. Redaction guarantees.
@@ -157,6 +191,19 @@ After deploying a migrated server, verify:
 
 - Route dynamic values through `safe_text` or label normalizers.
 - Remove user-input dimensions from per-event or per-metric labels.
+
+`A terminal event needs additional payload`
+
+- Do not add an arbitrary field map or raw error to the terminal contract.
+- Map failures to a stable code and class.
+- Put high-volume debugging data behind a separately reviewed diagnostic path.
+
+`A service-specific error value needs to be recorded`
+
+- Map it onto the closest toolkit-owned code and class enum at the service boundary.
+- Propose an explicit enum extension when no existing code describes the failure.
+- Do not leak dynamic error text, tenant identifiers, or dependency payloads
+  through error identifiers.
 
 ## Rollback Strategy
 
