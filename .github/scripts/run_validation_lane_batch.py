@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -115,7 +116,7 @@ def main() -> int:
         output = output_dir / f"{index + 1:02d}-{lane_id.replace('/', '-')}.json"
         log = output.with_suffix(".log")
         command = [
-            sys.executable, "-P", str(runner),
+            sys.executable, str(runner),
             "--repo-root", str(root), "--working-directory", working_directory,
             "--script-path", script_path,
             "--script-args-json", json.dumps(lane.get("script_args") or [], separators=(",", ":")),
@@ -131,9 +132,22 @@ def main() -> int:
             "--run-id", args.run_id, "--run-attempt", args.run_attempt,
             "--output", str(output), "--log-file", str(log),
         ]
-        proc = subprocess.run(command, cwd=root, check=False)
+        proc = subprocess.run(command, cwd=root, env={**os.environ, "PYTHONSAFEPATH": "1"}, check=False)
         if output.is_file():
-            payload = json.loads(output.read_text(encoding="utf-8"))
+            try:
+                payload = json.loads(output.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = None
+            if not isinstance(payload, dict):
+                payload = {
+                    "schema_version": 2, "lane_id": lane_id,
+                    "summary_family": str(lane.get("summary_family") or lane_id),
+                    "frontier_role": str(lane.get("frontier_role") or "depth"),
+                    "outcome": "unknown", "exit_code": proc.returncode,
+                    "artifact_present": True, "artifact_kind": "runner-failure",
+                    "preflight_error": "lane output was missing or malformed",
+                    "candidate_ref": args.candidate_ref, "candidate_sha": args.candidate_sha,
+                }
             payload.update({"batch_id": args.batch_id, "batch_index": index, "batch_lane_count": len(lane_ids)})
             output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             results.append(payload)

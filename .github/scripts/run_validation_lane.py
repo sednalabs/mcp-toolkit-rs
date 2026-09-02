@@ -189,14 +189,24 @@ def main() -> int:
         output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return 1
 
-    command = ["bash", str(script), *script_args] if script.suffix in {".sh", ".bash"} else ["python3", "-P", str(script), *script_args]
+    command = ["bash", str(script), *script_args] if script.suffix in {".sh", ".bash"} else [sys.executable, str(script), *script_args]
+    child_env = {**os.environ, "PYTHONSAFEPATH": "1"}
     started = int(time.time() * 1000)
     exit_code = 1
     try:
         with log_path.open("w", encoding="utf-8") as log:
             log.write(f"candidate_ref={candidate_ref}\ncandidate_sha={candidate_sha}\nlane_id={lane_id}\n")
             log.flush()
-            proc = subprocess.Popen(command, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(
+                command,
+                cwd=workdir,
+                env=child_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             assert proc.stdout is not None
             for line in proc.stdout:
                 sys.stdout.write(line)

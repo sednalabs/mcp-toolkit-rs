@@ -97,6 +97,13 @@ def normalize_catalog(catalog: dict) -> dict:
         family_members.setdefault(lane["summary_family"], []).append(lane_id)
         lanes.append(lane)
 
+    active_family_members = {
+        family: sorted(
+            item["lane_id"] for item in lanes
+            if item["summary_family"] == family and item["status_class"] == "active"
+        )
+        for family in family_members
+    }
     for lane in lanes:
         members = sorted(family_members[lane["summary_family"]])
         expected = "sentinel" if lane["lane_id"] == members[0] else "depth"
@@ -105,11 +112,7 @@ def normalize_catalog(catalog: dict) -> dict:
             raise SystemExit(f"lane {lane['lane_id']} has unsupported frontier_role {declared!r}")
         # The lexicographically first active lane is always the sentinel.  This
         # is deterministic even when catalog entries are reordered.
-        active_members = sorted(
-            item["lane_id"] for item in lanes
-            if item["summary_family"] == lane["summary_family"]
-            and item["status_class"] == "active"
-        )
+        active_members = active_family_members[lane["summary_family"]]
         if lane["status_class"] == "active":
             expected = "sentinel" if lane["lane_id"] == active_members[0] else "depth"
         if declared is not None and declared != expected:

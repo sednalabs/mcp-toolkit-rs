@@ -109,13 +109,13 @@ def main() -> int:
     if not isinstance(selected, list) or not all(isinstance(value, str) and value.strip() for value in selected):
         raise SystemExit("selected lane ids must be an array of non-empty strings")
     selected = [value.strip() for value in selected]
-    if len(set(selected)) != len(selected):
-        raise SystemExit("selected lane ids must be duplicate-free")
     planned = json_arg(args.planned_matrix_json, "planned matrix", {})
     if not selected and isinstance(planned, dict):
         include = planned.get("include", [])
         if isinstance(include, list):
             selected = [str(item["lane_id"]) for item in include if isinstance(item, dict) and item.get("lane_id")]
+    if len(set(selected)) != len(selected):
+        raise SystemExit("selected lane ids must be duplicate-free")
 
     artifacts, problems = load_artifacts(Path(args.lane_summary_dir).resolve())
     expected_sha = (args.candidate_sha or args.head_sha or "").strip().lower()
@@ -173,29 +173,29 @@ def main() -> int:
         if (lane_id in {"rmcp-msrv", "package"} or lane_id.endswith((".rmcp-msrv", "-rmcp-msrv", ".package", "-package"))) and row.get("acceptance_claim") == "accepted":
             blockers.append(blocker(row, "diagnostic rmcp/package lane must not claim acceptance"))
 
-    families: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    lane_families: dict[str, list[dict[str, Any]]] = defaultdict(list)
     artifact_names: dict[str, str] = {}
     for row in rows:
-        families[str(row.get("summary_family") or row.get("lane_id"))].append(row)
+        lane_families[str(row.get("summary_family") or row.get("lane_id"))].append(row)
         artifact_name = str(row.get("artifact_name") or "")
         if artifact_name:
             previous = artifact_names.get(artifact_name)
             if previous and previous != str(row.get("lane_id")):
                 blockers.append({"kind": "artifact", "lane_id": str(row.get("lane_id")), "reason": "same-name artifact is reused by multiple lanes", "independently_actionable": True})
             artifact_names[artifact_name] = str(row.get("lane_id"))
-    for family, family_rows in families.items():
+    for family, family_rows in lane_families.items():
         sentinels = [row for row in family_rows if row.get("frontier_role") == "sentinel"]
         if len(sentinels) != 1:
             blockers.append({"kind": "family", "summary_family": family, "reason": f"expected exactly one deterministic sentinel, found {len(sentinels)}", "independently_actionable": True})
 
     # Collapse failures by summary family while retaining every independent lane.
-    families: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    blocker_families: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in blockers:
         if item.get("kind") == "lane":
-            families[str(item.get("summary_family") or item.get("lane_id"))].append(item)
+            blocker_families[str(item.get("summary_family") or item.get("lane_id"))].append(item)
     primary: list[dict[str, Any]] = []
     secondary: list[dict[str, Any]] = []
-    for family, items in families.items():
+    for family, items in blocker_families.items():
         ranked = sorted(items, key=lambda item: (SEVERITY.get(str(item.get("outcome")), 9), 0 if item.get("frontier_role") == "sentinel" else 1, str(item.get("lane_id"))))
         primary.append(ranked[0])
         secondary.extend(ranked[1:])
