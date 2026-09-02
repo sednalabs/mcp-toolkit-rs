@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and verify exact native Linux MCP server release archives."""
+"""Build and verify exact native MCP server release archives."""
 
 from __future__ import annotations
 
@@ -61,6 +61,7 @@ RELEASE_TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 )
+WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 PAYLOAD_FILES = frozenset(
     {
         "BUILD-CANDIDATE",
@@ -74,6 +75,41 @@ PAYLOAD_FILES = frozenset(
 
 class ArtifactError(ValueError):
     """Reports an invalid release input or archive."""
+
+
+def require_logical_binary_name(logical_name: str) -> None:
+    if not isinstance(logical_name, str) or not logical_name or logical_name.endswith(".exe"):
+        raise ArtifactError("binary name must be a non-empty logical name without .exe")
+
+
+def payload_filename(logical_name: str, target: str) -> str:
+    """Return the physical archive payload name for a logical binary name."""
+    require_logical_binary_name(logical_name)
+    platform_validator(target)
+    return f"{logical_name}.exe" if target == WINDOWS_TARGET else logical_name
+
+
+def archive_filename(logical_name: str, target: str, candidate: str) -> str:
+    """Return the canonical outer archive name for a logical binary name."""
+    require_logical_binary_name(logical_name)
+    platform_validator(target)
+    require_candidate(candidate)
+    return f"{logical_name}-{target}-{candidate}.tar.gz"
+
+
+def expected_non_linux_runtime(target: str) -> dict[str, str]:
+    """Return the exact runtime identity contract for a non-Linux target."""
+    validator = platform_validator(target)
+    if validator.format == "macho":
+        return {"format": "macho", "architecture": validator.architecture, "platform": "apple"}
+    if validator.format == "pe":
+        return {
+            "format": "pe",
+            "architecture": validator.architecture,
+            "platform": "windows",
+            "abi": "msvc",
+        }
+    raise ArtifactError(f"runtime identity is only defined here for non-Linux targets: {target}")
 
 
 def sha256(path: Path) -> str:
@@ -269,9 +305,7 @@ def inspect_platform_runtime(path: Path, target: str) -> dict[str, str]:
     verify_platform_binary(path, target)
     if validator.format == "elf":
         return {"format": "elf", "architecture": validator.architecture, **inspect_glibc(path, target)}
-    if validator.format == "macho":
-        return {"format": "macho", "architecture": validator.architecture, "platform": "apple"}
-    return {"format": "pe", "architecture": validator.architecture, "platform": "windows", "abi": "msvc"}
+    return expected_non_linux_runtime(target)
 
 
 def native_release_metadata_v3(
@@ -337,7 +371,7 @@ def validate_native_release_metadata_v3(
     if not isinstance(target, str) or not isinstance(runtime, dict):
         raise ArtifactError("v3 release metadata has an invalid target/runtime contract")
     validator = platform_validator(target)
-    if runtime.get("format") != validator.format or runtime.get("architecture") != validator.architecture:
+    if validator.format != "elf" and runtime != expected_non_linux_runtime(target):
         raise ArtifactError("v3 runtime identity does not match the target validator")
 
 
@@ -618,6 +652,7 @@ def package(
     source_main_proven: bool,
     output_dir: Path,
 ) -> Path:
+    require_logical_binary_name(binary_name)
     require_candidate(candidate)
     require_source(source_repository, source_event, source_ref, source_tree)
     legacy_linux = target in TARGET_MACHINES
@@ -636,16 +671,13 @@ def package(
     if inventory_value["tools"] != [tool.get("name") for tool in schema_value["tools"]]:
         raise ArtifactError("tool inventory and schema tool names differ")
 
-    root_name = f"{binary_name}-{target}"
+    archive = output_dir / archive_filename(binary_name, target, candidate)
+    root_name = archive.name.removesuffix(".tar.gz")
+    archive_binary_name = payload_filename(binary_name, target)
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="native-release-") as temporary:
         root = Path(temporary) / root_name
         root.mkdir()
-        archive_binary_name = (
-            f"{binary_name}.exe"
-            if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe")
-            else binary_name
-        )
         shutil.copyfile(binary, root / archive_binary_name)
         os.chmod(root / archive_binary_name, 0o755)
         (root / "BUILD-CANDIDATE").write_text(candidate + "\n", encoding="utf-8")
@@ -703,7 +735,6 @@ def package(
             )
         write_json(root / "release-metadata.json", metadata)
         write_manifest(root, set(PAYLOAD_FILES) | {archive_binary_name})
-        archive = output_dir / f"{root_name}-{candidate}.tar.gz"
         write_archive(root, archive, root_name)
 
     sidecar = archive.with_name(archive.name + ".sha256")
@@ -753,8 +784,13 @@ def verify(
     manifest: Path,
     lockfile: Path,
 ) -> dict[str, object]:
-    if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe"):
-        binary_name += ".exe"
+    require_logical_binary_name(binary_name)
+    payload_name = payload_filename(binary_name, target)
+    expected_archive_name = archive_filename(binary_name, target, candidate)
+    if archive.name != expected_archive_name:
+        raise ArtifactError(
+            f"archive name does not match the requested target: expected {expected_archive_name}, got {archive.name}"
+        )
     require_candidate(candidate)
     require_source(source_repository, source_event, source_ref, source_tree)
     sidecar = archive.with_name(archive.name + ".sha256")
@@ -764,7 +800,7 @@ def verify(
 
     with tempfile.TemporaryDirectory(prefix="native-release-verify-") as temporary:
         root = safe_extract(archive, Path(temporary))
-        expected_files = set(PAYLOAD_FILES) | {binary_name, "MANIFEST.sha256"}
+        expected_files = set(PAYLOAD_FILES) | {payload_name, "MANIFEST.sha256"}
         actual_files = {path.name for path in root.iterdir() if path.is_file()}
         if actual_files != expected_files or any(path.is_dir() for path in root.iterdir()):
             raise ArtifactError(
@@ -781,13 +817,13 @@ def verify(
             raise ArtifactError("BUILD-CANDIDATE does not match the requested SHA")
         metadata = read_json(root / "release-metadata.json")
         legacy_linux = target in TARGET_MACHINES
-        runtime = inspect_glibc(root / binary_name, target) if legacy_linux else inspect_platform_runtime(root / binary_name, target)
+        runtime = inspect_glibc(root / payload_name, target) if legacy_linux else inspect_platform_runtime(root / payload_name, target)
         expected_metadata = {
             "schema": "mcp_native_linux_release",
             "version": 2,
             "candidate": candidate,
             "target": target,
-            "binary": binary_name,
+            "binary": payload_name,
             "release_source_eligible": release_source_eligible(
                 source_event, source_ref, source_main_proven
             ),
@@ -799,7 +835,7 @@ def verify(
                 "main_proven": source_main_proven,
             },
             "inputs": {
-                "binary_sha256": sha256(root / binary_name),
+                "binary_sha256": sha256(root / payload_name),
                 "manifest_sha256": sha256_text_file(manifest),
                 "lockfile_sha256": sha256(lockfile),
             },
@@ -807,11 +843,11 @@ def verify(
         }
         if not legacy_linux:
             expected_metadata = native_release_metadata_v3(
-                binary_name=binary_name, target=target, candidate=candidate,
+                binary_name=payload_name, target=target, candidate=candidate,
                 source_repository=source_repository, source_event=source_event,
                 source_ref=source_ref, source_tree=source_tree,
                 source_main_proven=source_main_proven,
-                binary_digest=sha256(root / binary_name),
+                binary_digest=sha256(root / payload_name),
                 manifest_digest=sha256_text_file(manifest), lockfile_digest=sha256(lockfile),
                 runtime=runtime,
             )
@@ -827,11 +863,11 @@ def verify(
             raise ArtifactError(
                 f"release metadata does not match the requested candidate for {target}: {details}"
             )
-        verify_platform_binary(root / binary_name, target)
+        verify_platform_binary(root / payload_name, target)
         sbom = read_json(root / "sbom.cdx.json")
         if not isinstance(sbom, dict):
             raise ArtifactError("CycloneDX SBOM must be an object")
-        sbom_binary_name = binary_name.removesuffix(".exe")
+        sbom_binary_name = binary_name
         dependency_count = validate_sbom_graph(sbom, sbom_binary_name)
         properties = sbom.get("metadata", {}).get("properties", [])
         expected_bindings = sbom_release_bindings(
@@ -843,7 +879,7 @@ def verify(
             source_tree,
             source_main_proven,
             sbom_binary_name,
-            sha256(root / binary_name),
+            sha256(root / payload_name),
             sha256_text_file(manifest),
             sha256(lockfile),
             runtime,
@@ -957,8 +993,7 @@ def validate_authorization_archive(
     candidate: str,
     target: str,
 ) -> None:
-    if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe"):
-        binary_name += ".exe"
+    require_logical_binary_name(binary_name)
     if not isinstance(archive, dict) or set(archive) != {
         "archive",
         "archive_sha256",
@@ -967,7 +1002,7 @@ def validate_authorization_archive(
         "runtime",
     }:
         raise ArtifactError("authorization archive entry must contain the exact contract fields")
-    expected_name = f"{binary_name}-{target}-{candidate}.tar.gz"
+    expected_name = archive_filename(binary_name, target, candidate)
     if archive.get("archive") != expected_name or archive.get("target") != target:
         raise ArtifactError("authorization archive identity does not match its expected target")
     for field in ("archive_sha256", "binary_sha256"):
@@ -976,7 +1011,7 @@ def validate_authorization_archive(
             raise ArtifactError(f"authorization archive {field} must be an exact SHA-256")
     runtime = archive.get("runtime")
     if target not in TARGET_MACHINES:
-        if not isinstance(runtime, dict) or runtime.get("format") != platform_validator(target).format:
+        if runtime != expected_non_linux_runtime(target):
             raise ArtifactError("authorization archive runtime identity does not match its target")
         return
     if not isinstance(runtime, dict) or set(runtime) != {
@@ -1010,6 +1045,7 @@ def authorization_receipt(
     workflow_run_id: str,
     workflow_run_attempt: str,
 ) -> dict[str, object]:
+    require_logical_binary_name(binary_name)
     require_candidate(expected_candidate)
     require_source(
         expected_source_repository,
@@ -1095,6 +1131,19 @@ def fake_elf(path: Path, machine: int) -> None:
     path.write_bytes(header)
 
 
+def fake_macho(path: Path, architecture: str) -> None:
+    cpu = {"x86_64": 0x01000007, "aarch64": 0x0100000C}[architecture]
+    path.write_bytes(b"\xcf\xfa\xed\xfe" + struct.pack("<I", cpu))
+
+
+def fake_pe(path: Path, machine: int = 0x8664) -> None:
+    data = bytearray(0x40)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x40)
+    data.extend(b"PE\0\0" + struct.pack("<H", machine))
+    path.write_bytes(data)
+
+
 def fake_sbom(binary_name: str) -> dict[str, object]:
     root_ref = f"pkg:cargo/{binary_name}@0.1.0"
     dependency_ref = "pkg:cargo/example-dependency@1.0.0"
@@ -1133,14 +1182,10 @@ def parse_boolean(value: str) -> bool:
 
 
 def fake_verification_report(binary_name: str = "example-server") -> dict[str, object]:
+    require_logical_binary_name(binary_name)
     candidate = "a" * 40
     archives = []
     for index, target in enumerate(RELEASE_TARGETS):
-        archive_binary_name = (
-            f"{binary_name}.exe"
-            if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe")
-            else binary_name
-        )
         runtime = (
             {
                 "libc": "glibc",
@@ -1149,11 +1194,11 @@ def fake_verification_report(binary_name: str = "example-server") -> dict[str, o
                 "maximum_supported_glibc": "2.39",
             }
             if target in TARGET_MACHINES
-            else {"format": platform_validator(target).format}
+            else expected_non_linux_runtime(target)
         )
         archives.append(
             {
-                "archive": f"{archive_binary_name}-{target}-{candidate}.tar.gz",
+                "archive": archive_filename(binary_name, target, candidate),
                 "archive_sha256": str(index + 1) * 64,
                 "binary_sha256": str(index + 3) * 64,
                 "target": target,
@@ -1184,6 +1229,27 @@ def fake_verification_report(binary_name: str = "example-server") -> dict[str, o
 
 
 class ArtifactTests(unittest.TestCase):
+    def test_canonical_names_and_non_linux_runtime_contracts(self) -> None:
+        candidate = "a" * 40
+        self.assertEqual(payload_filename("example-server", "x86_64-unknown-linux-gnu"), "example-server")
+        self.assertEqual(payload_filename("example-server", WINDOWS_TARGET), "example-server.exe")
+        self.assertEqual(
+            archive_filename("example-server", WINDOWS_TARGET, candidate),
+            f"example-server-{WINDOWS_TARGET}-{candidate}.tar.gz",
+        )
+        self.assertEqual(
+            expected_non_linux_runtime("x86_64-apple-darwin"),
+            {"format": "macho", "architecture": "x86_64", "platform": "apple"},
+        )
+        self.assertEqual(
+            expected_non_linux_runtime(WINDOWS_TARGET),
+            {"format": "pe", "architecture": "x86_64", "platform": "windows", "abi": "msvc"},
+        )
+        with self.assertRaisesRegex(ArtifactError, "without .exe"):
+            payload_filename("example-server.exe", WINDOWS_TARGET)
+        with self.assertRaisesRegex(ArtifactError, "without .exe"):
+            archive_filename("example-server.exe", WINDOWS_TARGET, candidate)
+
     def test_release_target_contract_is_ordered_and_linux_runtime_scope_is_narrow(self) -> None:
         self.assertEqual(
             RELEASE_TARGETS,
@@ -1214,6 +1280,20 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ArtifactError, "Mach-O"):
                 verify_macho(path, "x86_64-apple-darwin")
             with self.assertRaisesRegex(ArtifactError, "PE"):
+                verify_pe(path, "x86_64-pc-windows-msvc")
+
+    def test_non_linux_validators_reject_wrong_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "binary"
+            path.write_bytes(b"\xcf\xfa\xed\xfe" + struct.pack("<I", 0x0100000C))
+            with self.assertRaisesRegex(ArtifactError, "Mach-O CPU"):
+                verify_macho(path, "x86_64-apple-darwin")
+            data = bytearray(0x40)
+            data[:2] = b"MZ"
+            struct.pack_into("<I", data, 0x3C, 0x40)
+            data.extend(b"PE\0\0" + struct.pack("<H", 0xAA64))
+            path.write_bytes(data)
+            with self.assertRaisesRegex(ArtifactError, "PE machine"):
                 verify_pe(path, "x86_64-pc-windows-msvc")
 
     def test_v3_metadata_binds_runtime_validator(self) -> None:
@@ -1487,6 +1567,9 @@ class ArtifactTests(unittest.TestCase):
                 "mismatched archive": lambda value: value["archives"][0].__setitem__(
                     "binary_sha256", "not-a-digest"
                 ),
+                "archive name mismatch": lambda value: value["archives"][0].__setitem__(
+                    "archive", "wrong-name.tar.gz"
+                ),
                 "wrong targets": lambda value: value.__setitem__(
                     "targets", list(reversed(RELEASE_TARGETS))
                 ),
@@ -1495,6 +1578,14 @@ class ArtifactTests(unittest.TestCase):
                 ),
                 "runtime mismatch": lambda value: value["archives"][0]["runtime"].__setitem__(
                     "interpreter", TARGET_INTERPRETERS["aarch64-unknown-linux-gnu"]
+                ),
+                "macOS runtime missing platform": lambda value: value["archives"][2]["runtime"].pop("platform"),
+                "macOS runtime wrong architecture": lambda value: value["archives"][2]["runtime"].__setitem__(
+                    "architecture", "aarch64"
+                ),
+                "Windows runtime missing ABI": lambda value: value["archives"][4]["runtime"].pop("abi"),
+                "Windows runtime wrong platform": lambda value: value["archives"][4]["runtime"].__setitem__(
+                    "platform", "apple"
                 ),
             }
             for label, mutate in mutations.items():
@@ -1566,6 +1657,118 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ArtifactError, "different source inputs"):
                 compare(*arguments)
 
+    def test_five_target_package_verify_compare_authorization_pipeline(self) -> None:
+        logical_name = "example-server"
+        candidate = "a" * 40
+        source_tree = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inventory = root / "inventory.json"
+            schema = root / "schema.json"
+            sbom = root / "bom.json"
+            manifest = root / "Cargo.toml"
+            lockfile = root / "Cargo.lock"
+            write_json(inventory, {"schema": "mcp_tool_inventory", "version": 1, "tools": ["read"]})
+            write_json(schema, {"schema": "mcp_tool_schema_snapshot", "version": 1, "tools": [{"name": "read"}]})
+            write_json(sbom, fake_sbom(logical_name))
+            manifest.write_text("[package]\nname = \"example-server\"\n", encoding="utf-8")
+            lockfile.write_text("version = 4\n", encoding="utf-8")
+            linux_runtimes = {
+                "x86_64-unknown-linux-gnu": {
+                    "libc": "glibc", "interpreter": TARGET_INTERPRETERS["x86_64-unknown-linux-gnu"],
+                    "required_glibc": "2.34", "maximum_supported_glibc": "2.39",
+                },
+                "aarch64-unknown-linux-gnu": {
+                    "libc": "glibc", "interpreter": TARGET_INTERPRETERS["aarch64-unknown-linux-gnu"],
+                    "required_glibc": "2.34", "maximum_supported_glibc": "2.39",
+                },
+            }
+            binaries = {}
+            for target in RELEASE_TARGETS:
+                binary = root / f"binary-{target}"
+                if target in TARGET_MACHINES:
+                    fake_elf(binary, TARGET_MACHINES[target])
+                elif target == WINDOWS_TARGET:
+                    fake_pe(binary)
+                else:
+                    fake_macho(binary, PLATFORM_VALIDATORS[target].architecture)
+                binaries[target] = binary
+            archives = []
+            for target in RELEASE_TARGETS:
+                runtime = linux_runtimes[target] if target in TARGET_MACHINES else expected_non_linux_runtime(target)
+                with mock.patch(__name__ + ".inspect_glibc", return_value=runtime):
+                    archives.append(package(
+                        binaries[target], logical_name, target, candidate, inventory, schema, sbom,
+                        manifest, lockfile, "example/server", "push", "refs/heads/main", source_tree,
+                        True, root / "dist",
+                    ))
+            for target, archive in zip(RELEASE_TARGETS, archives):
+                with tempfile.TemporaryDirectory() as extracted:
+                    extracted_root = safe_extract(archive, Path(extracted))
+                    payload_name = payload_filename(logical_name, target)
+                    self.assertEqual(
+                        extracted_root.name,
+                        archive_filename(logical_name, target, candidate).removesuffix(".tar.gz"),
+                    )
+                    self.assertTrue((extracted_root / payload_name).is_file())
+                    metadata = read_json(extracted_root / "release-metadata.json")
+                    self.assertEqual(metadata["binary"], payload_name)
+                    self.assertEqual(
+                        metadata["source"],
+                        {
+                            "repository": "example/server",
+                            "event": "push",
+                            "ref": "refs/heads/main",
+                            "tree": source_tree,
+                            "main_proven": True,
+                        },
+                    )
+                    self.assertEqual(
+                        metadata["inputs"]["manifest_sha256"], sha256_text_file(manifest)
+                    )
+                    self.assertEqual(metadata["inputs"]["lockfile_sha256"], sha256(lockfile))
+                    if target not in TARGET_MACHINES:
+                        self.assertEqual(metadata["runtime"], expected_non_linux_runtime(target))
+                    self.assertIn(payload_name, parse_manifest(extracted_root / "MANIFEST.sha256"))
+                    self.assertEqual(
+                        read_json(extracted_root / "sbom.cdx.json")["metadata"]["component"]["name"], logical_name
+                    )
+                runtime = linux_runtimes[target] if target in TARGET_MACHINES else expected_non_linux_runtime(target)
+                with mock.patch(__name__ + ".inspect_glibc", return_value=runtime):
+                    verify(
+                        archive, logical_name, target, candidate, "example/server", "push", "refs/heads/main",
+                        source_tree, True, manifest, lockfile,
+                    )
+            with mock.patch(__name__ + ".inspect_glibc", side_effect=[linux_runtimes[target] for target in TARGET_MACHINES]):
+                report = compare(
+                    archives, logical_name, list(RELEASE_TARGETS), candidate, "example/server", "push",
+                    "refs/heads/main", source_tree, True, manifest, lockfile,
+                )
+            verification = root / "verification.json"
+            write_json(verification, report)
+            receipt = authorization_receipt(
+                verification, logical_name, candidate, "example/server", "push", "refs/heads/main",
+                source_tree, "123", "1",
+            )
+            self.assertEqual(report["targets"], list(RELEASE_TARGETS))
+            self.assertEqual(
+                [entry["archive"] for entry in report["archives"]],
+                [archive_filename(logical_name, target, candidate) for target in RELEASE_TARGETS],
+            )
+            self.assertEqual(receipt["targets"], report["targets"])
+            self.assertEqual(receipt["archives"], report["archives"])
+            self.assertEqual(
+                receipt["source"],
+                {
+                    "repository": "example/server",
+                    "event": "push",
+                    "ref": "refs/heads/main",
+                    "tree": source_tree,
+                    "main_proven": True,
+                },
+            )
+            self.assertEqual(receipt["source_inputs"], report["source_inputs"])
+
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
@@ -1597,6 +1800,10 @@ def parser() -> argparse.ArgumentParser:
     package_parser.add_argument("--source-tree", required=True)
     package_parser.add_argument("--source-main-proven", type=parse_boolean, required=True)
     package_parser.add_argument("--output-dir", type=Path, required=True)
+    archive_name_parser = commands.add_parser("archive-name")
+    archive_name_parser.add_argument("--binary-name", required=True)
+    archive_name_parser.add_argument("--target", required=True)
+    archive_name_parser.add_argument("--candidate", required=True)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--archive", type=Path, required=True)
     verify_parser.add_argument("--binary-name", required=True)
@@ -1676,6 +1883,8 @@ def main() -> int:
                 args.output_dir,
             )
             print(archive)
+        elif args.command == "archive-name":
+            print(archive_filename(args.binary_name, args.target, args.candidate))
         elif args.command == "verify":
             print(
                 json.dumps(
