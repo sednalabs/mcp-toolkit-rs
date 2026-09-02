@@ -4,7 +4,7 @@
 //!
 //! ## Ownership
 //! This crate functions as the primary facade for the MCP toolkit, orchestrating
-//! access to modular sub-crates (Core, Auth, HTTP, Policy, Process,
+//! access to modular sub-crates (Core, Auth, HTTP, Policy, Process, Tasks,
 //! Scratchpad).
 //!
 //! ## Non-ownership
@@ -54,6 +54,9 @@ pub use mcp_toolkit_process as process;
 
 #[cfg(feature = "scratchpad")]
 pub use mcp_toolkit_scratchpad as scratchpad;
+
+#[cfg(feature = "tasks")]
+pub use mcp_toolkit_tasks as tasks;
 
 #[cfg(any(
     feature = "server",
