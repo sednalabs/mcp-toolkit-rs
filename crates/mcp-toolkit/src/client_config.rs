@@ -176,7 +176,11 @@ pub fn render_client_config(options: &ClientConfigOptions) -> Result<String, Cli
         env_key
     };
     validate_env_key(env_key)?;
-    if let Some(value) = options.env_value.as_deref().or(Some(options.profile.as_str())) {
+    if let Some(value) = options
+        .env_value
+        .as_deref()
+        .or(Some(options.profile.as_str()))
+    {
         if value.chars().any(|c| c.is_control()) {
             return Err(ClientConfigError::InvalidEnvValue);
         }
