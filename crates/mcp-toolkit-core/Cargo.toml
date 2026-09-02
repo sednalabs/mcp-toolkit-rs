@@ -2,6 +2,7 @@
 name = "mcp-toolkit-core"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Core types and protocol-facing primitives for Rust MCP projects."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
@@ -16,6 +17,6 @@ all-features = true
 path = "src/lib.rs"
 
 [dependencies]
-rmcp = "=2.1.0"
+rmcp = "=3.2.0"
 serde = "1.0.228"
 serde_json = "1.0.149"

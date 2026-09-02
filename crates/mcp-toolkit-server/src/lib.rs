@@ -28,7 +28,6 @@
 pub mod auth;
 #[cfg(feature = "http")]
 pub mod http;
-pub mod opaque_token;
 #[cfg(feature = "stdio")]
 pub mod stdio;
 #[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]

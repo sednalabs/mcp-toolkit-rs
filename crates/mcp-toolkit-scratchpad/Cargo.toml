@@ -2,6 +2,7 @@
 name = "mcp-toolkit-scratchpad"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Reusable DuckDB-backed scratchpad sessions for Rust MCP servers."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"

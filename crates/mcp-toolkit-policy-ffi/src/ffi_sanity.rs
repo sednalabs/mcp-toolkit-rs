@@ -30,10 +30,12 @@ use crate::ffi::{
 
 // ... internal helper and assertion logic ...
 
+#[allow(dead_code)]
 const fn align_up(size: usize, align: usize) -> usize {
     (size + align - 1) & !(align - 1)
 }
 
+#[allow(dead_code)]
 const fn max(a: usize, b: usize) -> usize {
     if a > b {
         a
@@ -42,12 +44,14 @@ const fn max(a: usize, b: usize) -> usize {
     }
 }
 
+#[allow(dead_code)]
 const fn c_struct_size_2(size1: usize, align1: usize, size2: usize, align2: usize) -> usize {
     let offset2 = align_up(size1, align2);
     let size = offset2 + size2;
     align_up(size, max(align1, align2))
 }
 
+#[allow(dead_code)]
 const fn c_struct_size_3(
     size1: usize,
     align1: usize,

@@ -10,6 +10,14 @@ official MCP specification and the official Rust SDK.
 
 Review date: 2026-07-11.
 
+Migration conformance checkpoint: 2026-07-28 protocol behavior, rechecked
+against the exact `rmcp = 3.2.0` release on 2026-09-03.
+
+The conformance boundary is deliberately explicit: `2025-11-25` is the legacy
+initialize/initialized lifecycle retained for compatibility, while
+`2026-07-28` is the current stateless request lifecycle. These are protocol
+dates, not SDK release numbers.
+
 Primary references:
 
 - MCP specification entry point: <https://modelcontextprotocol.io/specification>
@@ -21,7 +29,7 @@ Primary references:
 
 Second-pass review note: the custom layers below were rechecked against the
 current public MCP specification, the public `rmcp` docs, and the exact
-workspace-pinned `rmcp` `2.1.0` source. The pinned SDK already owns Host
+workspace-pinned `rmcp` `3.2.0` source. The pinned SDK already owns Host
 validation, optional full `Origin` validation, Streamable HTTP session routing,
 protocol-version header checks, `Mcp-Session-Id`, `Last-Event-Id`, SSE event-id
 formatting, and `SessionManager` restoration hooks. Toolkit code must therefore
@@ -38,19 +46,21 @@ metadata before accepting a result.
 Fourth-pass review note: toolkit-owned protocol defaults were rechecked against
 the pinned SDK. Toolkit-owned fallbacks should use `ProtocolVersion::LATEST`
 from the pinned SDK unless a compatibility test deliberately passes an older
-version. The stdio contract harness now defaults to `2025-11-25`, and
-`mcp-toolkit-gemini` uses `ProtocolVersion::LATEST` as its server fallback.
+version. `rmcp` 3.2.0 supports `2026-07-28` but intentionally keeps
+`ProtocolVersion::LATEST` at `2025-11-25`; the stdio contract harness therefore
+selects the current `2026-07-28` cut line explicitly and retains an explicit
+legacy path.
 
 Fifth-pass review note: the workspace RMCP SDK pin has moved through the
-toolkit facade to `rmcp` and `rmcp-macros` `2.1.0`. `mcp-toolkit-core` now also
+toolkit facade to `rmcp` and `rmcp-macros` `3.2.0`. `mcp-toolkit-core` now also
 re-exports the pinned SDK so facade consumers can route direct SDK model and
 macro support through toolkit-owned version policy.
 
 ## SDK Version Posture
 
 As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
-published runtime version, `=2.1.0`, and the lockfile resolves both crates to
-`2.1.0`. That is intentional: the toolkit facade owns the SDK version used by
+published runtime version, `=3.2.0`, and the lockfile resolves both crates to
+`3.2.0`. That is intentional: the toolkit facade owns the SDK version used by
 generated servers, and generated templates import the server-authoring surface
 through `mcp_toolkit::rmcp` instead of declaring their own direct `rmcp` or
 `rmcp-macros` dependencies.
@@ -105,12 +115,38 @@ or server-authoring policy:
 - OAuth metadata and protected-resource helpers;
 - provider-auth UX helpers that sit outside the MCP transport itself.
 
+## MCP Tasks and durability boundary
+
+MCP Tasks are the official `io.modelcontextprotocol/tasks` extension. RMCP
+owns the task protocol methods and result models, statuses and
+status-specific payloads, `input_required` and `tasks/update` behavior,
+cooperative cancellation, TTL behavior, and terminal result/error projection.
+Toolkit must not reintroduce removed legacy methods such as `tasks/list` or
+`tasks/result` as wire protocol.
+
+Toolkit may add production authority around RMCP. The task-authority work in
+[#186](https://github.com/sednalabs/mcp-toolkit-rs/pull/186) therefore uses
+RMCP's native `TaskManager` and adds only reusable concerns such as principal
+binding, concealed cross-principal access, race-safe observation generations,
+bounded waiting, and stale authority-record cleanup. A Toolkit task revision
+is an observed snapshot generation, not a duplicate task event log; it advances
+only after an authoritative RMCP `DetailedTask` read actually changes.
+
+RMCP 3.2.0's native task manager is process-local. A process restart cannot
+honestly resurrect an in-flight Rust future merely because its last task record
+was persisted. Durable task support must first define an RMCP-native
+persistence/restoration boundary and explicit crash semantics. That work is
+tracked in [#191](https://github.com/sednalabs/mcp-toolkit-rs/issues/191).
+Any future implementation must preserve principal ownership, TTL semantics,
+terminal integrity, and duplicate-execution safety without copying RMCP's task
+state machine into Toolkit.
+
 ## Alignment Inventory
 
 | Area | Toolkit behavior | Alignment decision |
 | --- | --- | --- |
 | `rmcp` dependency | The facade crate re-exports `rmcp` and templates avoid direct `rmcp` dependencies. | Keep. This prevents template and service drift across different SDK versions. |
-| stdio transport | `mcp-toolkit-server::stdio` delegates to `rmcp::serve_server(..., stdio())`. | Keep. The toolkit must not write non-MCP data to stdout; diagnostics belong on stderr/logging. |
+| stdio transport | `mcp-toolkit-server::stdio` delegates to `rmcp::serve_server(..., stdio())`; the shared contract harness exercises explicit legacy `2025-11-25` and current `2026-07-28` request shapes. | Keep. The toolkit must not write non-MCP data to stdout; diagnostics belong on stderr/logging. |
 | Server macros | Templates use `#[tool_router]`, `#[tool_handler]`, and `ToolRouter`. | Keep. This matches official Rust SDK idioms while still allowing profile gates. |
 | `tools/list` | Templates filter tools by profile and now delegate cursor mechanics to `server::tools::list_tools_result`. | Keep. Custom visibility is service policy; pagination is centralized protocol hygiene. |
 | complete list collection | `core::pagination::collect_paginated_list` drains opaque cursors with page/item limits and cycle rejection, returning items only after terminal success. | Keep as the narrow extension seam for clients whose metadata wrappers cannot call `rmcp::Peer::list_all_tools` directly. Do not publish partial walks. |
@@ -162,12 +198,13 @@ or server-authoring policy:
     permissive fallback behind an explicit migration helper, and profile-filtered
     tool search now returns schemas only for visible search results.
 11. Toolkit-owned protocol defaults no longer fall back to `2024-11-05` by
-    default. The stdio contract helper requests `2025-11-25`, and
-    `mcp-toolkit-gemini` uses the pinned SDK's `ProtocolVersion::LATEST`.
+    default. The stdio contract helper explicitly exercises the current
+    `2026-07-28` request model while retaining `2025-11-25` as an explicit
+    legacy compatibility path.
 12. HTTP route-bundle and Streamable HTTP tests now serialize
     `rmcp::model::ProtocolVersion::LATEST` in initialize fixtures instead of
     carrying a stale literal protocol version.
-13. The RMCP SDK pin now moves through the toolkit facade at `2.1.0`; direct
+13. The RMCP SDK pin now moves through the toolkit facade at `3.2.0`; direct
     runtime and macro pins remain aligned, and facade consumers can import SDK
     model types through toolkit-owned re-exports.
 
@@ -187,9 +224,10 @@ or server-authoring policy:
   into default route-bundle replay. If a future server exposes persistent
   replay through it, review that flow against the SDK's `EventId` parser and
   session-store support before shipping.
-- Compatibility smoke tests may still pass explicit older protocol versions to
-  the stdio harness. Keep the helper default aligned with the pinned SDK's
-  latest stable protocol version.
+- Compatibility smoke tests pass explicit `2025-11-25` to the legacy stdio
+  harness. Keep the maintained current path explicitly aligned with
+  `2026-07-28`; do not infer the Toolkit cut line from the SDK's conservative
+  `ProtocolVersion::LATEST` alias.
 - HTTP route bundles rely on `rmcp` to process accepted JSON-RPC requests after
   local preflight checks. On each future SDK upgrade, compare accepted/missing
   `MCP-Protocol-Version`, session-id, and SSE-resume behavior before landing.

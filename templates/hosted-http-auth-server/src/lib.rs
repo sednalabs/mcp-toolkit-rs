@@ -9,8 +9,8 @@ use mcp_toolkit::rmcp::{
     self,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, ServerCapabilities,
-        ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+        ServerCapabilities, ServerInfo, Tool,
     },
     schemars,
     service::RequestContext,
@@ -312,7 +312,7 @@ impl ServerHandler for HostedHttpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let decision = self
             .profile_decision(
                 &self.tool_profile,
@@ -321,9 +321,9 @@ impl ServerHandler for HostedHttpServer {
             )
             .map_err(profile_error)?;
         if !decision.allowed() {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                decision.caller_message(),
-            )]));
+            return Ok(
+                CallToolResult::error(vec![ContentBlock::text(decision.caller_message())]).into(),
+            );
         }
 
         let context = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);

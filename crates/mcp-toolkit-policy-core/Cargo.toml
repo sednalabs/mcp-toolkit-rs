@@ -2,6 +2,7 @@
 name = "mcp-toolkit-policy-core"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Pure policy primitives and deterministic validators for Rust MCP services."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"

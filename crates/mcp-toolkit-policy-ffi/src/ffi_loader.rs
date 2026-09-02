@@ -581,10 +581,7 @@ fn decision_code_from_ffi(code: PkDecisionCode) -> Result<Option<DecisionCode>, 
         PK_DECISION_CLASSIFIER_UNAVAILABLE => Ok(Some(DecisionCode::ClassifierUnavailable)),
         PK_DECISION_SPARK_RUNTIME_UNAVAILABLE => Ok(Some(DecisionCode::SparkRuntimeUnavailable)),
         PK_DECISION_INVALID_INPUT => Ok(Some(DecisionCode::InvalidInput)),
-        _ => Err(format!(
-            "unknown decision code from SPARK runtime: {}",
-            code
-        )),
+        _ => Err(format!("unknown decision code from SPARK runtime: {code}")),
     }
 }
 

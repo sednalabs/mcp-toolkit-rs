@@ -116,6 +116,35 @@ package verification as deferred for crates whose verification requires
 predecessor toolkit crates to be published or available in an approved staging
 registry first.
 
+## Publish-disabled archive and hosted-proof closure
+
+The release candidate remains explicitly `publish = false` for all workspace
+members, including the nine-crate first-wave set. A package-readiness result is
+therefore an archive and reproducibility receipt, not publication authority.
+For each of the nine approved crates, retain the exact candidate commit and
+tree, the resolved `Cargo.lock`, the `cargo package --list` file inventory, and
+the package verification result (or the recorded predecessor-availability
+deferral). The receipt must identify the crate name and version and must not
+claim that a registry artifact exists.
+
+The native stdio workflows provide a separate, hosted-only proof archive for
+the checked-in public template. They build the five declared target archives,
+bind each archive to the exact candidate, manifest and lockfile digests, and
+compare the canonical tool inventory and schema before generating the trusted
+authorization receipt. These workflows use the pinned Rust 1.88.0 toolchain
+and remain publish-disabled: they do not create tags, invoke `cargo publish`,
+or change a registry, environment, secret, or release configuration. A green
+native archive proof cannot substitute for package-readiness evidence for any
+of the nine crates, and package-readiness evidence cannot claim native runtime
+or attestation coverage.
+
+Close the candidate only when both evidence sets are available on the same
+exact SHA: the nine-package readiness/archive receipt and every applicable
+native hosted proof/authorization receipt. If either set is incomplete, retain
+the candidate as release-preparation work and record the precise missing
+artifact or deferred predecessor rather than treating the candidate as
+publishable.
+
 ## Docs.rs and Version Notes
 
 First-wave crates should set `documentation = "https://docs.rs/<crate-name>"`

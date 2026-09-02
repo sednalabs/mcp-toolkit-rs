@@ -4,6 +4,7 @@
 name = "single-crate-public-stdio-server"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 publish = false
 description = "Standalone public Rust MCP server starter with hosted CI, governance, and dual-native Linux release artifacts."

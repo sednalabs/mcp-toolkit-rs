@@ -35,7 +35,7 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use rmcp::model::{JsonObject, Meta, Tool, ToolAnnotations};
+use rmcp::model::{JsonObject, MetaObject, Tool, ToolAnnotations};
 use serde_json::{json, Map, Value};
 
 use crate::mcp_apps::{
@@ -664,8 +664,8 @@ impl CapabilityRegistry {
     }
 }
 
-fn capability_meta(capability: &Capability) -> Meta {
-    let mut meta = Meta::new();
+fn capability_meta(capability: &Capability) -> MetaObject {
+    let mut meta = MetaObject::new();
     meta.0.insert(
         "capability".to_string(),
         json!({

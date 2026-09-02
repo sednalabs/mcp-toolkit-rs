@@ -21,7 +21,7 @@ use rmcp::{
     serve_server,
     service::{QuitReason, ServerInitializeError},
     transport::stdio,
-    RoleServer, Service,
+    ServerHandler,
 };
 
 /// Error returned while serving an MCP server over stdio.
@@ -97,7 +97,7 @@ impl StdioServerBuilder {
     /// This function does not panic.
     pub async fn serve<S>(self, server: S) -> Result<QuitReason, StdioServeError>
     where
-        S: Service<RoleServer> + Send + Sync + 'static,
+        S: ServerHandler,
     {
         serve_stdio(server).await
     }
@@ -118,11 +118,7 @@ impl StdioServerBuilder {
 ///
 /// ```rust,no_run
 /// # async fn example<S>(server: S) -> Result<(), mcp_toolkit_server::stdio::StdioServeError>
-/// # where
-/// #     S: mcp_toolkit_server::rmcp::Service<mcp_toolkit_server::rmcp::RoleServer>
-/// #         + Send
-/// #         + Sync
-/// #         + 'static,
+/// # where S: mcp_toolkit_server::rmcp::ServerHandler,
 /// # {
 /// let _quit = mcp_toolkit_server::stdio::serve_stdio(server).await?;
 /// # Ok(())
@@ -130,7 +126,7 @@ impl StdioServerBuilder {
 /// ```
 pub async fn serve_stdio<S>(server: S) -> Result<QuitReason, StdioServeError>
 where
-    S: Service<RoleServer> + Send + Sync + 'static,
+    S: ServerHandler,
 {
     let service = serve_server(server, stdio()).await?;
     let quit = service.waiting().await?;

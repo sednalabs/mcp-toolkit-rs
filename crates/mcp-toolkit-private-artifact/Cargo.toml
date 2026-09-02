@@ -2,6 +2,7 @@
 name = "mcp-toolkit-private-artifact"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Descriptor-bound read custody for private local artifacts."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"

@@ -1,8 +1,10 @@
 //! Stdio MCP smoke-test helpers.
 //!
-//! These helpers exercise the real JSON-RPC process boundary. They are meant
-//! for integration tests that need to prove a binary initializes and exposes
-//! the intended `tools/list` surface.
+//! These helpers exercise the real JSON-RPC process boundary. The default path
+//! follows MCP 2026-07-28: there is no initialize handshake and every request
+//! carries protocol version, client identity, and client capabilities in
+//! `params._meta`. Explicit older protocol versions retain the legacy
+//! initialize/initialized handshake for compatibility tests.
 
 use serde_json::{json, Value};
 use std::ffi::OsStr;
@@ -12,37 +14,87 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-25";
+const DEFAULT_PROTOCOL_VERSION: &str = "2026-07-28";
+const DEFAULT_CLIENT_NAME: &str = "mcp-toolkit-stdio-contract";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+const PROTOCOL_VERSION_META_KEY: &str = "io.modelcontextprotocol/protocolVersion";
+const CLIENT_INFO_META_KEY: &str = "io.modelcontextprotocol/clientInfo";
+const CLIENT_CAPABILITIES_META_KEY: &str = "io.modelcontextprotocol/clientCapabilities";
+
+fn uses_current_request_model(protocol_version: &str) -> bool {
+    protocol_version >= DEFAULT_PROTOCOL_VERSION
+}
 
 /// Running stdio MCP process with a JSON-RPC line protocol harness.
 pub struct StdioMcpProcess {
     child: Child,
     stdin: ChildStdin,
     responses: mpsc::Receiver<Value>,
+    request_meta: Option<Value>,
 }
 
 impl StdioMcpProcess {
-    /// Spawn a binary, perform an MCP initialize handshake, and send
-    /// `notifications/initialized`.
+    /// Spawn a binary using the current MCP stateless request model.
+    ///
+    /// MCP 2026-07-28 does not perform an initialize handshake. The harness
+    /// instead attaches the required request metadata to every subsequent MCP
+    /// request.
     ///
     /// # Panics
-    /// Panics if the process cannot spawn, the initialize response times out,
-    /// or the server returns a different protocol version.
+    /// Panics if the process cannot spawn.
     pub fn start(exe: impl AsRef<OsStr>) -> Self {
-        Self::start_with_client(exe, "mcp-toolkit-stdio-contract", DEFAULT_PROTOCOL_VERSION)
+        Self::start_with_client(exe, DEFAULT_CLIENT_NAME, DEFAULT_PROTOCOL_VERSION)
     }
 
-    /// Spawn a binary with explicit client metadata.
+    /// Spawn a binary with explicit client metadata and protocol version.
+    ///
+    /// `2026-07-28` and newer protocol dates use the current stateless request
+    /// model. Older protocol versions run the legacy initialize/initialized
+    /// handshake so callers can exercise backward compatibility deliberately.
     ///
     /// # Panics
-    /// Panics if the process cannot spawn, the initialize response times out,
-    /// or the server returns a different protocol version.
+    /// Panics if the process cannot spawn, a requested legacy initialize
+    /// response times out, or the legacy server returns a different protocol
+    /// version.
     pub fn start_with_client(
         exe: impl AsRef<OsStr>,
         client_name: &str,
         protocol_version: &str,
     ) -> Self {
+        let mut process = Self::spawn(exe);
+        if uses_current_request_model(protocol_version) {
+            process.request_meta = Some(current_request_meta(client_name, protocol_version));
+        } else {
+            process.initialize_legacy(client_name, protocol_version);
+        }
+        process
+    }
+
+    /// Spawn a binary and force the legacy initialize/initialized handshake.
+    ///
+    /// This helper is useful for compatibility tests that should remain
+    /// explicit even after the Toolkit's default moves to current MCP.
+    ///
+    /// # Panics
+    /// Panics if the process cannot spawn, the initialize response times out,
+    /// the server returns a different protocol version, or the requested
+    /// version belongs to the current stateless lifecycle.
+    pub fn start_legacy_with_client(
+        exe: impl AsRef<OsStr>,
+        client_name: &str,
+        protocol_version: &str,
+    ) -> Self {
+        assert!(
+            !uses_current_request_model(protocol_version),
+            "MCP 2026-07-28 and newer do not use the legacy initialize handshake"
+        );
+        let mut process = Self::spawn(exe);
+        process.initialize_legacy(client_name, protocol_version);
+        process
+    }
+
+    fn spawn(exe: impl AsRef<OsStr>) -> Self {
         let mut command = Command::new(exe);
         command
             .env("RUST_LOG", "off")
@@ -68,12 +120,16 @@ impl StdioMcpProcess {
             }
         });
 
-        let mut process = Self {
+        Self {
             child,
             stdin,
             responses: rx,
-        };
-        process.send(json!({
+            request_meta: None,
+        }
+    }
+
+    fn initialize_legacy(&mut self, client_name: &str, protocol_version: &str) {
+        self.send(json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
@@ -83,17 +139,17 @@ impl StdioMcpProcess {
                 "clientInfo": {"name": client_name, "version": "0.0.0"}
             }
         }));
-        let init = process.response(1);
+        let init = self.response(1);
         assert_eq!(init["result"]["protocolVersion"], json!(protocol_version));
-        process.send(json!({
+        self.send(json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized",
             "params": {}
         }));
-        process
+        self.request_meta = None;
     }
 
-    /// Send one JSON-RPC message as a single stdout-delimited JSON line.
+    /// Send one JSON-RPC message as a single newline-delimited JSON object.
     ///
     /// # Panics
     /// Panics if serialization or process stdin writes fail.
@@ -139,14 +195,19 @@ impl StdioMcpProcess {
 
     /// Call `tools/list` and return exported tool names in server order.
     ///
+    /// Current-protocol processes automatically attach the full per-request MCP
+    /// metadata contract. Legacy processes send the legacy parameter shape.
+    ///
     /// # Panics
     /// Panics if the server does not return a JSON array at `result.tools`.
     pub fn list_tool_names(&mut self) -> Vec<String> {
+        let mut params = json!({});
+        attach_request_meta(&mut params, self.request_meta.as_ref());
         self.send(json!({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/list",
-            "params": {}
+            "params": params
         }));
         let response = self.response(2);
         response["result"]["tools"]
@@ -159,16 +220,55 @@ impl StdioMcpProcess {
 
     /// Call one MCP tool and return the raw JSON-RPC response.
     ///
+    /// Current-protocol processes automatically attach the full per-request MCP
+    /// metadata contract. Legacy processes send the legacy parameter shape.
+    ///
     /// # Panics
     /// Panics if `arguments` is neither null nor an object, or if the response
     /// does not arrive before the default timeout.
     pub fn call_tool(&mut self, id: u64, name: &str, arguments: Value) -> Value {
-        self.send(tool_call_request(id, name, arguments));
+        self.send(tool_call_request_with_meta(
+            id,
+            name,
+            arguments,
+            self.request_meta.as_ref(),
+        ));
         self.response(id)
     }
 }
 
+fn current_request_meta(client_name: &str, protocol_version: &str) -> Value {
+    json!({
+        PROTOCOL_VERSION_META_KEY: protocol_version,
+        CLIENT_INFO_META_KEY: {
+            "name": client_name,
+            "version": "0.0.0"
+        },
+        CLIENT_CAPABILITIES_META_KEY: {}
+    })
+}
+
+fn attach_request_meta(params: &mut Value, request_meta: Option<&Value>) {
+    let Some(request_meta) = request_meta else {
+        return;
+    };
+    let params = params
+        .as_object_mut()
+        .expect("MCP request params must be a JSON object");
+    params.insert("_meta".to_string(), request_meta.clone());
+}
+
+#[cfg(test)]
 fn tool_call_request(id: u64, name: &str, arguments: Value) -> Value {
+    tool_call_request_with_meta(id, name, arguments, None)
+}
+
+fn tool_call_request_with_meta(
+    id: u64,
+    name: &str,
+    arguments: Value,
+    request_meta: Option<&Value>,
+) -> Value {
     assert!(
         arguments.is_null() || arguments.is_object(),
         "tools/call arguments must be a JSON object or null"
@@ -177,6 +277,7 @@ fn tool_call_request(id: u64, name: &str, arguments: Value) -> Value {
     if !arguments.is_null() {
         params["arguments"] = arguments;
     }
+    attach_request_meta(&mut params, request_meta);
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -192,12 +293,12 @@ impl Drop for StdioMcpProcess {
     }
 }
 
-/// Assert that a stdio MCP binary initializes and returns the expected
-/// `tools/list` names.
+/// Assert that a stdio MCP binary serves the expected `tools/list` names using
+/// the current stateless request contract.
 ///
 /// # Panics
-/// Panics if the process cannot initialize, `tools/list` fails, or the exported
-/// names differ from `expected_names`.
+/// Panics if the process cannot start, `tools/list` fails, or the exported names
+/// differ from `expected_names`.
 pub fn assert_stdio_tools_list(exe: impl AsRef<OsStr>, expected_names: &[&str]) {
     let mut process = StdioMcpProcess::start(exe);
     let names = process.list_tool_names();
@@ -208,10 +309,11 @@ pub fn assert_stdio_tools_list(exe: impl AsRef<OsStr>, expected_names: &[&str]) 
     assert_eq!(names, expected);
 }
 
-/// Assert that a stdio MCP tool call response excludes forbidden substrings.
+/// Assert that a current-protocol stdio MCP tool response excludes forbidden
+/// substrings.
 ///
 /// # Panics
-/// Panics if the process cannot initialize, the tool call fails to return, the
+/// Panics if the process cannot start, the tool call fails to return, the
 /// response cannot be serialized, or the serialized response contains a
 /// forbidden substring.
 pub fn assert_stdio_tool_response_excludes_substrings<S>(
@@ -232,19 +334,48 @@ pub fn assert_stdio_tool_response_excludes_substrings<S>(
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_call_request, StdioMcpProcess};
+    use super::{
+        current_request_meta, tool_call_request, tool_call_request_with_meta,
+        uses_current_request_model, StdioMcpProcess, CLIENT_CAPABILITIES_META_KEY,
+        CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY,
+    };
     use serde_json::json;
     use std::thread;
     use std::time::{Duration, Instant};
 
     #[test]
-    fn default_protocol_version_tracks_current_mcp_spec() {
-        let latest_version =
-            serde_json::to_value(rmcp::model::ProtocolVersion::LATEST).expect("serialize latest");
+    fn default_protocol_version_is_explicit_2026_cutline() {
+        let current_version = serde_json::to_value(rmcp::model::ProtocolVersion::V_2026_07_28)
+            .expect("serialize 2026 protocol");
         assert_eq!(
             super::DEFAULT_PROTOCOL_VERSION,
-            latest_version.as_str().expect("latest version string")
+            current_version.as_str().expect("2026 version string")
         );
+        assert_eq!(
+            rmcp::model::ProtocolVersion::LATEST,
+            rmcp::model::ProtocolVersion::V_2025_11_25,
+            "RMCP 3.2 intentionally keeps LATEST on the legacy lifecycle"
+        );
+    }
+
+    #[test]
+    fn request_model_boundary_is_forward_compatible() {
+        assert!(!uses_current_request_model("2025-11-25"));
+        assert!(uses_current_request_model("2026-07-28"));
+        assert!(uses_current_request_model("2027-01-01"));
+    }
+
+    #[test]
+    fn current_request_meta_contains_complete_stateless_context() {
+        let meta = current_request_meta("contract-client", super::DEFAULT_PROTOCOL_VERSION);
+
+        assert_eq!(
+            meta[PROTOCOL_VERSION_META_KEY],
+            json!(super::DEFAULT_PROTOCOL_VERSION)
+        );
+        assert_eq!(meta[CLIENT_INFO_META_KEY]["name"], json!("contract-client"));
+        assert_eq!(meta[CLIENT_INFO_META_KEY]["version"], json!("0.0.0"));
+        assert_eq!(meta[CLIENT_CAPABILITIES_META_KEY], json!({}));
     }
 
     #[test]
@@ -254,6 +385,7 @@ mod tests {
         assert_eq!(request["method"], json!("tools/call"));
         assert_eq!(request["params"]["name"], json!("brief_target"));
         assert!(request["params"].get("arguments").is_none());
+        assert!(request["params"].get("_meta").is_none());
     }
 
     #[test]
@@ -261,6 +393,19 @@ mod tests {
         let request = tool_call_request(4, "brief_target", json!({"target": "probe"}));
 
         assert_eq!(request["params"]["arguments"], json!({"target": "probe"}));
+    }
+
+    #[test]
+    fn current_tool_call_request_carries_request_meta() {
+        let meta = current_request_meta("contract-client", super::DEFAULT_PROTOCOL_VERSION);
+        let request =
+            tool_call_request_with_meta(4, "brief_target", json!({"target": "probe"}), Some(&meta));
+
+        assert_eq!(request["params"]["_meta"], meta);
+        assert_eq!(
+            request["params"]["_meta"][PROTOCOL_VERSION_META_KEY],
+            json!(super::DEFAULT_PROTOCOL_VERSION)
+        );
     }
 
     #[test]
@@ -288,6 +433,7 @@ mod tests {
             child,
             stdin,
             responses: rx,
+            request_meta: None,
         };
 
         let response = process.response(7);
@@ -318,6 +464,7 @@ mod tests {
             child,
             stdin,
             responses: rx,
+            request_meta: None,
         };
 
         let start = Instant::now();
