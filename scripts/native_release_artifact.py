@@ -646,7 +646,7 @@ def package(
                 source_ref,
                 source_tree,
                 source_main_proven,
-                binary_name,
+                archive_binary_name,
                 binary_digest,
                 manifest_digest,
                 lockfile_digest,
@@ -658,7 +658,7 @@ def package(
             "version": 2,
             "candidate": candidate,
             "target": target,
-            "binary": binary_name,
+            "binary": archive_binary_name,
             "release_source_eligible": release_source_eligible(
                 source_event, source_ref, source_main_proven
             ),
@@ -678,7 +678,7 @@ def package(
         }
         if not legacy_linux:
             metadata = native_release_metadata_v3(
-                binary_name=binary_name, target=target, candidate=candidate,
+                binary_name=archive_binary_name, target=target, candidate=candidate,
                 source_repository=source_repository, source_event=source_event,
                 source_ref=source_ref, source_tree=source_tree,
                 source_main_proven=source_main_proven,

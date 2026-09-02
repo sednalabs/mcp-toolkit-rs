@@ -544,10 +544,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "self-hosted extra runner dimension",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!(
-                    "{include_rows}          - runner: self-hosted\n            target: x86_64-unknown-linux-gnu\n"
-                ),
+                "            runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "            runner: [ubuntu-24.04, self-hosted]\n            target: x86_64-unknown-linux-gnu\n",
                 "self-hosted extra runner dimension",
             ),
         ),
@@ -555,10 +553,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "extra target dimension",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!(
-                    "{include_rows}        target: [x86_64-unknown-linux-gnu]\n"
-                ),
+                "            runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "            runner: ubuntu-24.04\n            target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]\n",
                 "extra target dimension",
             ),
         ),
@@ -566,8 +562,8 @@ fn release_preflight_rejects_every_native_architecture_matrix_shape_drift() {
             "extra os dimension",
             replace_once(
                 &canonical,
-                include_rows,
-                &format!("{include_rows}        os: [linux]\n"),
+                "            runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n",
+                "            runner: ubuntu-24.04\n            target: x86_64-unknown-linux-gnu\n            os: linux\n",
                 "extra os dimension",
             ),
         ),
