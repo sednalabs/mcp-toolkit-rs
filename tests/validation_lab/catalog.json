@@ -1,0 +1,20 @@
+{
+  "schema": "toolkit_frontier_catalog",
+  "version": 1,
+  "entries": [
+    {
+      "id": "package",
+      "kind": "package",
+      "status": "catalog-only",
+      "implementation": "unmaterialized",
+      "acceptance": "not-claimed"
+    },
+    {
+      "id": "rmcp",
+      "kind": "dependency",
+      "status": "catalog-only",
+      "implementation": "unmaterialized",
+      "acceptance": "not-claimed"
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "schema": "toolkit_frontier_plan",
+  "version": 1,
+  "candidate": {
+    "repository": "sednalabs/mcp-toolkit-rs",
+    "ref": "refs/heads/main",
+    "sha": "dd72f5cee203c8497ab43574e8dcdf506987f995",
+    "tree": "bc51f72d2bada062ef14036931ee612150c09084"
+  },
+  "target_set": [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc"
+  ],
+  "profiles": [
+    {"id": "targeted", "lane_ids": ["targeted-contracts"]},
+    {"id": "frontier", "lane_ids": ["frontier-five-target"]},
+    {"id": "checkpoint", "lane_ids": ["checkpoint-identity"]}
+  ],
+  "summary_families": [
+    {"family": "contract", "sentinel": "frontier-contract-sentinel", "depth": 1},
+    {"family": "frontier", "sentinel": "frontier-matrix-sentinel", "depth": 2},
+    {"family": "checkpoint", "sentinel": "frontier-checkpoint-sentinel", "depth": 1}
+  ],
+  "lanes": [
+    {
+      "lane_id": "targeted-contracts",
+      "profile": "targeted",
+      "target": "x86_64-unknown-linux-gnu",
+      "identity": {"repository": "sednalabs/mcp-toolkit-rs", "ref": "refs/heads/main", "sha": "dd72f5cee203c8497ab43574e8dcdf506987f995", "tree": "bc51f72d2bada062ef14036931ee612150c09084"},
+      "artifact": {"name": "frontier-targeted-contracts", "run_id": "1001", "run_attempt": 1}
+    },
+    {
+      "lane_id": "frontier-five-target",
+      "profile": "frontier",
+      "target": "aarch64-unknown-linux-gnu",
+      "identity": {"repository": "sednalabs/mcp-toolkit-rs", "ref": "refs/heads/main", "sha": "dd72f5cee203c8497ab43574e8dcdf506987f995", "tree": "bc51f72d2bada062ef14036931ee612150c09084"},
+      "artifact": {
+        "name": "frontier-five-target",
+        "run_id": "1001",
+        "run_attempt": 1,
+        "targets": [
+          "x86_64-unknown-linux-gnu",
+          "aarch64-unknown-linux-gnu",
+          "x86_64-apple-darwin",
+          "aarch64-apple-darwin",
+          "x86_64-pc-windows-msvc"
+        ]
+      }
+    },
+    {
+      "lane_id": "checkpoint-identity",
+      "profile": "checkpoint",
+      "target": "x86_64-pc-windows-msvc",
+      "identity": {"repository": "sednalabs/mcp-toolkit-rs", "ref": "refs/heads/main", "sha": "dd72f5cee203c8497ab43574e8dcdf506987f995", "tree": "bc51f72d2bada062ef14036931ee612150c09084"},
+      "artifact": {"name": "frontier-checkpoint-identity", "run_id": "1001", "run_attempt": 1}
+    }
+  ]
+}

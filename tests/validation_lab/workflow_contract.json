@@ -1,0 +1,14 @@
+{
+  "schema": "toolkit_frontier_generated_workflow_contract",
+  "version": 1,
+  "workflow": {
+    "generated": true,
+    "artifact_upload": "always",
+    "fanout": "capped-fail-slow",
+    "aggregation": "target-bound"
+  },
+  "coupling": {
+    "proof": "canonical-generator",
+    "shared_fields": ["repository", "ref", "sha", "tree", "profile", "lane_id", "target", "run_id", "run_attempt"]
+  }
+}

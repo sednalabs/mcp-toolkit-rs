@@ -1,0 +1,11 @@
+{
+  "schema": "toolkit_frontier_aggregate_case",
+  "case": "ranking",
+  "lanes": [
+    {"lane_id": "lane-optional", "status": "optional", "finding": "additional evidence"},
+    {"lane_id": "lane-unknown", "status": "unknown", "finding": "missing receipt"},
+    {"lane_id": "lane-blocker", "status": "blocker", "finding": "target identity mismatch"},
+    {"lane_id": "lane-noop", "status": "no-op", "finding": null}
+  ],
+  "expected": {"decision": "fail", "ranked_failures": ["lane-blocker", "lane-unknown", "lane-noop"]}
+}
