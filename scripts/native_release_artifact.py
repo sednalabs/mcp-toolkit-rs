@@ -1151,6 +1151,18 @@ def fake_pe(path: Path, machine: int = 0x8664) -> None:
     path.write_bytes(data)
 
 
+def renamed_tar_member(
+    member: tarfile.TarInfo, original_root: str, renamed_root: str
+) -> tarfile.TarInfo:
+    """Copy a fixture member and keep its serialized PAX path in sync."""
+    renamed = copy.copy(member)
+    renamed.name = renamed_root + member.name[len(original_root):]
+    renamed.pax_headers = dict(member.pax_headers)
+    if "path" in renamed.pax_headers:
+        renamed.pax_headers["path"] = renamed.name
+    return renamed
+
+
 def fake_sbom(binary_name: str) -> dict[str, object]:
     root_ref = f"pkg:cargo/{binary_name}@0.1.0"
     dependency_ref = "pkg:cargo/example-dependency@1.0.0"
@@ -1776,8 +1788,7 @@ class ArtifactTests(unittest.TestCase):
                 for original_member in source_members:
                     original_payload = source_bundle.extractfile(original_member)
                     payload_bytes = original_payload.read() if original_payload is not None else None
-                    renamed_member = copy.copy(original_member)
-                    renamed_member.name = renamed_root + original_member.name[len(original_root):]
+                    renamed_member = renamed_tar_member(original_member, original_root, renamed_root)
                     renamed_members.append((renamed_member, payload_bytes))
                 with tarfile.open(renamed_archive, mode="w:gz") as target_bundle:
                     for member, payload_bytes in renamed_members:
