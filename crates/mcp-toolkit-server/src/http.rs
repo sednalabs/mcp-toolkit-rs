@@ -688,7 +688,13 @@ where
     // not force it through legacy session lookup even if a stale legacy header
     // is also present; RMCP validates the actual request metadata and headers.
     if declares_current_protocol(req.headers()) {
-        return forward_service(state.stateful_service, req, "current_stateless").await;
+        return forward_bounded_service(
+            state.stateful_service,
+            req,
+            "current_stateless",
+            state.max_request_body_bytes,
+        )
+        .await;
     }
 
     let has_session_header = req.headers().contains_key(HEADER_SESSION_ID);
@@ -696,7 +702,13 @@ where
         let route = resolve_mcp_session_route(req.headers(), state.session_manager.as_ref()).await;
         return match route {
             McpSessionRoute::Live(session_id) => {
-                forward_live_service(state.stateful_service, req, session_id).await
+                forward_bounded_live_service(
+                    state.stateful_service,
+                    req,
+                    session_id,
+                    state.max_request_body_bytes,
+                )
+                .await
             }
             McpSessionRoute::Headerless => {
                 // `header_present` above and exact resolver semantics make this
@@ -838,6 +850,56 @@ where
 {
     req.extensions_mut().insert(session_id);
     forward_service(service, req, "legacy_stateful_session").await
+}
+
+async fn forward_bounded_live_service<S>(
+    service: StreamableHttpService<S, RecordingSessionManager>,
+    req: Request,
+    session_id: LiveMcpSessionId,
+    limit: usize,
+) -> Response
+where
+    S: ServerHandler + Send + 'static,
+{
+    let (parts, body) = req.into_parts();
+    let bytes = match to_bytes(body, limit).await {
+        Ok(bytes) => bytes,
+        Err(err) if is_body_limit_error(&err) => return sessionless_body_too_large_response(),
+        Err(_) => {
+            return session_error(
+                StatusCode::BAD_REQUEST,
+                "Failed to read request body.",
+                "Retry the request.",
+            );
+        }
+    };
+    let mut req = Request::from_parts(parts, Body::from(bytes));
+    req.extensions_mut().insert(session_id);
+    forward_service(service, req, "legacy_stateful_session").await
+}
+
+async fn forward_bounded_service<S>(
+    service: StreamableHttpService<S, RecordingSessionManager>,
+    req: Request,
+    phase: &'static str,
+    limit: usize,
+) -> Response
+where
+    S: ServerHandler + Send + 'static,
+{
+    let (parts, body) = req.into_parts();
+    let bytes = match to_bytes(body, limit).await {
+        Ok(bytes) => bytes,
+        Err(err) if is_body_limit_error(&err) => return sessionless_body_too_large_response(),
+        Err(_) => {
+            return session_error(
+                StatusCode::BAD_REQUEST,
+                "Failed to read request body.",
+                "Retry the request.",
+            );
+        }
+    };
+    forward_service(service, Request::from_parts(parts, Body::from(bytes)), phase).await
 }
 
 async fn forward_service<S>(

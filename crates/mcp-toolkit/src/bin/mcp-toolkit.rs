@@ -573,7 +573,7 @@ fn take_value(args: &[String], index: &mut usize, option: &str) -> Result<String
     *index += 1;
     match args.get(*index) {
         Some(value) => Ok(value.clone()),
-        None => Err(format!("missing value for {}", option)),
+        None => Err(format!("missing value for {option}")),
     }
 }
 

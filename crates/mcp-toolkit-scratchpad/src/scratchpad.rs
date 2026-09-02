@@ -1058,9 +1058,7 @@ impl ScratchpadSessionManager {
             cleanup_paths(removed_paths);
             return Err(ScratchpadError::scratchpad_limit(
                 "tables",
-                format!(
-                    "max tables per session exceeded ({max_tables_per_session})"
-                ),
+                format!("max tables per session exceeded ({max_tables_per_session})"),
             ));
         }
 
@@ -1246,9 +1244,7 @@ impl ScratchpadSessionManager {
             cleanup_paths(removed_paths);
             return Err(ScratchpadError::scratchpad_limit(
                 "tables",
-                format!(
-                    "max tables per session exceeded ({max_tables_per_session})"
-                ),
+                format!("max tables per session exceeded ({max_tables_per_session})"),
             ));
         }
 
