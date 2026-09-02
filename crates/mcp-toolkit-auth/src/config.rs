@@ -301,23 +301,19 @@ fn validate_oidc_metadata(
 fn required_metadata_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str, AuthError> {
     let value = value.map(str::trim).unwrap_or("");
     if value.is_empty() {
-        return Err(AuthError::new(format!(
-            "Discovery metadata missing {}",
-            field
-        )));
+        return Err(AuthError::new(format!("Discovery metadata missing {field}")));
     }
     Ok(value)
 }
 
 fn validate_metadata_url(field: &str, value: &str) -> Result<(), AuthError> {
     let url = reqwest::Url::parse(value)
-        .map_err(|_| AuthError::new(format!("Discovery metadata has invalid {}", field)))?;
+        .map_err(|_| AuthError::new(format!("Discovery metadata has invalid {field}")))?;
     if url.scheme() == "https" || (url.scheme() == "http" && is_loopback_url(&url)) {
         return Ok(());
     }
     Err(AuthError::new(format!(
-        "Discovery metadata has unsupported {} scheme",
-        field
+        "Discovery metadata has unsupported {field} scheme"
     )))
 }
 
