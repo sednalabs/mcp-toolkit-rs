@@ -52,6 +52,15 @@ PLATFORM_VALIDATORS = {
     "aarch64-apple-darwin": PlatformValidator("aarch64-apple-darwin", "macho", "aarch64"),
     "x86_64-pc-windows-msvc": PlatformValidator("x86_64-pc-windows-msvc", "pe", "x86_64"),
 }
+# Keep release-wide target cardinality and order separate from TARGET_MACHINES,
+# which remains the Linux-only ELF/GLIBC validation contract above.
+RELEASE_TARGETS = (
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+)
 PAYLOAD_FILES = frozenset(
     {
         "BUILD-CANDIDATE",
@@ -1050,14 +1059,14 @@ def authorization_receipt(
         or not release_source_eligible(
             expected_source_event, expected_source_ref, source.get("main_proven", False)
         )
-        or targets != list(TARGET_MACHINES)
+        or targets != list(RELEASE_TARGETS)
         or not isinstance(archives, list)
-        or len(archives) != len(TARGET_MACHINES)
+        or len(archives) != len(RELEASE_TARGETS)
         or verification.get("tool_inventory_equal") is not True
         or verification.get("tool_schema_equal") is not True
     ):
         raise ArtifactError("verification report is not an eligible trusted release source")
-    for archive, target in zip(archives, TARGET_MACHINES):
+    for archive, target in zip(archives, RELEASE_TARGETS):
         validate_authorization_archive(archive, binary_name, expected_candidate, target)
     if not workflow_run_id.isdigit() or not workflow_run_attempt.isdigit():
         raise ArtifactError("workflow run id and attempt must be decimal integers")
@@ -1126,19 +1135,29 @@ def parse_boolean(value: str) -> bool:
 def fake_verification_report(binary_name: str = "example-server") -> dict[str, object]:
     candidate = "a" * 40
     archives = []
-    for index, target in enumerate(TARGET_MACHINES):
+    for index, target in enumerate(RELEASE_TARGETS):
+        archive_binary_name = (
+            f"{binary_name}.exe"
+            if target == "x86_64-pc-windows-msvc" and not binary_name.endswith(".exe")
+            else binary_name
+        )
+        runtime = (
+            {
+                "libc": "glibc",
+                "interpreter": TARGET_INTERPRETERS[target],
+                "required_glibc": "2.34",
+                "maximum_supported_glibc": "2.39",
+            }
+            if target in TARGET_MACHINES
+            else {"format": platform_validator(target).format}
+        )
         archives.append(
             {
-                "archive": f"{binary_name}-{target}-{candidate}.tar.gz",
+                "archive": f"{archive_binary_name}-{target}-{candidate}.tar.gz",
                 "archive_sha256": str(index + 1) * 64,
                 "binary_sha256": str(index + 3) * 64,
                 "target": target,
-                "runtime": {
-                    "libc": "glibc",
-                    "interpreter": TARGET_INTERPRETERS[target],
-                    "required_glibc": "2.34",
-                    "maximum_supported_glibc": "2.39",
-                },
+                "runtime": runtime,
             }
         )
     return {
@@ -1153,7 +1172,7 @@ def fake_verification_report(binary_name: str = "example-server") -> dict[str, o
             "tree": "b" * 40,
             "main_proven": True,
         },
-        "targets": list(TARGET_MACHINES),
+        "targets": list(RELEASE_TARGETS),
         "source_inputs": {
             "manifest_sha256": "d" * 64,
             "lockfile_sha256": "e" * 64,
@@ -1165,6 +1184,22 @@ def fake_verification_report(binary_name: str = "example-server") -> dict[str, o
 
 
 class ArtifactTests(unittest.TestCase):
+    def test_release_target_contract_is_ordered_and_linux_runtime_scope_is_narrow(self) -> None:
+        self.assertEqual(
+            RELEASE_TARGETS,
+            (
+                "x86_64-unknown-linux-gnu",
+                "aarch64-unknown-linux-gnu",
+                "x86_64-apple-darwin",
+                "aarch64-apple-darwin",
+                "x86_64-pc-windows-msvc",
+            ),
+        )
+        self.assertEqual(
+            tuple(TARGET_MACHINES),
+            ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"),
+        )
+
     def test_platform_validator_covers_cross_platform_v3_targets(self) -> None:
         self.assertEqual(platform_validator("x86_64-unknown-linux-gnu").format, "elf")
         self.assertEqual(platform_validator("aarch64-apple-darwin").format, "macho")
@@ -1432,7 +1467,19 @@ class ArtifactTests(unittest.TestCase):
                     "repository", "other/server"
                 ),
                 "skeletal archive": lambda value: value.__setitem__(
-                    "archives", [{"target": target} for target in TARGET_MACHINES]
+                    "archives", [{"target": target} for target in RELEASE_TARGETS]
+                ),
+                "missing target": lambda value: value.__setitem__(
+                    "targets", list(RELEASE_TARGETS[:-1])
+                ),
+                "duplicate target": lambda value: value.__setitem__(
+                    "targets", [*RELEASE_TARGETS[:-1], RELEASE_TARGETS[-2]]
+                ),
+                "unknown target": lambda value: value.__setitem__(
+                    "targets", [*RELEASE_TARGETS[:-1], "unknown-target"]
+                ),
+                "archive gap": lambda value: value.__setitem__(
+                    "archives", value["archives"][:-1]
                 ),
                 "extra archive": lambda value: value["archives"].append(
                     value["archives"][0].copy()
@@ -1441,7 +1488,7 @@ class ArtifactTests(unittest.TestCase):
                     "binary_sha256", "not-a-digest"
                 ),
                 "wrong targets": lambda value: value.__setitem__(
-                    "targets", list(reversed(TARGET_MACHINES))
+                    "targets", list(reversed(RELEASE_TARGETS))
                 ),
                 "extra archive field": lambda value: value["archives"][0].__setitem__(
                     "unexpected", True
