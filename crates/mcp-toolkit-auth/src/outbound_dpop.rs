@@ -1790,11 +1790,7 @@ fn valid_nonce(value: &str) -> bool {
             .all(|byte| *byte == b'=')
 }
 
-fn append_form_field(
-    body: &mut Vec<u8>,
-    name: &str,
-    value: &str,
-) -> Result<(), OutboundDpopError> {
+fn append_form_field(body: &mut Vec<u8>, name: &str, value: &str) -> Result<(), OutboundDpopError> {
     if !body.is_empty() {
         append_form_bytes(body, b"&")?;
     }
@@ -1813,11 +1809,7 @@ fn append_form_component(body: &mut Vec<u8>, value: &str) -> Result<(), Outbound
             const HEX: &[u8; 16] = b"0123456789ABCDEF";
             append_form_bytes(
                 body,
-                &[
-                    b'%',
-                    HEX[(byte >> 4) as usize],
-                    HEX[(byte & 0x0f) as usize],
-                ],
+                &[b'%', HEX[(byte >> 4) as usize], HEX[(byte & 0x0f) as usize]],
             )?;
         }
     }
