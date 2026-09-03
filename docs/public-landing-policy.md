@@ -21,11 +21,27 @@ for every change. Required hosted checks are the minimum merge gate.
 The required checks for `main` are:
 
 - `Run targeted Rust baseline`;
-- `CodeQL required gate`.
+- `CodeQL required gate`;
+- `First-wave Cargo package readiness`;
+- `dependency-governance`;
+- `Rust Cobertura coverage`;
+- `DevSkim`;
+- `scan-pr / osv-scan`;
+- `Actions workflow security query tests`;
+- `Rust 2024 compatibility guard`.
 
 These checks must appear on every pull request and every push to `main`, so the
 workflows intentionally avoid path filters on their pull request and main-push
 triggers.
+
+The Rust admission surface deliberately avoids running the same full workspace
+test suite twice. `Run targeted Rust baseline` owns formatting, all-target and
+all-feature Clippy compilation, and maintained-template baseline tests.
+`Rust Cobertura coverage` owns execution of the root workspace
+`--workspace --all-targets --all-features` test surface while generating the
+required coverage evidence. `scripts/check_rust_baseline_workflow.py` binds
+those two workflow contracts so the optimization cannot silently become a loss
+of workspace test coverage.
 
 ## Public Wording
 
