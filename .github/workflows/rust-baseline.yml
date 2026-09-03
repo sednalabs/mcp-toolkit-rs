@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: rust-baseline::${{ github.ref_name }}
+  group: rust-baseline::${{ github.event_name }}::${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -160,6 +160,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo artifacts
+        if: ${{ matrix.lane.phase_name != 'fmt' }}
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:

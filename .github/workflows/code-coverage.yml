@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: code-coverage::${{ github.ref }}
+  group: code-coverage::${{ github.event_name }}::${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -77,11 +77,11 @@ jobs:
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: code-coverage-${{ runner.os }}-${{ matrix.target.cache_key }}
+          shared-key: code-coverage-v2-${{ runner.os }}-${{ matrix.target.cache_key }}
           workspaces: ${{ matrix.target.workspaces }}
           cache-on-failure: "true"
-          cache-all-crates: "true"
-          cache-workspace-crates: "true"
+          cache-all-crates: "false"
+          cache-workspace-crates: "false"
 
       - name: Install coverage tool
         # taiki-e/install-action v2

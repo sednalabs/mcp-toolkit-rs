@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: cargo-package-readiness::${{ github.ref }}
+  group: cargo-package-readiness::${{ github.event_name }}::${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -56,30 +56,39 @@ jobs:
       matrix:
         package:
           - name: mcp-toolkit-core
+            needs_build_cache: true
             verify_cmd: |
               cargo package --package mcp-toolkit-core --list
               cargo package --package mcp-toolkit-core
           - name: mcp-toolkit-observability
+            needs_build_cache: true
             verify_cmd: |
               cargo package --package mcp-toolkit-observability --list
               cargo package --package mcp-toolkit-observability
           - name: mcp-toolkit-policy-core
+            needs_build_cache: true
             verify_cmd: |
               cargo package --package mcp-toolkit-policy-core --list
               cargo package --package mcp-toolkit-policy-core
           - name: mcp-toolkit-http
+            needs_build_cache: true
             verify_cmd: |
               cargo package --package mcp-toolkit-http --list
               cargo package --package mcp-toolkit-http
           - name: mcp-toolkit-scratchpad
+            needs_build_cache: false
             verify_cmd: cargo package --package mcp-toolkit-scratchpad --list
           - name: mcp-toolkit-testing
+            needs_build_cache: false
             verify_cmd: cargo package --package mcp-toolkit-testing --list
           - name: mcp-toolkit-policy-conformance
+            needs_build_cache: false
             verify_cmd: cargo package --package mcp-toolkit-policy-conformance --list
           - name: mcp-toolkit-auth
+            needs_build_cache: false
             verify_cmd: cargo package --package mcp-toolkit-auth --list
           - name: mcp-toolkit-server
+            needs_build_cache: false
             verify_cmd: cargo package --package mcp-toolkit-server --list
     steps:
       - name: Checkout
@@ -94,18 +103,15 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Cache cargo artifacts
+        if: ${{ matrix.package.needs_build_cache }}
         # swatinem/rust-cache v2
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: cargo-package-readiness-${{ runner.os }}
+          shared-key: cargo-package-readiness-v2-${{ runner.os }}-build
           workspaces: |
             . -> target
-            templates/curated-stdio-intent-server -> target
-            templates/hosted-http-auth-server -> target
-            templates/single-crate-public-stdio-server -> target
+          cache-bin: "false"
           cache-on-failure: "true"
-          cache-all-crates: "true"
-          cache-workspace-crates: "true"
 
       - name: Verify package readiness lane
         shell: bash
