@@ -21,8 +21,8 @@ pub use provenance::{
     capture_runtime_provenance, source_fingerprint, AttestationEnvelope, AttestationIdentity,
     AttestationOptions, AttestationPayload, AttestationRuntime, AttestationStatus,
     BinaryProvenance, BuildMetadata, BuildProvenance, BuildProvenanceInput, ProcessProvenance,
-    RuntimeProvenance, SourceProvenance, UnavailableField, ATTESTATION_SCHEMA_VERSION,
-    TrustedLocalPath, TrustedLocalPathError, UNKNOWN_VALUE,
+    RuntimeProvenance, SourceProvenance, TrustedLocalPath, TrustedLocalPathError, UnavailableField,
+    ATTESTATION_SCHEMA_VERSION, UNKNOWN_VALUE,
 };
 
 /// Build canonical provenance from a consumer crate's compile-time environment.

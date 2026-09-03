@@ -43,7 +43,10 @@ impl std::fmt::Display for TrustedLocalPathError {
             Self::RootNotDirectory => write!(f, "trusted local path root must be a directory"),
             Self::PathNotAbsolute => write!(f, "trusted local path must be absolute"),
             Self::PathTraversal => {
-                write!(f, "trusted local path must not contain traversal components")
+                write!(
+                    f,
+                    "trusted local path must not contain traversal components"
+                )
             }
             Self::PathUnavailable(error) => {
                 write!(f, "trusted local path is unavailable: {error}")
@@ -87,9 +90,15 @@ impl TrustedLocalPath {
     /// Binds the process executable to its own canonical parent directory.
     pub fn current_executable() -> io::Result<Self> {
         let path = std::env::current_exe()?;
-        let root = path.parent().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "current executable has no parent")
-        })?;
+        let root = path
+            .parent()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "current executable has no parent",
+                )
+            })?
+            .to_path_buf();
         Self::from_root(root, path)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }

@@ -470,14 +470,12 @@ fn warning_or_reject(
 }
 
 fn valid_sha256_reference(value: &str) -> bool {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(|digest| {
-            digest.len() == 64
-                && digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn is_unknown(value: &str) -> bool {
@@ -576,13 +574,12 @@ mod tests {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
-        let artifact =
-            GateArtifactV1::passing(
-                &runtime,
-                TestGateLevel::Fast,
-                TEST_MANIFEST_DIGEST,
-                expires_at,
-            );
+        let artifact = GateArtifactV1::passing(
+            &runtime,
+            TestGateLevel::Fast,
+            TEST_MANIFEST_DIGEST,
+            expires_at,
+        );
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
@@ -600,13 +597,12 @@ mod tests {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
-        let mut artifact =
-            GateArtifactV1::passing(
-                &runtime,
-                TestGateLevel::Fast,
-                TEST_MANIFEST_DIGEST,
-                expires_at,
-            );
+        let mut artifact = GateArtifactV1::passing(
+            &runtime,
+            TestGateLevel::Fast,
+            TEST_MANIFEST_DIGEST,
+            expires_at,
+        );
         artifact.build_identity = "other-mcp@1.0.0+deadbeef".to_string();
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
