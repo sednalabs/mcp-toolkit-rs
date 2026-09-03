@@ -542,7 +542,7 @@ mod tests {
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Passed);
-        let _ = fs::remove_file(gate_path);
+        let _ = fs::remove_file(operator_local_gate_path(&gate_path));
     }
 
     #[test]
@@ -563,7 +563,7 @@ mod tests {
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_BUILD_MISMATCH));
-        let _ = fs::remove_file(gate_path);
+        let _ = fs::remove_file(operator_local_gate_path(&gate_path));
     }
 
     #[test]
