@@ -151,7 +151,7 @@ impl TrustedLocalPath {
     pub(crate) fn open_confined_read(&self) -> io::Result<File> {
         #[cfg(unix)]
         {
-            return open_confined_read(&self.root, &self.relative, self.root_identity);
+            open_confined_read(&self.root, &self.relative, self.root_identity)
         }
         #[cfg(not(unix))]
         {
@@ -165,7 +165,7 @@ impl TrustedLocalPath {
     pub(crate) fn write_confined_atomic(&self, payload: &[u8]) -> io::Result<()> {
         #[cfg(unix)]
         {
-            return write_confined_atomic(&self.root, &self.relative, self.root_identity, payload);
+            write_confined_atomic(&self.root, &self.relative, self.root_identity, payload)
         }
         #[cfg(not(unix))]
         {

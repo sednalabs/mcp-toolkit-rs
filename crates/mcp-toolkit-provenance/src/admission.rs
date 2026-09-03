@@ -435,18 +435,18 @@ pub fn write_gate_artifact(
 ) -> Result<(), String> {
     let payload = serde_json::to_vec_pretty(artifact)
         .map_err(|err| format!("failed to serialize gate artifact: {err}"))?;
-    path.write_confined_atomic(&payload)
-        .map_err(|err| {
-            format!(
-                "failed to write gate artifact {}: {err}",
-                path.as_ref().display()
-            )
-        })
+    path.write_confined_atomic(&payload).map_err(|err| {
+        format!(
+            "failed to write gate artifact {}: {err}",
+            path.as_ref().display()
+        )
+    })
 }
 
 /// Marks an operator-selected local gate path for CodeQL's path-flow model.
 /// The helper is crate-private so request-handling code cannot reuse it as a
 /// generic path sanitizer.
+#[cfg(test)]
 pub(crate) fn operator_local_gate_path(path: &TrustedLocalPath) -> &Path {
     path.as_ref()
 }
