@@ -93,10 +93,14 @@ def check() -> None:
         "coverage must execute the complete workspace all-target/all-feature test surface"
     )
     coverage_line = next(
-        line.strip()
-        for line in coverage.splitlines()
-        if "cargo llvm-cov --workspace" in line
+        (
+            line.strip()
+            for line in coverage.splitlines()
+            if "cargo llvm-cov --workspace" in line
+        ),
+        None,
     )
+    assert coverage_line is not None, "missing coverage workspace test execution command"
     for forbidden in ("--no-run", "--ignore-run-fail"):
         assert forbidden not in coverage_line, (
             f"coverage workspace test execution must remain fatal; found {forbidden}"
@@ -122,7 +126,7 @@ def check() -> None:
 if __name__ == "__main__":
     try:
         check()
-    except (AssertionError, OSError, StopIteration) as exc:
+    except (AssertionError, OSError) as exc:
         print(f"rust baseline workflow contract failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
     print(f"rust baseline workflow contract passed: {BASELINE} + {COVERAGE}")
