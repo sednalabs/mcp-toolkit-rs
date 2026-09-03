@@ -57,6 +57,8 @@ pub struct AdmissionBypass {
 pub struct StartupAdmissionPolicy {
     pub mode: StartupAdmissionMode,
     pub required_level: TestGateLevel,
+    /// Operator-selected local gate-artifact path. This path is read during
+    /// startup admission and must not be populated from request data.
     pub gate_path: PathBuf,
     pub production_mode: bool,
     pub allow_production_bypass: bool,
@@ -232,6 +234,7 @@ pub fn evaluate_startup_admission(
         ));
     }
 
+    // codeql[rust/path-injection] Operator-selected local gate path after application-level policy validation.
     let gate_meta = match fs::metadata(&policy.gate_path) {
         Ok(meta) => meta,
         Err(err) => {
@@ -251,6 +254,7 @@ pub fn evaluate_startup_admission(
         }
     };
 
+    // codeql[rust/path-injection] Operator-selected local gate path after application-level policy validation.
     let raw = match fs::read_to_string(&policy.gate_path) {
         Ok(raw) => raw,
         Err(err) => {
@@ -389,6 +393,9 @@ pub fn evaluate_startup_admission(
     })
 }
 
+/// Writes a gate artifact to an operator-selected local path using an atomic
+/// temporary-file replacement. The path must come from trusted build or
+/// deployment configuration, never from request data.
 pub fn write_gate_artifact(path: &Path, artifact: &GateArtifactV1) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
@@ -401,8 +408,10 @@ pub fn write_gate_artifact(path: &Path, artifact: &GateArtifactV1) -> Result<(),
     let payload = serde_json::to_vec_pretty(artifact)
         .map_err(|err| format!("failed to serialize gate artifact: {err}"))?;
     let temp = path.with_extension("tmp");
+    // codeql[rust/path-injection] Operator-selected local gate path from trusted build configuration.
     fs::write(&temp, payload)
         .map_err(|err| format!("failed to write gate artifact {}: {err}", temp.display()))?;
+    // codeql[rust/path-injection] Operator-selected local gate path from trusted build configuration.
     fs::rename(&temp, path).map_err(|err| {
         format!(
             "failed to move gate artifact {} into {}: {err}",
@@ -504,6 +513,7 @@ mod tests {
     #[test]
     fn strict_mode_rejects_missing_gate() {
         let executable = temp_path("exe");
+        // codeql[rust/path-injection] Test-only temporary fixture path from a fixed local helper.
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         let gate_path = temp_path("missing-gate");
@@ -517,6 +527,7 @@ mod tests {
     #[test]
     fn strict_mode_accepts_gate_bound_to_running_build() {
         let executable = temp_path("exe");
+        // codeql[rust/path-injection] Test-only temporary fixture path from a fixed local helper.
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
@@ -538,6 +549,7 @@ mod tests {
     #[test]
     fn gate_bound_to_different_build_is_rejected() {
         let executable = temp_path("exe");
+        // codeql[rust/path-injection] Test-only temporary fixture path from a fixed local helper.
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
@@ -574,6 +586,7 @@ mod tests {
             }),
         };
         let executable = temp_path("exe");
+        // codeql[rust/path-injection] Test-only temporary fixture path from a fixed local helper.
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
 

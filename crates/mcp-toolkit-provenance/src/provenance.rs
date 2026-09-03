@@ -186,6 +186,8 @@ pub fn capture_runtime_provenance(
     build: BuildProvenance,
     executable_path: &Path,
 ) -> RuntimeProvenance {
+    // codeql[rust/path-injection] Operator-selected local executable path; this API is
+    // called at startup and does not consume request-derived path data.
     let metadata = fs::metadata(executable_path).ok();
     let modified_unix_ms = metadata
         .as_ref()
