@@ -706,6 +706,19 @@ async fn resource_authorization_requires_matching_explicit_trust_policy() {
         ),
         Err(OutboundDpopError::UntrustedEndpoint)
     ));
+    assert!(matches!(
+        authorization.apply(
+            reqwest::Client::new().get(
+                Url::parse("https://user:password@resource.example/v1/items#fragment")
+                    .expect("credential-bearing request target")
+            )
+        ),
+        Err(OutboundDpopError::UntrustedEndpoint)
+    ));
+    assert!(matches!(
+        authorization.apply(reqwest::Client::new().post(target.clone())),
+        Err(OutboundDpopError::UntrustedEndpoint)
+    ));
     server.abort();
 }
 

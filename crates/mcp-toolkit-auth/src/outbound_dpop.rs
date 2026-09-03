@@ -1656,6 +1656,12 @@ impl DpopAuthorization {
         let mut request = builder
             .build()
             .map_err(|_| OutboundDpopError::Http(HttpFailureKind::Request))?;
+        if !request.url().username().is_empty()
+            || request.url().password().is_some()
+            || request.url().fragment().is_some()
+        {
+            return Err(OutboundDpopError::UntrustedEndpoint);
+        }
         let request_target = canonical_dpop_target_with_policy(
             request.url(),
             self.allow_insecure_loopback,
