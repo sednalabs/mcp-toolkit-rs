@@ -514,10 +514,7 @@ fn validate_root_chain_schema(
     let has_object_type = root_type_includes_object(object.get("type"))?;
     let type_present = object.contains_key("type");
     let has_reference = object.contains_key("$ref");
-    if policy.require_object_root
-        && ((!has_reference && !has_object_type)
-            || (has_reference && type_present && !has_object_type))
-    {
+    if policy.require_object_root && !has_object_type && (!has_reference || type_present) {
         return Err(SchemaDialectError::RootMustBeObject);
     }
     Ok(())
@@ -1242,8 +1239,9 @@ const FNV_PRIME: u64 = 0x100000001b3;
 mod tests {
     use super::{
         charge_json_number_bytes, charge_json_string_bytes, decode_uri_fragment, tool_names,
-        tool_schema_fingerprint, tool_schema_snapshot_value, validate_schema_dialect, SchemaDialectError,
-        SchemaDialectPolicy, SchemaInputBudget, SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
+        tool_schema_fingerprint, tool_schema_snapshot_value, validate_schema_dialect,
+        SchemaDialectError, SchemaDialectPolicy, SchemaInputBudget,
+        SCHEMA_DIALECT_REFERENCE_ERROR_PREVIEW_BYTES,
     };
     use serde_json::{json, Map, Number, Value};
     use std::borrow::Cow;
