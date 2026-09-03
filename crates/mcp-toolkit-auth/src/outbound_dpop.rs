@@ -1619,7 +1619,7 @@ impl DpopAuthorization {
     ) -> Result<Self, OutboundDpopError> {
         let mut authorization =
             HeaderValue::from_str(&format!("DPoP {}", access_token.expose_secret()))
-            .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
+                .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
         authorization.set_sensitive(true);
         let mut proof = HeaderValue::from_str(proof.expose_secret())
             .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
@@ -1662,16 +1662,17 @@ impl DpopAuthorization {
         {
             return Err(OutboundDpopError::UntrustedEndpoint);
         }
-        let request_target = canonical_dpop_target_with_policy(
-            request.url(),
-            self.allow_insecure_loopback,
-        )?;
+        let request_target =
+            canonical_dpop_target_with_policy(request.url(), self.allow_insecure_loopback)?;
         if request.method() != &self.method || request_target != self.canonical_target {
             return Err(OutboundDpopError::UntrustedEndpoint);
         }
         let headers = request.headers_mut();
         headers.insert(http::header::AUTHORIZATION, self.authorization.clone());
-        headers.insert(http::header::HeaderName::from_static("dpop"), self.proof.clone());
+        headers.insert(
+            http::header::HeaderName::from_static("dpop"),
+            self.proof.clone(),
+        );
         Ok(request)
     }
 }
