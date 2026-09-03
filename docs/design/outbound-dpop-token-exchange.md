@@ -68,9 +68,11 @@ without pretending to perform provider introspection.
 
 Resource clients obtain a transaction object whose nonce-challenge method
 accepts only one `401` plus one valid `DPoP-Nonce`. The transaction constructs a
-fresh proof for the retry; callers still own the request body, dispatch, response
-interpretation, provider authorization, audience/scope policy, and service-specific
-availability policy.
+fresh proof for the retry. Its authorization application builds and checks the
+request method and canonical target before attaching credentials, so callers must
+dispatch the returned request rather than reusing the headers on another target.
+Callers still own the request body, response interpretation, provider
+authorization, audience/scope policy, and service-specific availability policy.
 
 ## Caller contract
 

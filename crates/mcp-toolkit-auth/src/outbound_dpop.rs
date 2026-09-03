@@ -1541,7 +1541,13 @@ impl DpopResourceRequest<'_> {
             nonce.as_deref(),
             self.client.config.allow_insecure_loopback,
         )?;
-        DpopAuthorization::new(&self.token.access_token, proof)
+        DpopAuthorization::new(
+            &self.token.access_token,
+            proof,
+            &self.method,
+            &self.target,
+            self.client.config.allow_insecure_loopback,
+        )
     }
 
     /// Records a successful-response nonce for the next request.
@@ -1592,6 +1598,9 @@ impl DpopResourceRequest<'_> {
 pub struct DpopAuthorization {
     authorization: HeaderValue,
     proof: HeaderValue,
+    method: Method,
+    canonical_target: String,
+    allow_insecure_loopback: bool,
 }
 
 impl fmt::Debug for DpopAuthorization {
@@ -1604,10 +1613,13 @@ impl DpopAuthorization {
     fn new(
         access_token: &SecretString,
         proof: OutboundDpopProof,
+        method: &Method,
+        target: &Url,
+        allow_insecure_loopback: bool,
     ) -> Result<Self, OutboundDpopError> {
         let mut authorization =
             HeaderValue::from_str(&format!("DPoP {}", access_token.expose_secret()))
-                .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
+            .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
         authorization.set_sensitive(true);
         let mut proof = HeaderValue::from_str(proof.expose_secret())
             .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
@@ -1615,18 +1627,46 @@ impl DpopAuthorization {
         Ok(Self {
             authorization,
             proof,
+            method: method.clone(),
+            canonical_target: canonical_dpop_target_with_policy(target, allow_insecure_loopback)?,
+            allow_insecure_loopback,
         })
     }
 
-    /// Applies the DPoP authorization to a reqwest request builder.
+    /// Applies the DPoP authorization to a matching reqwest request builder.
+    ///
+    /// Building the request is part of this operation so the method and URL can
+    /// be checked before credential-bearing headers are attached. The caller
+    /// must use the returned request for the dispatch; applying these headers to
+    /// a different target is rejected.
+    ///
+    /// # Errors
+    /// Returns [`OutboundDpopError::UntrustedEndpoint`] when the builder's
+    /// method or canonical target differs from the transaction that produced
+    /// this authorization, or [`OutboundDpopError::Http`] when the builder
+    /// cannot be materialized.
     ///
     /// # Security
     /// Both headers are marked sensitive. Do not add middleware that logs raw
     /// request headers before reqwest's sensitivity metadata is honored.
-    pub fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        builder
-            .header(http::header::AUTHORIZATION, self.authorization.clone())
-            .header("DPoP", self.proof.clone())
+    pub fn apply(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Request, OutboundDpopError> {
+        let mut request = builder
+            .build()
+            .map_err(|_| OutboundDpopError::Http(HttpFailureKind::Request))?;
+        let request_target = canonical_dpop_target_with_policy(
+            request.url(),
+            self.allow_insecure_loopback,
+        )?;
+        if request.method() != &self.method || request_target != self.canonical_target {
+            return Err(OutboundDpopError::UntrustedEndpoint);
+        }
+        let headers = request.headers_mut();
+        headers.insert(http::header::AUTHORIZATION, self.authorization.clone());
+        headers.insert(http::header::HeaderName::from_static("dpop"), self.proof.clone());
+        Ok(request)
     }
 }
 

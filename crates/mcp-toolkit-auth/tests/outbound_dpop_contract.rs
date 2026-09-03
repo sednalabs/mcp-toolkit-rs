@@ -244,10 +244,13 @@ fn decode_proof(compact: &str) -> (jsonwebtoken::Header, Value) {
     (header, decoded.claims)
 }
 
-fn proof_from_authorization(authorization: &DpopAuthorization, target: &Url) -> Value {
+fn proof_from_authorization(
+    authorization: &DpopAuthorization,
+    method: Method,
+    target: &Url,
+) -> Value {
     let request = authorization
-        .apply(reqwest::Client::new().get(target.clone()))
-        .build()
+        .apply(reqwest::Client::new().request(method, target.clone()))
         .expect("resource request");
     let compact = request
         .headers()
@@ -545,6 +548,7 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
         .expect("GET resource request");
     let first_resource_claims = proof_from_authorization(
         &get_request.authorization().expect("first authorization"),
+        Method::GET,
         &first_target,
     );
     assert_eq!(first_resource_claims.get("nonce"), None);
@@ -556,6 +560,7 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
         .expect("eligible resource nonce challenge"));
     let retried_claims = proof_from_authorization(
         &get_request.authorization().expect("retry authorization"),
+        Method::GET,
         &first_target,
     );
     assert_eq!(retried_claims["nonce"], "get-items-nonce");
@@ -579,7 +584,8 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     assert_eq!(
         proof_from_authorization(
             &post_request.authorization().expect("POST authorization"),
-            &first_target
+            Method::POST,
+            &first_target,
         )
         .get("nonce"),
         None
@@ -595,7 +601,8 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     assert_eq!(
         proof_from_authorization(
             &other_request.authorization().expect("other authorization"),
-            &second_target
+            Method::GET,
+            &second_target,
         )
         .get("nonce"),
         None
@@ -679,6 +686,24 @@ async fn resource_authorization_requires_matching_explicit_trust_policy() {
     .expect("different resource policy");
     assert!(matches!(
         client.resource_request(&bound_token, Method::GET, target, &different_policy),
+        Err(OutboundDpopError::UntrustedEndpoint)
+    ));
+
+    let transaction = client
+        .resource_request(
+            &bound_token,
+            Method::GET,
+            target.clone(),
+            &DpopEndpointPolicy::exact_https(target.clone()).expect("target policy"),
+        )
+        .expect("trusted resource request");
+    let authorization = transaction.authorization().expect("resource authorization");
+    assert!(matches!(
+        authorization.apply(
+            reqwest::Client::new().get(
+                Url::parse("https://other.example/v1/items").expect("different request target")
+            )
+        ),
         Err(OutboundDpopError::UntrustedEndpoint)
     ));
     server.abort();
