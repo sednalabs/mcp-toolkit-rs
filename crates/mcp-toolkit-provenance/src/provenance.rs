@@ -79,6 +79,9 @@ impl TrustedLocalPath {
 
         let path = path.into();
         validate_absolute_without_traversal(&path, false)?;
+        if !path.starts_with(root) {
+            return Err(TrustedLocalPathError::OutsideRoot);
+        }
         let canonical_path = fs::canonicalize(&path)
             .map_err(|error| TrustedLocalPathError::PathUnavailable(error.to_string()))?;
         if !canonical_path.starts_with(&canonical_root) {

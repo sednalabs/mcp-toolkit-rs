@@ -508,17 +508,18 @@ mod tests {
     use super::*;
     use crate::provenance::{capture_runtime_provenance, BuildProvenance, BuildProvenanceInput};
 
-    fn temp_path(prefix: &str) -> PathBuf {
+    fn temp_path() -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("mcp-toolkit-{prefix}-{nonce}"))
+        let path = PathBuf::from("/tmp").join(format!("mcp-toolkit-provenance-{nonce}"));
+        fs::File::create(&path).expect("create temporary test path");
+        path
     }
 
     const TEST_MANIFEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn trusted_path(path: PathBuf) -> TrustedLocalPath {
-        fs::File::create(&path).expect("create trusted test path");
         TrustedLocalPath::from_root("/tmp", path).expect("bind trusted test path")
     }
 
@@ -559,7 +560,7 @@ mod tests {
     fn strict_mode_rejects_missing_gate() {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
-        let gate_path = trusted_path(temp_path("missing-gate"));
+        let gate_path = trusted_path(temp_path());
         let _ = fs::remove_file(operator_local_gate_path(&gate_path));
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
@@ -572,7 +573,7 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = trusted_path(temp_path("gate"));
+        let gate_path = trusted_path(temp_path());
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
@@ -595,7 +596,7 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = trusted_path(temp_path("gate"));
+        let gate_path = trusted_path(temp_path());
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
@@ -620,7 +621,7 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = trusted_path(temp_path("manifest-mismatch"));
+        let gate_path = trusted_path(temp_path());
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
@@ -647,7 +648,7 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let mut runtime = runtime_for(&executable);
         runtime.build.component = UNKNOWN_VALUE.to_string();
-        let gate_path = trusted_path(temp_path("unknown-component"));
+        let gate_path = trusted_path(temp_path());
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
@@ -662,7 +663,7 @@ mod tests {
         let policy = StartupAdmissionPolicy {
             mode: StartupAdmissionMode::Strict,
             required_level: TestGateLevel::Standard,
-            gate_path: trusted_path(temp_path("gate")),
+            gate_path: trusted_path(temp_path()),
             expected_command_manifest_digest: TEST_MANIFEST_DIGEST.to_string(),
             production_mode: false,
             allow_production_bypass: false,
@@ -686,7 +687,7 @@ mod tests {
         let policy = StartupAdmissionPolicy {
             mode: StartupAdmissionMode::Strict,
             required_level: TestGateLevel::Standard,
-            gate_path: trusted_path(temp_path("production-bypass")),
+            gate_path: trusted_path(temp_path()),
             expected_command_manifest_digest: TEST_MANIFEST_DIGEST.to_string(),
             production_mode: true,
             allow_production_bypass: true,
