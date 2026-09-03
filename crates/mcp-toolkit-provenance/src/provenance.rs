@@ -1,8 +1,19 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
+
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,9 +29,24 @@ pub const UNKNOWN_VALUE: &str = "unknown";
 /// components, paths outside the canonical root, and paths that do not yet
 /// exist. Consumers should construct this value at a configuration boundary
 /// and pass it through to runtime/provenance helpers; request data must never be
-/// used to construct one.
+/// used to construct one. Admission reads and writes use the retained root and
+/// relative path through directory handles, so later intermediate symlink or
+/// junction replacement cannot redirect an operation outside the bound root.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrustedLocalPath(PathBuf);
+pub struct TrustedLocalPath {
+    path: PathBuf,
+    root: PathBuf,
+    relative: PathBuf,
+    #[cfg(unix)]
+    root_identity: DirectoryIdentity,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryIdentity {
+    device: u64,
+    inode: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustedLocalPathError {
@@ -73,21 +99,30 @@ impl TrustedLocalPath {
         validate_absolute_without_traversal(root, true)?;
         let canonical_root = fs::canonicalize(root)
             .map_err(|error| TrustedLocalPathError::RootUnavailable(error.to_string()))?;
-        if !canonical_root.is_dir() {
+        let root_metadata = fs::metadata(&canonical_root)
+            .map_err(|error| TrustedLocalPathError::RootUnavailable(error.to_string()))?;
+        if !root_metadata.is_dir() {
             return Err(TrustedLocalPathError::RootNotDirectory);
         }
 
         let path = path.into();
         validate_absolute_without_traversal(&path, false)?;
-        if !path.starts_with(root) {
-            return Err(TrustedLocalPathError::OutsideRoot);
-        }
         let canonical_path = fs::canonicalize(&path)
             .map_err(|error| TrustedLocalPathError::PathUnavailable(error.to_string()))?;
         if !canonical_path.starts_with(&canonical_root) {
             return Err(TrustedLocalPathError::OutsideRoot);
         }
-        Ok(Self(canonical_path))
+        let relative = canonical_path
+            .strip_prefix(&canonical_root)
+            .map_err(|_| TrustedLocalPathError::OutsideRoot)?
+            .to_path_buf();
+        Ok(Self {
+            path: canonical_path,
+            root: canonical_root,
+            relative,
+            #[cfg(unix)]
+            root_identity: directory_identity(&root_metadata),
+        })
     }
 
     /// Binds the process executable to its own canonical parent directory.
@@ -107,7 +142,36 @@ impl TrustedLocalPath {
     }
 
     pub(crate) fn as_path(&self) -> &Path {
-        &self.0
+        &self.path
+    }
+
+    pub(crate) fn open_confined_read(&self) -> io::Result<File> {
+        #[cfg(unix)]
+        {
+            return open_confined_read(&self.root, &self.relative, self.root_identity);
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "directory-handle-confined gate reads are unsupported on this platform",
+            ))
+        }
+    }
+
+    pub(crate) fn write_confined_atomic(&self, payload: &[u8]) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            return write_confined_atomic(&self.root, &self.relative, self.root_identity, payload);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = payload;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "directory-handle-confined gate writes are unsupported on this platform",
+            ))
+        }
     }
 }
 
@@ -119,7 +183,7 @@ impl AsRef<Path> for TrustedLocalPath {
 
 impl From<TrustedLocalPath> for PathBuf {
     fn from(path: TrustedLocalPath) -> Self {
-        path.0
+        path.path
     }
 }
 
@@ -141,6 +205,188 @@ fn validate_absolute_without_traversal(
         return Err(TrustedLocalPathError::PathTraversal);
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn directory_identity(metadata: &fs::Metadata) -> DirectoryIdentity {
+    DirectoryIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }
+}
+
+#[cfg(unix)]
+fn open_confined_read(
+    root: &Path,
+    relative: &Path,
+    root_identity: DirectoryIdentity,
+) -> io::Result<File> {
+    let (parent, name) = open_confined_parent(root, relative, root_identity)?;
+    let flags = libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "gate artifact is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn write_confined_atomic(
+    root: &Path,
+    relative: &Path,
+    root_identity: DirectoryIdentity,
+    payload: &[u8],
+) -> io::Result<()> {
+    let (parent, name) = open_confined_parent(root, relative, root_identity)?;
+    let mut temp_relative = relative.to_path_buf();
+    temp_relative.set_extension("tmp");
+    let temp_name = temp_relative.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "trusted gate path has no file name",
+        )
+    })?;
+    let temp_name = cstring_os_str(temp_name)?;
+    let flags = libc::O_WRONLY
+        | libc::O_CREAT
+        | libc::O_EXCL
+        | libc::O_NOFOLLOW
+        | libc::O_CLOEXEC;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            temp_name.as_ptr(),
+            flags,
+            0o600 as libc::mode_t,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut temp_file = unsafe { File::from_raw_fd(fd) };
+    temp_file.write_all(payload)?;
+    temp_file.sync_all()?;
+    drop(temp_file);
+
+    let result = unsafe {
+        libc::renameat(
+            parent.as_raw_fd(),
+            temp_name.as_ptr(),
+            parent.as_raw_fd(),
+            name.as_ptr(),
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_confined_parent(
+    root: &Path,
+    relative: &Path,
+    root_identity: DirectoryIdentity,
+) -> io::Result<(File, CString)> {
+    let mut directory = open_directory_tree(root)?;
+    if directory_identity(&directory.metadata()?) != root_identity {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "trusted root directory changed",
+        ));
+    }
+    let mut components = relative.components().peekable();
+    let mut final_name = None;
+
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "trusted gate path contains a non-normal component",
+            ));
+        };
+        if components.peek().is_none() {
+            final_name = Some(cstring_os_str(name)?);
+            break;
+        }
+        directory = open_directory_at(&directory, name)?;
+    }
+
+    let final_name = final_name.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "trusted gate path has no file name",
+        )
+    })?;
+    Ok((directory, final_name))
+}
+
+#[cfg(unix)]
+fn open_directory_tree(root: &Path) -> io::Result<File> {
+    let root_fd = open_directory_at_path(Path::new("/"))?;
+    let mut directory = root_fd;
+    for component in root.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                directory = open_directory_at(&directory, name)?;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "trusted root contains a non-normal component",
+                ));
+            }
+        }
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn open_directory_at_path(path: &Path) -> io::Result<File> {
+    let path = cstring_path(path)?;
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let fd = unsafe { libc::open(path.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: open returned a new owned descriptor on success.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<File> {
+    let name = cstring_os_str(name)?;
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new owned descriptor on success.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn cstring_path(path: &Path) -> io::Result<CString> {
+    cstring_os_str(path.as_os_str())
+}
+
+#[cfg(unix)]
+fn cstring_os_str(value: &std::ffi::OsStr) -> io::Result<CString> {
+    CString::new(value.as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "trusted path contains an embedded NUL byte",
+        )
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
