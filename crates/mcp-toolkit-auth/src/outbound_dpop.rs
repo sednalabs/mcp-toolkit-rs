@@ -152,14 +152,14 @@ impl DpopEndpointPolicy {
     }
 
     fn matches_resource(&self, target: &Url) -> Result<bool, OutboundDpopError> {
-        if target.username().is_empty() && target.password().is_none() && target.fragment().is_none()
+        if target.username().is_empty()
+            && target.password().is_none()
+            && target.fragment().is_none()
         {
             let canonical_target =
                 canonical_dpop_target_with_policy(target, self.allow_insecure_loopback)?;
-            let canonical_endpoint = canonical_dpop_target_with_policy(
-                &self.endpoint,
-                self.allow_insecure_loopback,
-            )?;
+            let canonical_endpoint =
+                canonical_dpop_target_with_policy(&self.endpoint, self.allow_insecure_loopback)?;
             Ok(canonical_target == canonical_endpoint)
         } else {
             Err(OutboundDpopError::InvalidUrl)

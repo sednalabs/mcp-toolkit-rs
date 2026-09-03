@@ -17,8 +17,8 @@ use mcp_toolkit_auth::outbound_dpop::{
     canonical_dpop_target, BearerSubjectToken, DpopAccessToken, DpopAuthorization,
     DpopBoundAccessToken, DpopEndpointPolicy, DpopNonceState, DpopProviderValidationMetadata,
     DpopSigner, DpopTokenExchangeClient, DpopTokenExchangeConfig, OutboundDpopError,
-    Rfc8693TokenExchangeRequest,
-    TokenExchangeAuditMetadata, RFC8693_ACCESS_TOKEN_TYPE, RFC8693_GRANT_TYPE,
+    Rfc8693TokenExchangeRequest, TokenExchangeAuditMetadata, RFC8693_ACCESS_TOKEN_TYPE,
+    RFC8693_GRANT_TYPE,
 };
 use mcp_toolkit_auth::upstream_oauth::{OAuthClientAuthMethod, SecretString};
 use reqwest::Url;
@@ -167,11 +167,11 @@ fn exchange_request() -> Rfc8693TokenExchangeRequest {
             .expect("bearer subject token"),
         audit(),
     )
-        .expect("exchange request")
-        .with_audience("https://resource.example")
-        .expect("audience")
-        .with_scopes(vec!["read".to_string(), "write".to_string()])
-        .expect("scopes")
+    .expect("exchange request")
+    .with_audience("https://resource.example")
+    .expect("audience")
+    .with_scopes(vec!["read".to_string(), "write".to_string()])
+    .expect("scopes")
 }
 
 fn exchange_client(endpoint: Url) -> DpopTokenExchangeClient {
@@ -456,7 +456,10 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     assert_eq!(token.expires_in(), Some(60));
     assert_eq!(token.scope(), Some("read write"));
     let bound_token = provider_bound_token(&client, &token);
-    assert_eq!(bound_token.proof_thumbprint(), client.public_jwk().thumbprint());
+    assert_eq!(
+        bound_token.proof_thumbprint(),
+        client.public_jwk().thumbprint()
+    );
     assert_eq!(bound_token.audience(), "https://resource.example");
     assert_eq!(bound_token.provider(), "issuer.example");
     let mismatched_hash = DpopProviderValidationMetadata::from_provider(
@@ -582,7 +585,12 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
         None
     );
     let other_request = client
-        .resource_request(&bound_token, Method::GET, second_target.clone(), &second_policy)
+        .resource_request(
+            &bound_token,
+            Method::GET,
+            second_target.clone(),
+            &second_policy,
+        )
         .expect("other resource request");
     assert_eq!(
         proof_from_authorization(
@@ -607,8 +615,7 @@ async fn resource_http_policy_matches_the_client_loopback_exception() {
     let signer = DpopSigner::generate().expect("DPoP signer");
     let loopback_config = DpopTokenExchangeConfig::new(
         endpoint.clone(),
-        DpopEndpointPolicy::exact_loopback_http(endpoint)
-            .expect("loopback endpoint policy"),
+        DpopEndpointPolicy::exact_loopback_http(endpoint).expect("loopback endpoint policy"),
         "client-id",
         Some(SecretString::new("client-secret")),
     )
@@ -625,7 +632,12 @@ async fn resource_http_policy_matches_the_client_loopback_exception() {
     let resource_policy = DpopEndpointPolicy::exact_loopback_http(resource.clone())
         .expect("loopback resource policy");
     loopback_client
-        .resource_request(&bound_token, Method::GET, resource.clone(), &resource_policy)
+        .resource_request(
+            &bound_token,
+            Method::GET,
+            resource.clone(),
+            &resource_policy,
+        )
         .expect("explicit loopback policy applies to resource authorization");
 
     let strict_config = DpopTokenExchangeConfig::new(
@@ -760,8 +772,7 @@ async fn basic_client_auth_uses_one_sensitive_header_and_no_body_credentials() {
     .await;
     let config = DpopTokenExchangeConfig::new(
         endpoint.clone(),
-        DpopEndpointPolicy::exact_loopback_http(endpoint)
-            .expect("loopback endpoint policy"),
+        DpopEndpointPolicy::exact_loopback_http(endpoint).expect("loopback endpoint policy"),
         "client-id",
         Some(SecretString::new("client-secret")),
     )
@@ -1059,8 +1070,7 @@ async fn token_exchange_errors_and_debug_output_do_not_expose_secrets() {
         .expect("token endpoint proof");
     let config = DpopTokenExchangeConfig::new(
         endpoint.clone(),
-        DpopEndpointPolicy::exact_loopback_http(endpoint)
-            .expect("loopback endpoint policy"),
+        DpopEndpointPolicy::exact_loopback_http(endpoint).expect("loopback endpoint policy"),
         "client-id",
         Some(SecretString::new("client-secret")),
     )
