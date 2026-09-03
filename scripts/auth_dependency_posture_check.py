@@ -33,8 +33,17 @@ LOW_LEVEL_AUTH_CRATES = {
     "biscuit",
 }
 
-# These crates may appear only in dev-dependencies for real signed-proof
-# fixtures. Production auth code must continue to use the approved verifier.
+# These crates may appear only in the named production boundary. DPoP proof
+# signing remains delegated to `jsonwebtoken`; `p256` only generates the key
+# material passed to that JOSE implementation.
+APPROVED_PRODUCTION_LOW_LEVEL_AUTH_CRATES = {
+    "p256": (
+        "Outbound DPoP P-256 key generation",
+        {Path("crates/mcp-toolkit-auth/src/outbound_dpop.rs")},
+    ),
+}
+
+# These crates may appear in dev-dependencies for real signed-proof fixtures.
 APPROVED_TEST_ONLY_LOW_LEVEL_AUTH_CRATES = {
     "p256": "Test-only P-256 proof fixtures",
 }
@@ -103,7 +112,10 @@ def check_policy_doc() -> list[str]:
 def check_low_level_auth_crates() -> list[str]:
     manifest = load_manifest(AUTH_MANIFEST)
     production_direct = dependency_names(manifest, ("dependencies", "build-dependencies"))
-    production_violations = sorted(production_direct & LOW_LEVEL_AUTH_CRATES)
+    production_violations = sorted(
+        (production_direct & LOW_LEVEL_AUTH_CRATES)
+        - APPROVED_PRODUCTION_LOW_LEVEL_AUTH_CRATES.keys()
+    )
     dev_direct = dependency_names(manifest, ("dev-dependencies",))
     dev_violations = sorted(
         (dev_direct & LOW_LEVEL_AUTH_CRATES)
@@ -115,6 +127,23 @@ def check_low_level_auth_crates() -> list[str]:
         for name in production_violations + dev_violations
     ]
     policy_text = POLICY_DOC.read_text(encoding="utf-8")
+    for crate_name, (marker, approved_paths) in (
+        APPROVED_PRODUCTION_LOW_LEVEL_AUTH_CRATES.items()
+    ):
+        if crate_name not in production_direct:
+            continue
+        if marker not in policy_text:
+            errors.append(
+                f"{rel}: production auth/crypto crate '{crate_name}' "
+                f"requires policy marker '{marker}'"
+            )
+        for path in rust_source_files():
+            source = path.read_text(encoding="utf-8")
+            if f"{crate_name}::" in source and path.relative_to(ROOT) not in approved_paths:
+                errors.append(
+                    f"{path.relative_to(ROOT)}: production auth/crypto crate "
+                    f"'{crate_name}' is outside its approved boundary"
+                )
     for crate_name, marker in APPROVED_TEST_ONLY_LOW_LEVEL_AUTH_CRATES.items():
         if crate_name in dev_direct and marker not in policy_text:
             errors.append(

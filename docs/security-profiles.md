@@ -145,9 +145,13 @@ Security-profile presets and `AuthSurfaceLayer` do not automatically enable
 sender-constrained authentication. Explicit DPoP ingress adapters must parse
 the RFC 9449 headers and call
 `Authenticator::authenticate_sender_constrained_dpop` as documented in
-`docs/design/dpop-atomic-authentication-boundary.md`. The toolkit does not yet
-cover mTLS sender constraints or token exchange; document those divergences and
-prefer alignment work in the toolkit before service-specific implementations.
+`docs/design/dpop-atomic-authentication-boundary.md`. Outbound sender-constrained
+RFC 8693 clients should use `mcp_toolkit_auth::outbound_dpop` as documented in
+`docs/design/outbound-dpop-token-exchange.md`; its exact endpoint trust policy,
+typed bearer subject, proof construction, and transport checks do not authorize
+provider access. Callers/providers own subject authorization, audience, scope,
+`cnf.jkt` binding, expiry/TTL, and execution decisions. The toolkit does not yet
+cover mTLS sender constraints.
 
 ## Selection Checklist for New Services
 
