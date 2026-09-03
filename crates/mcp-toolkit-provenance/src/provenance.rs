@@ -143,6 +143,10 @@ fn validate_absolute_without_traversal(
 fn canonicalize_existing_prefix(path: &Path) -> Result<PathBuf, TrustedLocalPathError> {
     let mut missing = Vec::new();
     let mut cursor = path;
+    // The caller has already rejected relative and traversal paths. The
+    // canonical existing prefix is checked against the canonical operator root
+    // before the returned path is used by any filesystem operation.
+    // codeql[rust/path-injection]
     while !cursor.exists() {
         let Some(name) = cursor.file_name() else {
             return Err(TrustedLocalPathError::PathUnavailable(
