@@ -90,6 +90,7 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_CREDENTIAL_BYTES: usize = 64 * 1024;
 const MAX_FIELD_BYTES: usize = 2048;
+const MAX_ENDPOINT_BYTES: usize = 4096;
 const MAX_REQUEST_ITEMS: usize = 64;
 const MAX_NONCE_BYTES: usize = 1024;
 const DEFAULT_TOKEN_ENDPOINT_NONCE_CAPACITY: usize = 64;
@@ -1830,7 +1831,8 @@ fn valid_scope_list(value: &str) -> bool {
 }
 
 fn validate_endpoint_shape(url: &Url) -> Result<(), OutboundDpopError> {
-    if url.host_str().is_none()
+    if url.as_str().len() > MAX_ENDPOINT_BYTES
+        || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
