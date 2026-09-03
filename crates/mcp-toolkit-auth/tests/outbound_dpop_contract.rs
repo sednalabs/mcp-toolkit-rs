@@ -685,7 +685,7 @@ async fn resource_authorization_requires_matching_explicit_trust_policy() {
     )
     .expect("different resource policy");
     assert!(matches!(
-        client.resource_request(&bound_token, Method::GET, target, &different_policy),
+        client.resource_request(&bound_token, Method::GET, target.clone(), &different_policy),
         Err(OutboundDpopError::UntrustedEndpoint)
     ));
 

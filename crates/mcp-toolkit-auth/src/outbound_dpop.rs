@@ -1147,6 +1147,7 @@ impl DpopTokenExchangeClient {
             .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
         proof_header.set_sensitive(true);
         let mut form = request.form();
+        // codeql[rust/request-forgery] Token endpoint was accepted only after exact policy validation.
         let mut builder = self
             .http
             .post(self.config.token_endpoint.clone())
@@ -1664,7 +1665,7 @@ impl DpopAuthorization {
         }
         let request_target =
             canonical_dpop_target_with_policy(request.url(), self.allow_insecure_loopback)?;
-        if request.method() != &self.method || request_target != self.canonical_target {
+        if request.method() != self.method || request_target != self.canonical_target {
             return Err(OutboundDpopError::UntrustedEndpoint);
         }
         let headers = request.headers_mut();
