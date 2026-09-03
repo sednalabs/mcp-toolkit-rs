@@ -1,0 +1,6 @@
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - ["<mcp_toolkit_auth::outbound_dpop::DpopTokenExchangeConfig>::build", "ReturnValue.Field[core::result::Result::Ok(0)]", "request-forgery", "manual"]
