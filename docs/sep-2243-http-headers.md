@@ -11,7 +11,8 @@ around that service, such as host/origin policy, authentication, route policy,
 and bounded request bodies; it must not reinterpret valid MCP messages or
 weaken RMCP validation.
 
-See the [MCP transport specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports#header)
+See the MCP [Streamable HTTP request-metadata section](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#request-metadata),
+especially [standard request headers](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#standard-request-headers),
 and the [RMCP `3.2.0` API](https://docs.rs/rmcp/3.2.0/rmcp/).
 
 ## Version boundary
@@ -54,9 +55,15 @@ the required context into an unrelated header.
 protocol shape has a routable identifier:
 
 - `params.name` for `tools/call` and `prompts/get`;
-- `params.uri` for `resources/read`, `resources/subscribe`, and
-  `resources/unsubscribe`;
+- `params.uri` for the current `resources/read` operation;
 - `params.taskId` for `tasks/get`, `tasks/update`, and `tasks/cancel`.
+
+The pre-2026 compatibility operations `resources/subscribe` and
+`resources/unsubscribe` may use their URI mapping only within that explicit
+legacy lifecycle. They are not current-protocol mappings. The current
+`subscriptions/listen` operation is their replacement for opening a long-lived
+notification stream; RMCP `3.2.0` does not define an `Mcp-Name` source for
+`subscriptions/listen`, so clients and intermediaries must not invent one.
 
 Other methods do not acquire an invented name value. A name header that is
 present when no name is defined is not a reason for Toolkit to route the
@@ -66,8 +73,25 @@ request through a compatibility path.
 primitive property with an `x-mcp-header` annotation. For that property, the
 request carries the corresponding `Mcp-Param-<annotation>` header when the
 argument is present and non-null. Header names are non-empty RFC 9110 tokens
-and are case-insensitively unique within the schema. Structured, nested, or
-otherwise non-primitive values are not promoted by this contract.
+and are case-insensitively unique within the schema. Structured or otherwise
+non-primitive values are not promoted by this contract.
+
+### RMCP 3.2.0 interoperability boundary
+
+The normative SEP-2243 schema extension permits an `x-mcp-header` annotation on
+a nested property reachable through a chain of `properties` keys. RMCP
+`3.2.0`'s documented interoperable subset for this guidance is deliberately
+narrower: only top-level primitive (`string`, `integer`, or `boolean`) tool
+properties are promoted. Nested-property promotion is a residual capability
+boundary, not an unspoken promise that Toolkit or a downstream service
+supports the normative nested form.
+
+The owner of this boundary is the Toolkit maintainer. Promote it only after a
+future RMCP release defines and proves nested-property extraction with
+spec-conformant positive and negative contract tests, followed by an explicit
+documentation and review update. Until that trigger is met, keep nested
+annotations out of the maintained interoperability guidance and do not claim
+runtime support for them.
 
 Header values that cannot safely travel as bare HTTP values may use RMCP's
 base64 wrapper. The body and header must still decode to the same value; a
