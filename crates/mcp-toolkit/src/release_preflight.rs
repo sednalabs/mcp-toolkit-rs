@@ -581,10 +581,8 @@ struct PrivilegedStepContract {
     body: PrivilegedStepBody,
 }
 
-const GENERATED_CHECKOUT_ACTION: &str =
-    "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
-const ROOT_CHECKOUT_ACTION: &str =
-    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
+const GENERATED_CHECKOUT_ACTION: &str = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const ROOT_CHECKOUT_ACTION: &str = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD_ACTION: &str = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const ATTEST_ACTION: &str =
     "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8";
