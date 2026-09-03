@@ -241,9 +241,7 @@ pub fn evaluate_startup_admission(
         || is_unknown(&runtime.build.build_metadata.profile)
         || is_unknown(&runtime.build.build_metadata.target)
         || is_unknown(&runtime.build.build_metadata.rustc_version)
-        || !valid_source_date_epoch(
-            runtime.build.build_metadata.source_date_epoch.as_deref(),
-        )
+        || !valid_source_date_epoch(runtime.build.build_metadata.source_date_epoch.as_deref())
     {
         return Ok(warning_or_reject(
             policy,
@@ -738,12 +736,7 @@ mod tests {
         let mut runtime = runtime_for(&executable);
         let gate_path = trusted_path(temp_path());
 
-        for value in [
-            None,
-            Some(UNKNOWN_VALUE),
-            Some(" "),
-            Some("not-a-number"),
-        ] {
+        for value in [None, Some(UNKNOWN_VALUE), Some(" "), Some("not-a-number")] {
             runtime.build.build_metadata.source_date_epoch = value.map(str::to_owned);
             let evaluation =
                 evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
@@ -820,9 +813,8 @@ mod tests {
         fs::remove_file(&gate_path).expect("remove gate placeholder");
         symlink(&outside_path, &gate_path).expect("plant gate symlink");
 
-        let evaluation =
-            evaluate_startup_admission(&strict_policy(gate_binding), &runtime)
-                .expect("valid policy");
+        let evaluation = evaluate_startup_admission(&strict_policy(gate_binding), &runtime)
+            .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_MISSING));
 
