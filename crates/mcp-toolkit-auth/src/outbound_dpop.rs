@@ -1148,7 +1148,7 @@ impl DpopTokenExchangeClient {
         proof_header.set_sensitive(true);
         let mut form = request.form();
 
-        // codeql[rust/request-forgery] Token endpoint was accepted only after exact policy validation.
+        // lgtm [rust/request-forgery] Token endpoint was accepted only after exact policy validation.
         let mut builder = self
             .http
             .post(self.config.token_endpoint.clone())
