@@ -186,8 +186,7 @@ pub fn capture_runtime_provenance(
     build: BuildProvenance,
     executable_path: &Path,
 ) -> RuntimeProvenance {
-    // codeql[rust/path-injection] Operator-selected local executable path; this API is
-    // called at startup and does not consume request-derived path data.
+    let executable_path = operator_local_executable_path(executable_path);
     let metadata = fs::metadata(executable_path).ok();
     let modified_unix_ms = metadata
         .as_ref()
@@ -205,6 +204,13 @@ pub fn capture_runtime_provenance(
             modified_unix_ms,
         },
     }
+}
+
+/// Marks a path supplied by trusted startup/build configuration as a local
+/// filesystem target. This is intentionally crate-private: callers must not
+/// use it to launder request-derived paths into filesystem operations.
+pub(crate) fn operator_local_executable_path(path: &Path) -> &Path {
+    path
 }
 
 pub fn capture_current_runtime_provenance(

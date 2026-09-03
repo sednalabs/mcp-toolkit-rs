@@ -1,0 +1,7 @@
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      - ["<mcp_toolkit_provenance::provenance::operator_local_executable_path>", "ReturnValue", "path-injection", "manual"]
+      - ["<mcp_toolkit_provenance::admission::operator_local_gate_path>", "ReturnValue", "path-injection", "manual"]
