@@ -2199,6 +2199,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp-toolkit-provenance"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "mcp-toolkit-scratchpad"
 version = "0.1.0"
 dependencies = [

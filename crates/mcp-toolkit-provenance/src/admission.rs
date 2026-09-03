@@ -1,5 +1,6 @@
 use std::fmt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -240,7 +241,9 @@ pub fn evaluate_startup_admission(
         || is_unknown(&runtime.build.build_metadata.profile)
         || is_unknown(&runtime.build.build_metadata.target)
         || is_unknown(&runtime.build.build_metadata.rustc_version)
-        || runtime.build.build_metadata.source_date_epoch.is_none()
+        || !valid_source_date_epoch(
+            runtime.build.build_metadata.source_date_epoch.as_deref(),
+        )
     {
         return Ok(warning_or_reject(
             policy,
@@ -250,8 +253,8 @@ pub fn evaluate_startup_admission(
     }
 
     let gate_path = operator_local_gate_path(&policy.gate_path);
-    let gate_meta = match fs::metadata(gate_path) {
-        Ok(meta) => meta,
+    let mut gate_file = match open_gate_artifact(gate_path) {
+        Ok(file) => file,
         Err(err) => {
             return Ok(warning_or_reject(
                 policy,
@@ -269,16 +272,25 @@ pub fn evaluate_startup_admission(
         }
     };
 
-    let raw = match fs::read_to_string(gate_path) {
-        Ok(raw) => raw,
+    let gate_meta = match gate_file.metadata() {
+        Ok(meta) => meta,
         Err(err) => {
             return Ok(warning_or_reject(
                 policy,
                 CODE_MISSING,
-                format!("failed to read gate artifact: {err}"),
+                format!("failed to inspect gate artifact: {err}"),
             ));
         }
     };
+
+    let mut raw = String::new();
+    if let Err(err) = gate_file.read_to_string(&mut raw) {
+        return Ok(warning_or_reject(
+            policy,
+            CODE_MISSING,
+            format!("failed to read gate artifact: {err}"),
+        ));
+    }
     let artifact = match serde_json::from_str::<GateArtifactV1>(&raw) {
         Ok(artifact) => artifact,
         Err(err) => {
@@ -420,19 +432,18 @@ pub fn write_gate_artifact(
     artifact: &GateArtifactV1,
 ) -> Result<(), String> {
     let path = operator_local_gate_path(path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create gate artifact directory {}: {err}",
-                parent.display()
-            )
-        })?;
-    }
     let payload = serde_json::to_vec_pretty(artifact)
         .map_err(|err| format!("failed to serialize gate artifact: {err}"))?;
     let temp = path.with_extension("tmp");
-    fs::write(&temp, payload)
+    let mut temp_file = create_gate_temp_file(&temp)
+        .map_err(|err| format!("failed to create gate artifact {}: {err}", temp.display()))?;
+    temp_file
+        .write_all(&payload)
         .map_err(|err| format!("failed to write gate artifact {}: {err}", temp.display()))?;
+    temp_file
+        .sync_all()
+        .map_err(|err| format!("failed to sync gate artifact {}: {err}", temp.display()))?;
+    drop(temp_file);
     fs::rename(&temp, path).map_err(|err| {
         format!(
             "failed to move gate artifact {} into {}: {err}",
@@ -447,6 +458,62 @@ pub fn write_gate_artifact(
 /// generic path sanitizer.
 pub(crate) fn operator_local_gate_path(path: &TrustedLocalPath) -> &Path {
     path.as_ref()
+}
+
+fn open_gate_artifact(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "gate artifact no-follow open is unsupported on this platform",
+        ));
+    }
+
+    options.open(path)
+}
+
+fn create_gate_temp_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "gate artifact no-follow temp creation is unsupported on this platform",
+        ));
+    }
+
+    options.open(path)
 }
 
 fn warning_or_reject(
@@ -480,6 +547,13 @@ fn valid_sha256_reference(value: &str) -> bool {
 
 fn is_unknown(value: &str) -> bool {
     value.trim().is_empty() || value.eq_ignore_ascii_case(UNKNOWN_VALUE)
+}
+
+fn valid_source_date_epoch(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        !is_unknown(value) && value.parse::<u64>().is_ok()
+    })
 }
 
 fn bounded_text(value: &str, max_chars: usize) -> String {
@@ -656,6 +730,104 @@ mod tests {
             evaluation.reason_code.as_deref(),
             Some(CODE_PROVENANCE_UNAVAILABLE)
         );
+    }
+
+    #[test]
+    fn strict_mode_rejects_unknown_or_invalid_source_date_epoch() {
+        let executable = std::env::current_exe().expect("resolve test executable");
+        let mut runtime = runtime_for(&executable);
+        let gate_path = trusted_path(temp_path());
+
+        for value in [
+            None,
+            Some(UNKNOWN_VALUE),
+            Some(" "),
+            Some("not-a-number"),
+        ] {
+            runtime.build.build_metadata.source_date_epoch = value.map(str::to_owned);
+            let evaluation =
+                evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
+                    .expect("valid policy");
+            assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+            assert_eq!(
+                evaluation.reason_code.as_deref(),
+                Some(CODE_PROVENANCE_UNAVAILABLE)
+            );
+        }
+
+        let _ = fs::remove_file(operator_local_gate_path(&gate_path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_gate_artifact_rejects_planted_temp_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let executable = std::env::current_exe().expect("resolve test executable");
+        let runtime = runtime_for(&executable);
+        let gate_path = trusted_path(temp_path());
+        let outside_path = temp_path();
+        let temp_file_path = operator_local_gate_path(&gate_path).with_extension("tmp");
+        fs::write(&outside_path, b"sentinel").expect("write outside sentinel");
+        let _ = fs::remove_file(&temp_file_path);
+        symlink(&outside_path, &temp_file_path).expect("plant temp symlink");
+
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expiry");
+        let artifact = GateArtifactV1::passing(
+            &runtime,
+            TestGateLevel::Fast,
+            TEST_MANIFEST_DIGEST,
+            expires_at,
+        );
+
+        assert!(write_gate_artifact(&gate_path, &artifact).is_err());
+        assert_eq!(
+            fs::read(&outside_path)
+                .expect("read outside sentinel")
+                .as_slice(),
+            b"sentinel"
+        );
+
+        let _ = fs::remove_file(&temp_file_path);
+        let _ = fs::remove_file(operator_local_gate_path(&gate_path));
+        let _ = fs::remove_file(&outside_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_mode_rejects_gate_symlink_without_reading_outside() {
+        use std::os::unix::fs::symlink;
+
+        let executable = std::env::current_exe().expect("resolve test executable");
+        let runtime = runtime_for(&executable);
+        let gate_binding = trusted_path(temp_path());
+        let outside_binding = trusted_path(temp_path());
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expiry");
+        let artifact = GateArtifactV1::passing(
+            &runtime,
+            TestGateLevel::Fast,
+            TEST_MANIFEST_DIGEST,
+            expires_at,
+        );
+        write_gate_artifact(&outside_binding, &artifact).expect("write outside gate");
+
+        let gate_path = operator_local_gate_path(&gate_binding).to_path_buf();
+        let outside_path = operator_local_gate_path(&outside_binding).to_path_buf();
+        fs::remove_file(&gate_path).expect("remove gate placeholder");
+        symlink(&outside_path, &gate_path).expect("plant gate symlink");
+
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(gate_binding), &runtime)
+                .expect("valid policy");
+        assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_MISSING));
+
+        let _ = fs::remove_file(&gate_path);
+        let _ = fs::remove_file(&outside_path);
     }
 
     #[test]
