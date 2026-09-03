@@ -1208,8 +1208,8 @@ async fn ambient_proxy_child() {
         .expect("direct port for proxy child")
         .parse::<u16>()
         .expect("direct endpoint port");
-    let endpoint = Url::parse(&format!("http://127.0.0.1:{port}/token"))
-        .expect("direct endpoint URL");
+    let endpoint =
+        Url::parse(&format!("http://127.0.0.1:{port}/token")).expect("direct endpoint URL");
     let token = exchange_client(endpoint)
         .exchange(&exchange_request())
         .await
