@@ -95,11 +95,12 @@ const MAX_NONCE_BYTES: usize = 1024;
 const DEFAULT_TOKEN_ENDPOINT_NONCE_CAPACITY: usize = 64;
 const DEFAULT_RESOURCE_NONCE_CAPACITY: usize = 256;
 
-/// Explicit trust policy for one credential-bearing token endpoint.
+/// Explicit trust policy for one credential-bearing transport target.
 ///
 /// The policy is deliberately exact rather than a wildcard hostname rule:
-/// callers must review and bind the complete URL before constructing a client.
-/// `exact_loopback_http` is reserved for local emulators and test fixtures.
+/// callers must review and bind the complete canonical URL before constructing
+/// a client or authorizing a resource request. `exact_loopback_http` is
+/// reserved for local emulators and test fixtures.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DpopEndpointPolicy {
     endpoint: Url,
@@ -117,7 +118,7 @@ impl fmt::Debug for DpopEndpointPolicy {
 }
 
 impl DpopEndpointPolicy {
-    /// Trusts one HTTPS token endpoint URL exactly.
+    /// Trusts one HTTPS transport target URL exactly.
     ///
     /// # Errors
     /// Returns [`OutboundDpopError::InvalidUrl`] for URL credentials, query,
@@ -148,6 +149,21 @@ impl DpopEndpointPolicy {
 
     fn matches(&self, endpoint: &Url) -> bool {
         self.endpoint == *endpoint
+    }
+
+    fn matches_resource(&self, target: &Url) -> Result<bool, OutboundDpopError> {
+        if target.username().is_empty() && target.password().is_none() && target.fragment().is_none()
+        {
+            let canonical_target =
+                canonical_dpop_target_with_policy(target, self.allow_insecure_loopback)?;
+            let canonical_endpoint = canonical_dpop_target_with_policy(
+                &self.endpoint,
+                self.allow_insecure_loopback,
+            )?;
+            Ok(canonical_target == canonical_endpoint)
+        } else {
+            Err(OutboundDpopError::InvalidUrl)
+        }
     }
 }
 
@@ -1242,10 +1258,11 @@ impl DpopTokenExchangeClient {
         })
     }
 
-    /// Starts one resource authorization attempt bound to this client's signer.
+    /// Starts one resource authorization attempt bound to this client's signer
+    /// and an explicit exact target policy.
     ///
     /// # Errors
-    /// Returns URL or signer-binding failures.
+    /// Returns URL, trust-policy, or signer-binding failures.
     ///
     /// # Security
     /// The returned transaction permits at most one 401 nonce retry.
@@ -1254,9 +1271,13 @@ impl DpopTokenExchangeClient {
         token: &'a DpopBoundAccessToken,
         method: Method,
         target: Url,
+        target_policy: &DpopEndpointPolicy,
     ) -> Result<DpopResourceRequest<'a>, OutboundDpopError> {
         if token.proof_thumbprint != self.signer.public_jwk.thumbprint {
             return Err(OutboundDpopError::SignerMismatch);
+        }
+        if !target_policy.matches_resource(&target)? {
+            return Err(OutboundDpopError::UntrustedEndpoint);
         }
         let canonical_target =
             canonical_dpop_target_with_policy(&target, self.config.allow_insecure_loopback)?;

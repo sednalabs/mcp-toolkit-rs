@@ -524,8 +524,21 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     let first_target =
         Url::parse("https://resource.example/v1/items?ignored=yes").expect("first target");
     let second_target = Url::parse("https://resource.example/v1/other").expect("second target");
+    let first_policy = DpopEndpointPolicy::exact_https(
+        Url::parse("https://resource.example/v1/items").expect("first trusted target"),
+    )
+    .expect("first resource policy");
+    let second_policy = DpopEndpointPolicy::exact_https(
+        Url::parse("https://resource.example/v1/other").expect("second trusted target"),
+    )
+    .expect("second resource policy");
     let mut get_request = client
-        .resource_request(&bound_token, Method::GET, first_target.clone())
+        .resource_request(
+            &bound_token,
+            Method::GET,
+            first_target.clone(),
+            &first_policy,
+        )
         .expect("GET resource request");
     let first_resource_claims = proof_from_authorization(
         &get_request.authorization().expect("first authorization"),
@@ -553,7 +566,12 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
     );
 
     let post_request = client
-        .resource_request(&bound_token, Method::POST, first_target.clone())
+        .resource_request(
+            &bound_token,
+            Method::POST,
+            first_target.clone(),
+            &first_policy,
+        )
         .expect("POST resource request");
     assert_eq!(
         proof_from_authorization(
@@ -564,7 +582,7 @@ async fn token_exchange_retries_one_nonce_and_keeps_resource_nonces_isolated() {
         None
     );
     let other_request = client
-        .resource_request(&bound_token, Method::GET, second_target.clone())
+        .resource_request(&bound_token, Method::GET, second_target.clone(), &second_policy)
         .expect("other resource request");
     assert_eq!(
         proof_from_authorization(
@@ -604,8 +622,10 @@ async fn resource_http_policy_matches_the_client_loopback_exception() {
     let bound_token = provider_bound_token(&loopback_client, &token);
     let resource = Url::parse("http://127.0.0.1/resource") // DevSkim: ignore DS137138 loopback test fixture
         .expect("loopback resource URL");
+    let resource_policy = DpopEndpointPolicy::exact_loopback_http(resource.clone())
+        .expect("loopback resource policy");
     loopback_client
-        .resource_request(&bound_token, Method::GET, resource.clone())
+        .resource_request(&bound_token, Method::GET, resource.clone(), &resource_policy)
         .expect("explicit loopback policy applies to resource authorization");
 
     let strict_config = DpopTokenExchangeConfig::new(
@@ -620,9 +640,35 @@ async fn resource_http_policy_matches_the_client_loopback_exception() {
     .expect("strict token config");
     let strict_client = DpopTokenExchangeClient::new(strict_config, signer).expect("strict client");
     let error = strict_client
-        .resource_request(&bound_token, Method::GET, resource)
+        .resource_request(&bound_token, Method::GET, resource, &resource_policy)
         .expect_err("strict client must reject cleartext resource authorization");
     assert_eq!(error, OutboundDpopError::InsecureEndpoint);
+    server.abort();
+}
+
+#[tokio::test]
+async fn resource_authorization_requires_matching_explicit_trust_policy() {
+    let (endpoint, _state, server) = start_scripted_server(vec![ScriptedResponse::json(
+        StatusCode::OK,
+        Vec::new(),
+        successful_token_response("resource-policy-token"),
+    )])
+    .await;
+    let client = exchange_client(endpoint);
+    let token = client
+        .exchange(&exchange_request())
+        .await
+        .expect("token exchange");
+    let bound_token = provider_bound_token(&client, &token);
+    let target = Url::parse("https://resource.example/v1/items").expect("resource target");
+    let different_policy = DpopEndpointPolicy::exact_https(
+        Url::parse("https://other.example/v1/items").expect("different trusted target"),
+    )
+    .expect("different resource policy");
+    assert!(matches!(
+        client.resource_request(&bound_token, Method::GET, target, &different_policy),
+        Err(OutboundDpopError::UntrustedEndpoint)
+    ));
     server.abort();
 }
 

@@ -25,9 +25,11 @@ implemented locally. Inbound verification remains exclusively in
 
 The client:
 
-1. requires an explicit exact-endpoint trust policy and HTTPS except for an
-   explicit numeric-loopback-only test/emulator policy; it applies the same
-   transport policy to resource authorization;
+1. requires an explicit exact-endpoint trust policy for the credential-bearing
+   token endpoint and an explicit exact target policy for every resource
+   authorization; both use HTTPS except for an explicit numeric-loopback-only
+   test/emulator policy. Resource policies compare the canonical target (the
+   scheme, authority, and path; query and fragment components are not signed);
 2. disables redirects and ambient proxy discovery at the token endpoint;
 3. canonicalizes proof targets without user information, query, or fragment;
 4. marks authorization and proof headers sensitive;
@@ -77,8 +79,9 @@ Before exchange, a service must:
 - authorize the bearer subject, audience, resource, and scopes for the fixed
   access-token-for-access-token profile;
 - bind `TokenExchangeAuditMetadata` to its policy decision and durable audit path;
-- configure the authorization server and client credentials from a trusted source
-  and explicitly review the exact endpoint policy;
+- configure the authorization server and client credentials from a trusted source,
+  explicitly review the exact token-endpoint policy, and pass an exact target
+  policy for each resource target to `resource_request`;
 - obtain provider-backed binding metadata and call `validate_provider_binding`
   before treating the response as sender-constrained;
 - retain any service capability matrix or old-generation behavior downstream; and
