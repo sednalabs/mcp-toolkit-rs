@@ -1197,16 +1197,19 @@ async fn cancelled_exchange_does_not_poison_later_requests() {
 }
 
 const PROXY_CHILD_MARKER: &str = "MCP_TOOLKIT_OUTBOUND_DPOP_PROXY_CHILD";
-const PROXY_CHILD_ENDPOINT: &str = "MCP_TOOLKIT_OUTBOUND_DPOP_DIRECT_ENDPOINT";
+const PROXY_CHILD_PORT: &str = "MCP_TOOLKIT_OUTBOUND_DPOP_DIRECT_PORT";
 
 #[tokio::test]
 async fn ambient_proxy_child() {
     if std::env::var_os(PROXY_CHILD_MARKER).is_none() {
         return;
     }
-    let endpoint =
-        Url::parse(&std::env::var(PROXY_CHILD_ENDPOINT).expect("direct endpoint for proxy child"))
-            .expect("direct endpoint URL");
+    let port = std::env::var(PROXY_CHILD_PORT)
+        .expect("direct port for proxy child")
+        .parse::<u16>()
+        .expect("direct endpoint port");
+    let endpoint = Url::parse(&format!("http://127.0.0.1:{port}/token"))
+        .expect("direct endpoint URL");
     let token = exchange_client(endpoint)
         .exchange(&exchange_request())
         .await
@@ -1241,7 +1244,13 @@ async fn ambient_proxy_is_ignored_for_credential_bearing_exchange() {
         .arg("--nocapture")
         .arg("--test-threads=1")
         .env(PROXY_CHILD_MARKER, "1")
-        .env(PROXY_CHILD_ENDPOINT, direct_endpoint.as_str())
+        .env(
+            PROXY_CHILD_PORT,
+            direct_endpoint
+                .port()
+                .expect("loopback test endpoint port")
+                .to_string(),
+        )
         .env("HTTP_PROXY", proxy_origin.as_str())
         .env("HTTPS_PROXY", proxy_origin.as_str())
         .env("ALL_PROXY", proxy_origin.as_str())
