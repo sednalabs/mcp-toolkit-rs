@@ -1148,9 +1148,12 @@ impl DpopTokenExchangeClient {
         proof_header.set_sensitive(true);
         let mut form = request.form();
 
+        // Build the credential-bearing request before binding the validated
+        // endpoint. The placeholder is never dispatched; it only keeps the
+        // endpoint assignment at the final, policy-validated execution seam.
         let mut builder = self
             .http
-            .post(self.config.token_endpoint.clone())
+            .post("https://dpop.invalid/")
             .header("DPoP", proof_header);
         match self.config.client_auth_method {
             OAuthClientAuthMethod::RequestBody => {
@@ -1169,9 +1172,13 @@ impl DpopTokenExchangeClient {
                 );
             }
         }
-        builder
+        let mut request = builder
             .form(&form)
-            .send()
+            .build()
+            .map_err(|error| OutboundDpopError::Http(classify_http_error(&error)))?;
+        *request.url_mut() = self.config.token_endpoint.clone();
+        self.http
+            .execute(request)
             .await
             .map_err(|error| OutboundDpopError::Http(classify_http_error(&error)))
     }
