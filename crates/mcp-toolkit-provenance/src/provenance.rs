@@ -14,11 +14,11 @@ pub const UNKNOWN_VALUE: &str = "unknown";
 
 /// A filesystem path that was selected from an operator-owned local root.
 ///
-/// The constructor canonicalizes the existing portion of the path and rejects
-/// relative paths, traversal components, and paths outside the canonical root.
-/// Consumers should construct this value at a configuration boundary and pass
-/// it through to runtime/provenance helpers; request data must never be used to
-/// construct one.
+/// The constructor canonicalizes the path and rejects relative paths, traversal
+/// components, paths outside the canonical root, and paths that do not yet
+/// exist. Consumers should construct this value at a configuration boundary
+/// and pass it through to runtime/provenance helpers; request data must never be
+/// used to construct one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustedLocalPath(PathBuf);
 
@@ -61,11 +61,10 @@ impl std::error::Error for TrustedLocalPathError {}
 impl TrustedLocalPath {
     /// Binds an operator-selected path to an existing local root.
     ///
-    /// The root is canonicalized before the candidate is checked. Existing
-    /// candidates are canonicalized as well, so symlinks cannot escape the
-    /// root. A not-yet-created candidate may be used for an atomic output; its
-    /// nearest existing ancestor is canonicalized and the missing suffix is
-    /// checked lexically.
+    /// The root is canonicalized before the candidate is checked. The candidate
+    /// is canonicalized as well, so symlinks cannot escape the root. Callers
+    /// writing an atomic output must bind an existing placeholder before
+    /// replacing it.
     pub fn from_root(
         root: impl AsRef<Path>,
         path: impl Into<PathBuf>,
@@ -80,7 +79,8 @@ impl TrustedLocalPath {
 
         let path = path.into();
         validate_absolute_without_traversal(&path, false)?;
-        let canonical_path = canonicalize_existing_prefix(&path)?;
+        let canonical_path = fs::canonicalize(&path)
+            .map_err(|error| TrustedLocalPathError::PathUnavailable(error.to_string()))?;
         if !canonical_path.starts_with(&canonical_root) {
             return Err(TrustedLocalPathError::OutsideRoot);
         }
@@ -138,32 +138,6 @@ fn validate_absolute_without_traversal(
         return Err(TrustedLocalPathError::PathTraversal);
     }
     Ok(())
-}
-
-fn canonicalize_existing_prefix(path: &Path) -> Result<PathBuf, TrustedLocalPathError> {
-    let mut missing = Vec::new();
-    let mut cursor = path;
-    // The caller has already rejected relative and traversal paths. The
-    // canonical existing prefix is checked against the canonical operator root
-    // before the returned path is used by any filesystem operation.
-    // codeql[rust/path-injection]
-    while !cursor.exists() {
-        let Some(name) = cursor.file_name() else {
-            return Err(TrustedLocalPathError::PathUnavailable(
-                "path has no existing ancestor".to_string(),
-            ));
-        };
-        missing.push(name.to_os_string());
-        cursor = cursor.parent().ok_or_else(|| {
-            TrustedLocalPathError::PathUnavailable("path has no existing ancestor".to_string())
-        })?;
-    }
-    let mut canonical = fs::canonicalize(cursor)
-        .map_err(|error| TrustedLocalPathError::PathUnavailable(error.to_string()))?;
-    for name in missing.iter().rev() {
-        canonical.push(name);
-    }
-    Ok(canonical)
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -518,6 +518,7 @@ mod tests {
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn trusted_path(path: PathBuf) -> TrustedLocalPath {
+        fs::File::create(&path).expect("create trusted test path");
         TrustedLocalPath::from_root("/tmp", path).expect("bind trusted test path")
     }
 
@@ -559,6 +560,7 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         let gate_path = trusted_path(temp_path("missing-gate"));
+        let _ = fs::remove_file(operator_local_gate_path(&gate_path));
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
