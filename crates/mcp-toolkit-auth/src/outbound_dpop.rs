@@ -91,6 +91,7 @@ const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_CREDENTIAL_BYTES: usize = 64 * 1024;
 const MAX_FIELD_BYTES: usize = 2048;
 const MAX_ENDPOINT_BYTES: usize = 4096;
+const MAX_REQUEST_FORM_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REQUEST_ITEMS: usize = 64;
 const MAX_NONCE_BYTES: usize = 1024;
 const DEFAULT_TOKEN_ENDPOINT_NONCE_CAPACITY: usize = 64;
@@ -771,35 +772,21 @@ impl Rfc8693TokenExchangeRequest {
         &self.audit
     }
 
-    fn form(&self) -> Vec<(&'static str, String)> {
-        let mut form = vec![
-            ("grant_type", RFC8693_GRANT_TYPE.to_string()),
-            (
-                "subject_token",
-                self.subject_token.expose_secret().to_string(),
-            ),
-            ("subject_token_type", RFC8693_ACCESS_TOKEN_TYPE.to_string()),
-            (
-                "requested_token_type",
-                RFC8693_ACCESS_TOKEN_TYPE.to_string(),
-            ),
-        ];
-        form.extend(
-            self.resources
-                .iter()
-                .cloned()
-                .map(|value| ("resource", value)),
-        );
-        form.extend(
-            self.audiences
-                .iter()
-                .cloned()
-                .map(|value| ("audience", value)),
-        );
-        if !self.scopes.is_empty() {
-            form.push(("scope", self.scopes.join(" ")));
+    fn append_form(&self, body: &mut Vec<u8>) -> Result<(), OutboundDpopError> {
+        append_form_field(body, "grant_type", RFC8693_GRANT_TYPE)?;
+        append_form_field(body, "subject_token", self.subject_token.expose_secret())?;
+        append_form_field(body, "subject_token_type", RFC8693_ACCESS_TOKEN_TYPE)?;
+        append_form_field(body, "requested_token_type", RFC8693_ACCESS_TOKEN_TYPE)?;
+        for resource in &self.resources {
+            append_form_field(body, "resource", resource)?;
         }
-        form
+        for audience in &self.audiences {
+            append_form_field(body, "audience", audience)?;
+        }
+        if !self.scopes.is_empty() {
+            append_form_field(body, "scope", &self.scopes.join(" "))?;
+        }
+        Ok(())
     }
 }
 
@@ -1147,7 +1134,12 @@ impl DpopTokenExchangeClient {
         let mut proof_header = HeaderValue::from_str(proof.expose_secret())
             .map_err(|_| OutboundDpopError::InvalidCredentialHeader)?;
         proof_header.set_sensitive(true);
-        let mut form = request.form();
+        // Keep the encoded credential-bearing body at a fixed, bounded
+        // capacity. The request fields are individually validated when the
+        // typed request is built, but the transport must also bound the
+        // aggregate allocation before handing it to reqwest.
+        let mut form_body = Vec::with_capacity(MAX_REQUEST_FORM_BYTES);
+        request.append_form(&mut form_body)?;
 
         // Build the credential-bearing request before binding the validated
         // endpoint. The placeholder is never dispatched; it only keeps the
@@ -1155,12 +1147,13 @@ impl DpopTokenExchangeClient {
         let mut builder = self
             .http
             .post("https://dpop.invalid/")
-            .header("DPoP", proof_header);
+            .header("DPoP", proof_header)
+            .header("Content-Type", "application/x-www-form-urlencoded");
         match self.config.client_auth_method {
             OAuthClientAuthMethod::RequestBody => {
-                form.push(("client_id", self.config.client_id.clone()));
+                append_form_field(&mut form_body, "client_id", &self.config.client_id)?;
                 if let Some(secret) = self.config.client_secret.as_ref() {
-                    form.push(("client_secret", secret.expose_secret().to_string()));
+                    append_form_field(&mut form_body, "client_secret", secret.expose_secret())?;
                 }
             }
             OAuthClientAuthMethod::Basic => {
@@ -1174,7 +1167,7 @@ impl DpopTokenExchangeClient {
             }
         }
         let mut request = builder
-            .form(&form)
+            .body(form_body)
             .build()
             .map_err(|error| OutboundDpopError::Http(classify_http_error(&error)))?;
         *request.url_mut() = self.config.token_endpoint.clone();
@@ -1795,6 +1788,48 @@ fn valid_nonce(value: &str) -> bool {
         && value.as_bytes()[core_len..]
             .iter()
             .all(|byte| *byte == b'=')
+}
+
+fn append_form_field(
+    body: &mut Vec<u8>,
+    name: &str,
+    value: &str,
+) -> Result<(), OutboundDpopError> {
+    if !body.is_empty() {
+        append_form_bytes(body, b"&")?;
+    }
+    append_form_component(body, name)?;
+    append_form_bytes(body, b"=")?;
+    append_form_component(body, value)
+}
+
+fn append_form_component(body: &mut Vec<u8>, value: &str) -> Result<(), OutboundDpopError> {
+    for byte in value.bytes() {
+        if matches!(byte, b'*' | b'-' | b'.' | b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z') {
+            append_form_bytes(body, &[byte])?;
+        } else if byte == b' ' {
+            append_form_bytes(body, b"+")?;
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            append_form_bytes(
+                body,
+                &[
+                    b'%',
+                    HEX[(byte >> 4) as usize],
+                    HEX[(byte & 0x0f) as usize],
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn append_form_bytes(body: &mut Vec<u8>, bytes: &[u8]) -> Result<(), OutboundDpopError> {
+    if bytes.len() > MAX_REQUEST_FORM_BYTES.saturating_sub(body.len()) {
+        return Err(OutboundDpopError::InvalidField("request"));
+    }
+    body.extend_from_slice(bytes);
+    Ok(())
 }
 
 fn required_field(
