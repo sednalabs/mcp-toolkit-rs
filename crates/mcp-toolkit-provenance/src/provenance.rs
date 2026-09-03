@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::io;
+use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,147 @@ use time::OffsetDateTime;
 
 pub const ATTESTATION_SCHEMA_VERSION: u32 = 2;
 pub const UNKNOWN_VALUE: &str = "unknown";
+
+/// A filesystem path that was selected from an operator-owned local root.
+///
+/// The constructor canonicalizes the existing portion of the path and rejects
+/// relative paths, traversal components, and paths outside the canonical root.
+/// Consumers should construct this value at a configuration boundary and pass
+/// it through to runtime/provenance helpers; request data must never be used to
+/// construct one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedLocalPath(PathBuf);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrustedLocalPathError {
+    RootNotAbsolute,
+    RootUnavailable(String),
+    RootNotDirectory,
+    PathNotAbsolute,
+    PathTraversal,
+    PathUnavailable(String),
+    OutsideRoot,
+}
+
+impl std::fmt::Display for TrustedLocalPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RootNotAbsolute => write!(f, "trusted local path root must be absolute"),
+            Self::RootUnavailable(error) => {
+                write!(f, "trusted local path root is unavailable: {error}")
+            }
+            Self::RootNotDirectory => write!(f, "trusted local path root must be a directory"),
+            Self::PathNotAbsolute => write!(f, "trusted local path must be absolute"),
+            Self::PathTraversal => {
+                write!(f, "trusted local path must not contain traversal components")
+            }
+            Self::PathUnavailable(error) => {
+                write!(f, "trusted local path is unavailable: {error}")
+            }
+            Self::OutsideRoot => write!(f, "trusted local path is outside its configured root"),
+        }
+    }
+}
+
+impl std::error::Error for TrustedLocalPathError {}
+
+impl TrustedLocalPath {
+    /// Binds an operator-selected path to an existing local root.
+    ///
+    /// The root is canonicalized before the candidate is checked. Existing
+    /// candidates are canonicalized as well, so symlinks cannot escape the
+    /// root. A not-yet-created candidate may be used for an atomic output; its
+    /// nearest existing ancestor is canonicalized and the missing suffix is
+    /// checked lexically.
+    pub fn from_root(
+        root: impl AsRef<Path>,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, TrustedLocalPathError> {
+        let root = root.as_ref();
+        validate_absolute_without_traversal(root, true)?;
+        let canonical_root = fs::canonicalize(root)
+            .map_err(|error| TrustedLocalPathError::RootUnavailable(error.to_string()))?;
+        if !canonical_root.is_dir() {
+            return Err(TrustedLocalPathError::RootNotDirectory);
+        }
+
+        let path = path.into();
+        validate_absolute_without_traversal(&path, false)?;
+        let canonical_path = canonicalize_existing_prefix(&path)?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(TrustedLocalPathError::OutsideRoot);
+        }
+        Ok(Self(canonical_path))
+    }
+
+    /// Binds the process executable to its own canonical parent directory.
+    pub fn current_executable() -> io::Result<Self> {
+        let path = std::env::current_exe()?;
+        let root = path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "current executable has no parent")
+        })?;
+        Self::from_root(root, path)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    pub(crate) fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TrustedLocalPath {
+    fn as_ref(&self) -> &Path {
+        self.as_path()
+    }
+}
+
+impl From<TrustedLocalPath> for PathBuf {
+    fn from(path: TrustedLocalPath) -> Self {
+        path.0
+    }
+}
+
+fn validate_absolute_without_traversal(
+    path: &Path,
+    root: bool,
+) -> Result<(), TrustedLocalPathError> {
+    if !path.is_absolute() {
+        return Err(if root {
+            TrustedLocalPathError::RootNotAbsolute
+        } else {
+            TrustedLocalPathError::PathNotAbsolute
+        });
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(TrustedLocalPathError::PathTraversal);
+    }
+    Ok(())
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> Result<PathBuf, TrustedLocalPathError> {
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        let Some(name) = cursor.file_name() else {
+            return Err(TrustedLocalPathError::PathUnavailable(
+                "path has no existing ancestor".to_string(),
+            ));
+        };
+        missing.push(name.to_os_string());
+        cursor = cursor.parent().ok_or_else(|| {
+            TrustedLocalPathError::PathUnavailable("path has no existing ancestor".to_string())
+        })?;
+    }
+    let mut canonical = fs::canonicalize(cursor)
+        .map_err(|error| TrustedLocalPathError::PathUnavailable(error.to_string()))?;
+    for name in missing.iter().rev() {
+        canonical.push(name);
+    }
+    Ok(canonical)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct BuildProvenanceInput<'a> {
@@ -184,7 +326,7 @@ impl BuildProvenance {
 
 pub fn capture_runtime_provenance(
     build: BuildProvenance,
-    executable_path: &Path,
+    executable_path: &TrustedLocalPath,
 ) -> RuntimeProvenance {
     let executable_path = operator_local_executable_path(executable_path);
     let metadata = fs::metadata(executable_path).ok();
@@ -209,14 +351,14 @@ pub fn capture_runtime_provenance(
 /// Marks a path supplied by trusted startup/build configuration as a local
 /// filesystem target. This is intentionally crate-private: callers must not
 /// use it to launder request-derived paths into filesystem operations.
-pub(crate) fn operator_local_executable_path(path: &Path) -> &Path {
-    path
+pub(crate) fn operator_local_executable_path(path: &TrustedLocalPath) -> &Path {
+    path.as_path()
 }
 
 pub fn capture_current_runtime_provenance(
     build: BuildProvenance,
 ) -> std::io::Result<RuntimeProvenance> {
-    let executable_path = std::env::current_exe()?;
+    let executable_path = TrustedLocalPath::current_executable()?;
     Ok(capture_runtime_provenance(build, &executable_path))
 }
 
@@ -405,5 +547,21 @@ mod tests {
             .unavailable
             .iter()
             .any(|item| item.code == "provenance.unavailable.git_revision"));
+    }
+
+    #[test]
+    fn trusted_local_path_rejects_relative_traversal_and_outside_paths() {
+        assert!(matches!(
+            TrustedLocalPath::from_root("/tmp", PathBuf::from("relative/gate")),
+            Err(TrustedLocalPathError::PathNotAbsolute)
+        ));
+        assert!(matches!(
+            TrustedLocalPath::from_root("/tmp", PathBuf::from("/tmp/../etc/gate")),
+            Err(TrustedLocalPathError::PathTraversal)
+        ));
+        assert!(matches!(
+            TrustedLocalPath::from_root("/tmp", PathBuf::from("/etc/gate")),
+            Err(TrustedLocalPathError::OutsideRoot)
+        ));
     }
 }

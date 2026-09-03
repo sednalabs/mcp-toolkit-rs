@@ -22,7 +22,7 @@ pub use provenance::{
     AttestationOptions, AttestationPayload, AttestationRuntime, AttestationStatus,
     BinaryProvenance, BuildMetadata, BuildProvenance, BuildProvenanceInput, ProcessProvenance,
     RuntimeProvenance, SourceProvenance, UnavailableField, ATTESTATION_SCHEMA_VERSION,
-    UNKNOWN_VALUE,
+    TrustedLocalPath, TrustedLocalPathError, UNKNOWN_VALUE,
 };
 
 /// Build canonical provenance from a consumer crate's compile-time environment.

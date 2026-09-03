@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::provenance::{RuntimeProvenance, UNKNOWN_VALUE};
+use crate::provenance::{RuntimeProvenance, TrustedLocalPath, UNKNOWN_VALUE};
 
 pub const CODE_DISABLED: &str = "admission.disabled";
 pub const CODE_OVERRIDE: &str = "admission.override.active";
@@ -59,7 +59,9 @@ pub struct StartupAdmissionPolicy {
     pub required_level: TestGateLevel,
     /// Operator-selected local gate-artifact path. This path is read during
     /// startup admission and must not be populated from request data.
-    pub gate_path: PathBuf,
+    pub gate_path: TrustedLocalPath,
+    /// Exact command-manifest digest required by the startup gate.
+    pub expected_command_manifest_digest: String,
     pub production_mode: bool,
     pub allow_production_bypass: bool,
     pub bypass: Option<AdmissionBypass>,
@@ -135,6 +137,7 @@ pub enum AdmissionPolicyError {
     BypassReasonRequired,
     BypassExpiryInvalid,
     ProductionBypassNotAllowed,
+    CommandManifestDigestInvalid,
 }
 
 impl fmt::Display for AdmissionPolicyError {
@@ -156,6 +159,10 @@ impl fmt::Display for AdmissionPolicyError {
                     "startup admission bypass is not allowed in production mode"
                 )
             }
+            Self::CommandManifestDigestInvalid => write!(
+                f,
+                "startup admission requires a canonical sha256 command-manifest digest"
+            ),
         }
     }
 }
@@ -174,9 +181,12 @@ impl StartupAdmissionPolicy {
             if OffsetDateTime::parse(&bypass.expires_at, &Rfc3339).is_err() {
                 return Err(AdmissionPolicyError::BypassExpiryInvalid);
             }
-            if self.production_mode && !self.allow_production_bypass {
+            if self.production_mode {
                 return Err(AdmissionPolicyError::ProductionBypassNotAllowed);
             }
+        }
+        if !valid_sha256_reference(&self.expected_command_manifest_digest) {
+            return Err(AdmissionPolicyError::CommandManifestDigestInvalid);
         }
         Ok(())
     }
@@ -192,7 +202,7 @@ pub fn evaluate_startup_admission(
         return Ok(AdmissionEvaluation {
             outcome: AdmissionOutcome::Disabled,
             required_level: policy.required_level,
-            gate_path: policy.gate_path.clone(),
+            gate_path: policy.gate_path.as_ref().to_path_buf(),
             reason_code: Some(CODE_DISABLED.to_string()),
             detail: "startup admission disabled by policy".to_string(),
             override_active: false,
@@ -208,7 +218,7 @@ pub fn evaluate_startup_admission(
             return Ok(AdmissionEvaluation {
                 outcome: AdmissionOutcome::Bypassed,
                 required_level: policy.required_level,
-                gate_path: policy.gate_path.clone(),
+                gate_path: policy.gate_path.as_ref().to_path_buf(),
                 reason_code: Some(CODE_OVERRIDE.to_string()),
                 detail: format!(
                     "startup admission bypass active until {} (reason={})",
@@ -221,11 +231,16 @@ pub fn evaluate_startup_admission(
         expired_bypass = true;
     }
 
-    if runtime.build.component.trim().is_empty()
-        || runtime.build.server_version.trim().is_empty()
+    if is_unknown(&runtime.build.component)
+        || is_unknown(&runtime.build.server_version)
         || is_unknown(&runtime.build.source.revision)
+        || is_unknown(&runtime.build.source.reference)
         || is_unknown(&runtime.build.build_identity)
         || is_unknown(&runtime.build.source_fingerprint)
+        || is_unknown(&runtime.build.build_metadata.profile)
+        || is_unknown(&runtime.build.build_metadata.target)
+        || is_unknown(&runtime.build.build_metadata.rustc_version)
+        || runtime.build.build_metadata.source_date_epoch.is_none()
     {
         return Ok(warning_or_reject(
             policy,
@@ -333,11 +348,16 @@ pub fn evaluate_startup_admission(
             ),
         ));
     }
-    if !valid_sha256_reference(&artifact.command_manifest_digest) {
+    if !valid_sha256_reference(&artifact.command_manifest_digest)
+        || artifact.command_manifest_digest != policy.expected_command_manifest_digest
+    {
         return Ok(warning_or_reject(
             policy,
             CODE_MANIFEST_MISMATCH,
-            "gate command_manifest_digest must be a non-empty sha256: reference".to_string(),
+            format!(
+                "gate command_manifest_digest mismatch: expected {}, found {}",
+                policy.expected_command_manifest_digest, artifact.command_manifest_digest
+            ),
         ));
     }
 
@@ -385,7 +405,7 @@ pub fn evaluate_startup_admission(
     Ok(AdmissionEvaluation {
         outcome: AdmissionOutcome::Passed,
         required_level: policy.required_level,
-        gate_path: policy.gate_path.clone(),
+        gate_path: policy.gate_path.as_ref().to_path_buf(),
         reason_code: None,
         detail: "startup admission checks passed".to_string(),
         override_active: false,
@@ -395,7 +415,10 @@ pub fn evaluate_startup_admission(
 /// Writes a gate artifact to an operator-selected local path using an atomic
 /// temporary-file replacement. The path must come from trusted build or
 /// deployment configuration, never from request data.
-pub fn write_gate_artifact(path: &Path, artifact: &GateArtifactV1) -> Result<(), String> {
+pub fn write_gate_artifact(
+    path: &TrustedLocalPath,
+    artifact: &GateArtifactV1,
+) -> Result<(), String> {
     let path = operator_local_gate_path(path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
@@ -422,8 +445,8 @@ pub fn write_gate_artifact(path: &Path, artifact: &GateArtifactV1) -> Result<(),
 /// Marks an operator-selected local gate path for CodeQL's path-flow model.
 /// The helper is crate-private so request-handling code cannot reuse it as a
 /// generic path sanitizer.
-pub(crate) fn operator_local_gate_path(path: &Path) -> &Path {
-    path
+pub(crate) fn operator_local_gate_path(path: &TrustedLocalPath) -> &Path {
+    path.as_ref()
 }
 
 fn warning_or_reject(
@@ -439,7 +462,7 @@ fn warning_or_reject(
     AdmissionEvaluation {
         outcome,
         required_level: policy.required_level,
-        gate_path: policy.gate_path.clone(),
+        gate_path: policy.gate_path.as_ref().to_path_buf(),
         reason_code: Some(reason_code.to_string()),
         detail,
         override_active: false,
@@ -449,7 +472,12 @@ fn warning_or_reject(
 fn valid_sha256_reference(value: &str) -> bool {
     value
         .strip_prefix("sha256:")
-        .is_some_and(|digest| !digest.trim().is_empty())
+        .is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 
 fn is_unknown(value: &str) -> bool {
@@ -488,6 +516,13 @@ mod tests {
         std::env::temp_dir().join(format!("mcp-toolkit-{prefix}-{nonce}"))
     }
 
+    const TEST_MANIFEST_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn trusted_path(path: PathBuf) -> TrustedLocalPath {
+        TrustedLocalPath::from_root("/tmp", path).expect("bind trusted test path")
+    }
+
     fn runtime_for(executable: &Path) -> RuntimeProvenance {
         let build = BuildProvenance::from_input(BuildProvenanceInput {
             component: "example-mcp",
@@ -498,17 +533,23 @@ mod tests {
             profile: Some("release"),
             target: Some("x86_64-unknown-linux-gnu"),
             rustc_version: Some("rustc test"),
-            source_date_epoch: None,
+            source_date_epoch: Some("1700000000"),
             build_identity_override: None,
         });
-        capture_runtime_provenance(build, executable)
+        let executable = TrustedLocalPath::from_root(
+            executable.parent().expect("executable parent"),
+            executable,
+        )
+        .expect("bind executable path");
+        capture_runtime_provenance(build, &executable)
     }
 
-    fn strict_policy(gate_path: PathBuf) -> StartupAdmissionPolicy {
+    fn strict_policy(gate_path: TrustedLocalPath) -> StartupAdmissionPolicy {
         StartupAdmissionPolicy {
             mode: StartupAdmissionMode::Strict,
             required_level: TestGateLevel::Fast,
             gate_path,
+            expected_command_manifest_digest: TEST_MANIFEST_DIGEST.to_string(),
             production_mode: false,
             allow_production_bypass: false,
             bypass: None,
@@ -519,7 +560,7 @@ mod tests {
     fn strict_mode_rejects_missing_gate() {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
-        let gate_path = temp_path("missing-gate");
+        let gate_path = trusted_path(temp_path("missing-gate"));
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
@@ -531,12 +572,17 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = temp_path("gate");
+        let gate_path = trusted_path(temp_path("gate"));
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
         let artifact =
-            GateArtifactV1::passing(&runtime, TestGateLevel::Fast, "sha256:test", expires_at);
+            GateArtifactV1::passing(
+                &runtime,
+                TestGateLevel::Fast,
+                TEST_MANIFEST_DIGEST,
+                expires_at,
+            );
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
@@ -550,12 +596,17 @@ mod tests {
         let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = temp_path("gate");
+        let gate_path = trusted_path(temp_path("gate"));
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
         let mut artifact =
-            GateArtifactV1::passing(&runtime, TestGateLevel::Fast, "sha256:test", expires_at);
+            GateArtifactV1::passing(
+                &runtime,
+                TestGateLevel::Fast,
+                TEST_MANIFEST_DIGEST,
+                expires_at,
+            );
         artifact.build_identity = "other-mcp@1.0.0+deadbeef".to_string();
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
@@ -567,11 +618,54 @@ mod tests {
     }
 
     #[test]
+    fn strict_mode_rejects_mismatched_command_manifest() {
+        let executable = std::env::current_exe().expect("resolve test executable");
+        let runtime = runtime_for(&executable);
+        std::thread::sleep(Duration::from_millis(25));
+        let gate_path = trusted_path(temp_path("manifest-mismatch"));
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expiry");
+        let artifact = GateArtifactV1::passing(
+            &runtime,
+            TestGateLevel::Fast,
+            "sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+            expires_at,
+        );
+        write_gate_artifact(&gate_path, &artifact).expect("write gate");
+
+        let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
+            .expect("valid policy");
+        assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            evaluation.reason_code.as_deref(),
+            Some(CODE_MANIFEST_MISMATCH)
+        );
+        let _ = fs::remove_file(operator_local_gate_path(&gate_path));
+    }
+
+    #[test]
+    fn strict_mode_rejects_unknown_component_provenance() {
+        let executable = std::env::current_exe().expect("resolve test executable");
+        let mut runtime = runtime_for(&executable);
+        runtime.build.component = UNKNOWN_VALUE.to_string();
+        let gate_path = trusted_path(temp_path("unknown-component"));
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
+        assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            evaluation.reason_code.as_deref(),
+            Some(CODE_PROVENANCE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
     fn active_break_glass_bypass_requires_expiry_and_reason() {
         let policy = StartupAdmissionPolicy {
             mode: StartupAdmissionMode::Strict,
             required_level: TestGateLevel::Standard,
-            gate_path: temp_path("gate"),
+            gate_path: trusted_path(temp_path("gate")),
+            expected_command_manifest_digest: TEST_MANIFEST_DIGEST.to_string(),
             production_mode: false,
             allow_production_bypass: false,
             bypass: Some(AdmissionBypass {
@@ -587,5 +681,28 @@ mod tests {
         let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Bypassed);
         assert!(evaluation.override_active);
+    }
+
+    #[test]
+    fn production_mode_rejects_all_admission_bypasses() {
+        let policy = StartupAdmissionPolicy {
+            mode: StartupAdmissionMode::Strict,
+            required_level: TestGateLevel::Standard,
+            gate_path: trusted_path(temp_path("production-bypass")),
+            expected_command_manifest_digest: TEST_MANIFEST_DIGEST.to_string(),
+            production_mode: true,
+            allow_production_bypass: true,
+            bypass: Some(AdmissionBypass {
+                reason: "emergency repair".to_string(),
+                expires_at: (OffsetDateTime::now_utc() + TimeDuration::minutes(5))
+                    .format(&Rfc3339)
+                    .expect("format bypass expiry"),
+            }),
+        };
+
+        assert_eq!(
+            policy.validate(),
+            Err(AdmissionPolicyError::ProductionBypassNotAllowed)
+        );
     }
 }

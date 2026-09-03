@@ -1,0 +1,3 @@
+provide:
+  - ".github/codeql/rust-toolkit-contract/qlpack.yml"
+  - ".github/codeql/extensions/*/qlpack.yml"

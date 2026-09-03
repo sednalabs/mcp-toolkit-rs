@@ -4,6 +4,12 @@ queries:
   - uses: security-and-quality
   - uses: ./.github/codeql/rust-toolkit-contract
 
+# Resolve the repository-local model pack from source so the trusted-path
+# barrier is active for the same exact Rust analysis as the standard queries.
+packs:
+  rust:
+    - sednalabs/provenance-model
+
 paths:
   - crates
   - templates
