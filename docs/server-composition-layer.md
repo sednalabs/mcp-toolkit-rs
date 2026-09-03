@@ -103,6 +103,18 @@ Toolkit route may inspect a bounded request body only to distinguish:
 
 After that bounded classification, RMCP remains the protocol engine.
 
+### SEP-2243 standard HTTP headers
+
+The complete current-protocol header contract is documented in the
+[SEP-2243 standard HTTP header note](sep-2243-http-headers.md). Current
+requests carry `MCP-Protocol-Version`, required request `_meta`, and an
+`Mcp-Method` that matches the JSON-RPC method. `Mcp-Name` and `Mcp-Param-*` are
+conditional and must match the routable parameter or annotated primitive body
+value when applicable. RMCP remains responsible for validation and dispatch;
+an incomplete or mismatched current request correctly receives RMCP's HTTP
+`400` response. The legacy pre-2026 initialize/session lifecycle is a separate
+compatibility contract and does not inherit current-header requirements.
+
 ## Tasks and durability boundary
 
 MCP Tasks are an RMCP-owned protocol extension. RMCP owns the task methods and

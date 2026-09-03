@@ -2019,6 +2019,7 @@ dependencies = [
  "mcp-toolkit-process",
  "mcp-toolkit-scratchpad",
  "mcp-toolkit-server",
+ "mcp-toolkit-tasks",
  "rmcp",
  "serde_json",
  "serde_yaml_ng",
@@ -2231,6 +2232,15 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "mcp-toolkit-tasks"
+version = "0.1.0"
+dependencies = [
+ "rmcp",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
