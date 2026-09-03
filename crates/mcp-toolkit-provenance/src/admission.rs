@@ -517,23 +517,18 @@ mod tests {
 
     #[test]
     fn strict_mode_rejects_missing_gate() {
-        let executable = temp_path("exe");
-        fs::write(operator_local_gate_path(&executable), "binary")
-            .expect("write executable fixture");
+        let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         let gate_path = temp_path("missing-gate");
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_MISSING));
-        let _ = fs::remove_file(executable);
     }
 
     #[test]
     fn strict_mode_accepts_gate_bound_to_running_build() {
-        let executable = temp_path("exe");
-        fs::write(operator_local_gate_path(&executable), "binary")
-            .expect("write executable fixture");
+        let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
         let gate_path = temp_path("gate");
@@ -547,15 +542,12 @@ mod tests {
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Passed);
-        let _ = fs::remove_file(executable);
         let _ = fs::remove_file(gate_path);
     }
 
     #[test]
     fn gate_bound_to_different_build_is_rejected() {
-        let executable = temp_path("exe");
-        fs::write(operator_local_gate_path(&executable), "binary")
-            .expect("write executable fixture");
+        let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
         let gate_path = temp_path("gate");
@@ -571,7 +563,6 @@ mod tests {
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_BUILD_MISMATCH));
-        let _ = fs::remove_file(executable);
         let _ = fs::remove_file(gate_path);
     }
 
@@ -590,14 +581,11 @@ mod tests {
                     .expect("format bypass expiry"),
             }),
         };
-        let executable = temp_path("exe");
-        fs::write(operator_local_gate_path(&executable), "binary")
-            .expect("write executable fixture");
+        let executable = std::env::current_exe().expect("resolve test executable");
         let runtime = runtime_for(&executable);
 
         let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Bypassed);
         assert!(evaluation.override_active);
-        let _ = fs::remove_file(executable);
     }
 }
