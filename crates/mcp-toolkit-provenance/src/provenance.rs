@@ -107,6 +107,9 @@ impl TrustedLocalPath {
 
         let path = path.into();
         validate_absolute_without_traversal(&path, false)?;
+        if !path.starts_with(root) {
+            return Err(TrustedLocalPathError::OutsideRoot);
+        }
         let canonical_path = fs::canonicalize(&path)
             .map_err(|error| TrustedLocalPathError::PathUnavailable(error.to_string()))?;
         if !canonical_path.starts_with(&canonical_root) {
@@ -255,11 +258,7 @@ fn write_confined_atomic(
         )
     })?;
     let temp_name = cstring_os_str(temp_name)?;
-    let flags = libc::O_WRONLY
-        | libc::O_CREAT
-        | libc::O_EXCL
-        | libc::O_NOFOLLOW
-        | libc::O_CLOEXEC;
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),

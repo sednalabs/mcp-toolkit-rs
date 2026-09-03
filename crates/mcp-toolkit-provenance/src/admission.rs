@@ -436,7 +436,12 @@ pub fn write_gate_artifact(
     let payload = serde_json::to_vec_pretty(artifact)
         .map_err(|err| format!("failed to serialize gate artifact: {err}"))?;
     path.write_confined_atomic(&payload)
-        .map_err(|err| format!("failed to write gate artifact {}: {err}", path.as_ref().display()))
+        .map_err(|err| {
+            format!(
+                "failed to write gate artifact {}: {err}",
+                path.as_ref().display()
+            )
+        })
 }
 
 /// Marks an operator-selected local gate path for CodeQL's path-flow model.
@@ -776,8 +781,8 @@ mod tests {
         fs::create_dir(&trusted_directory).expect("create trusted directory");
         let gate_path = trusted_directory.join("gate");
         fs::File::create(&gate_path).expect("create gate placeholder");
-        let gate_binding = TrustedLocalPath::from_root(&root, &gate_path)
-            .expect("bind trusted gate path");
+        let gate_binding =
+            TrustedLocalPath::from_root(&root, &gate_path).expect("bind trusted gate path");
 
         let outside_directory = temp_directory();
         let outside_gate = outside_directory.join("gate");
@@ -827,8 +832,8 @@ mod tests {
         let root = temp_directory();
         let gate_path = root.join("gate");
         fs::File::create(&gate_path).expect("create gate placeholder");
-        let gate_binding = TrustedLocalPath::from_root(&root, &gate_path)
-            .expect("bind trusted gate path");
+        let gate_binding =
+            TrustedLocalPath::from_root(&root, &gate_path).expect("bind trusted gate path");
 
         let outside_directory = temp_directory();
         let outside_gate = outside_directory.join("gate");
@@ -886,8 +891,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let policy = strict_policy(gate_binding.clone());
         std::thread::spawn(move || {
-            let evaluation =
-                evaluate_startup_admission(&policy, &runtime).expect("valid policy");
+            let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
             sender.send(evaluation).expect("send FIFO evaluation");
         });
         let evaluation = receiver
