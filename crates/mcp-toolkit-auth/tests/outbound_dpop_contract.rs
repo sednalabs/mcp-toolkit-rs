@@ -1211,9 +1211,7 @@ async fn ambient_proxy_child() {
     assert!(port <= u16::MAX as u32, "direct endpoint port out of range");
     let port = port as u16;
     let mut endpoint = Url::parse("http://127.0.0.1/token").expect("direct endpoint URL");
-    endpoint
-        .set_port(Some(port))
-        .expect("direct endpoint port");
+    endpoint.set_port(Some(port)).expect("direct endpoint port");
     let token = exchange_client(endpoint)
         .exchange(&exchange_request())
         .await
