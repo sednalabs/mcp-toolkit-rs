@@ -85,7 +85,12 @@ Capability metadata is canonical, but adapters can differ:
   mirror. This projection is intentionally JSON-shaped because the current
   `rmcp` tool model may not expose every host extension field.
 - OpenAPI projection emits operation metadata, request/response schemas, and
-  security requirements.
+  security requirements. An empty scope policy emits an explicit OpenAPI
+  `security: []` requirement so a document-level security requirement cannot
+  accidentally make a public capability authenticated. When no output schema
+  is supplied, the output remains unspecified: native MCP and Apps omit
+  `outputSchema`, while OpenAPI omits the response media type's `schema` rather
+  than inventing a placeholder object schema.
 - OAuth security scheme projection emits only standard OpenAPI metadata; callers
   still choose real authorization URLs, token URLs, public hosts, client IDs,
   and client secrets.
@@ -109,12 +114,41 @@ Every projection helper should have whole-object tests that prove:
 - duplicate capability identifiers are rejected by registries;
 - OpenAPI security scheme names are required when scoped capabilities are
   projected;
+- unscoped capabilities explicitly override global OpenAPI security with
+  `security: []`;
 - OAuth 2 authorization-code security scheme metadata preserves caller URLs and
   scopes;
-- generated OpenAPI operation identifiers are stable.
+- generated OpenAPI operation identifiers are stable;
+- registry projections preserve deterministic registration order.
 
 Hosted validation remains the merge gate for public toolkit changes. Local test
 commands are not the shared proof surface for this repository.
+
+### Bounded schema dialect
+
+Consumers that need a narrower JSON Schema contract can opt into
+`mcp_toolkit_core::tool_schema::validate_schema_dialect`. The validator accepts
+only local references rooted at `#/$defs/` and resolves them against the
+submitted root document without I/O. `$id` is rejected in schema positions:
+the bounded resolver does not model embedded schema resources, so accepting it
+could make a nested local reference resolve against the wrong document or hide
+a cycle. The root `type` keyword accepts one valid JSON Schema type name or a
+non-empty array of unique valid type names; object-root enforcement accepts an
+array when it includes `object`. The legacy `definitions` keyword is not a
+schema container in this dialect: its contents are treated as ordinary data,
+not resolved as references; use `$defs` for local definitions. Legacy tuple
+arrays remain supported for `items`; `additionalItems` must instead be one
+schema object or boolean schema.
+
+Resource bounds apply before semantic root resolution. The default policy
+preflights the complete compact-JSON representation at 1 MiB and 1,024 values,
+then limits each `$ref` to 4 KiB before percent decoding or JSON Pointer
+construction and limits active reference depth to 32. Callers can tighten these
+limits with `with_max_input_bytes`, `with_max_nodes`,
+`with_max_reference_bytes`, and `with_max_reference_depth`. Reference errors
+retain at most a fixed 128-byte source preview, and malformed non-string
+reference values are reported only by JSON shape; public errors never serialize
+or clone an unbounded attacker-controlled value.
 
 ## References
 
