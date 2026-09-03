@@ -28,6 +28,7 @@
 
 pub mod bearer;
 pub mod challenge;
+pub mod outbound_dpop;
 pub mod provider_auth;
 pub mod surface;
 pub mod upstream_oauth;
