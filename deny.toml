@@ -32,6 +32,10 @@ allow = ["CDLA-Permissive-2.0"]
 name = "tiny-keccak"
 allow = ["CC0-1.0"]
 
+[[licenses.exceptions]]
+name = "borrow-or-share"
+allow = ["MIT-0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
