@@ -18,6 +18,10 @@ are approved for publication.
   crates, including `mcp-toolkit-scratchpad` and `mcp-toolkit-server`.
 - Documented ordered manual publication, yank/consumer rollback guidance, and
   the later-version OIDC trusted-publisher workflow path.
+- Added the manual first-release GitHub bootstrap workflow and fail-closed
+  crates.io registry evidence helper; it uses only the protected `crates-io`
+  environment token path, supports exact-artifact resume, and records
+  provenance without creating a tag or release.
 - Kept crates unpublished pending explicit release-owner and publication-path
   approval.
 
