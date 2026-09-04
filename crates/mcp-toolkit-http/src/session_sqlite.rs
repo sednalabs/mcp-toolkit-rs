@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand_core::RngCore;
+use getrandom::fill;
 use rusqlite::{params, Connection};
 use tokio::sync::{mpsc, oneshot};
 
@@ -371,12 +371,10 @@ fn maybe_encrypt_payload(
     let cipher = Aes256Gcm::new_from_slice(encryption.key())
         .map_err(|_| "event store encryption key is invalid".to_string())?;
     let mut nonce_bytes = [0u8; 12];
-    rand_core::OsRng
-        .try_fill_bytes(&mut nonce_bytes)
-        .map_err(|_| "event store nonce generation failed".to_string())?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    fill(&mut nonce_bytes).map_err(|err| format!("event store nonce generation failed: {err}"))?;
+    let nonce = Nonce::from(nonce_bytes);
     let ciphertext = cipher
-        .encrypt(nonce, payload.as_bytes())
+        .encrypt(&nonce, payload.as_bytes())
         .map_err(|_| "event store encryption failed".to_string())?;
     let mut blob = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
     blob.extend_from_slice(&nonce_bytes);
@@ -404,9 +402,10 @@ fn maybe_decrypt_payload(config: &EventStoreConfig, payload: &str) -> Result<Str
     let (nonce_bytes, ciphertext) = decoded.split_at(12);
     let cipher = Aes256Gcm::new_from_slice(encryption.key())
         .map_err(|_| "event store encryption key is invalid".to_string())?;
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes)
+        .map_err(|_| "event store payload nonce is invalid".to_string())?;
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|_| "event store decryption failed".to_string())?;
     String::from_utf8(plaintext).map_err(|_| "event store payload is not valid UTF-8".to_string())
 }
