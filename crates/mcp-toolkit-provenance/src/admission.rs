@@ -4,8 +4,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use cap_fs_ext::{
-    DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsMaybeDirExt,
-    OpenOptionsSyncExt,
+    DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsMaybeDirExt, OpenOptionsSyncExt,
 };
 use cap_std::fs::{Dir, OpenOptions};
 use serde::{Deserialize, Serialize};
@@ -93,7 +92,10 @@ impl fmt::Display for GateSourceError {
         match self {
             Self::RootNotAbsolute => write!(formatter, "trusted gate root must be absolute"),
             Self::RootTraversal => {
-                write!(formatter, "trusted gate root must not contain traversal components")
+                write!(
+                    formatter,
+                    "trusted gate root must not contain traversal components"
+                )
             }
             Self::RootUnavailable(error) => {
                 write!(formatter, "trusted gate root is unavailable: {error}")
@@ -103,10 +105,16 @@ impl fmt::Display for GateSourceError {
                 write!(formatter, "gate artifact path must be relative to its root")
             }
             Self::ArtifactPathTraversal => {
-                write!(formatter, "gate artifact path must not contain traversal components")
+                write!(
+                    formatter,
+                    "gate artifact path must not contain traversal components"
+                )
             }
             Self::ArtifactPathInvalid => {
-                write!(formatter, "gate artifact path contains an invalid component")
+                write!(
+                    formatter,
+                    "gate artifact path contains an invalid component"
+                )
             }
             Self::IntermediateUnavailable { component, error } => write!(
                 formatter,
@@ -271,7 +279,10 @@ impl fmt::Display for GateReadError {
         match self {
             Self::Missing(error) => write!(formatter, "gate artifact is missing: {error}"),
             Self::SymlinkRejected(error) => {
-                write!(formatter, "gate artifact symlink or reparse point rejected: {error}")
+                write!(
+                    formatter,
+                    "gate artifact symlink or reparse point rejected: {error}"
+                )
             }
             Self::NotRegular => write!(formatter, "gate artifact is not a regular file"),
             Self::TooLarge { limit } => {
