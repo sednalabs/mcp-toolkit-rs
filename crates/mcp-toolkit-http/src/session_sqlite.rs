@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand_core::RngCore;
+use rand_core::TryRngCore;
 use rusqlite::{params, Connection};
 use tokio::sync::{mpsc, oneshot};
 
