@@ -48,7 +48,7 @@ pub(crate) fn hash_identifier(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
-    let hex = format!("{digest:x}");
+    let hex = format!("{:x}", digest.as_slice());
     hex.chars().take(12).collect()
 }
 

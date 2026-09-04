@@ -71,7 +71,7 @@ use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use jsonwebtoken::jwk::{Jwk, ThumbprintHash};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use p256::ecdsa::SigningKey;
-use p256::elliptic_curve::rand_core::OsRng;
+use p256::elliptic_curve::Generate;
 use p256::pkcs8::EncodePrivateKey;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
@@ -373,7 +373,7 @@ impl DpopSigner {
     /// Keep this signer scoped to the intended client identity. Its private key
     /// is redacted from formatted output but remains resident in process memory.
     pub fn generate() -> Result<Self, OutboundDpopError> {
-        let signing_key = SigningKey::random(&mut OsRng);
+        let signing_key = SigningKey::generate();
         let document = signing_key
             .to_pkcs8_der()
             .map_err(|_| OutboundDpopError::KeyInitialization)?;
