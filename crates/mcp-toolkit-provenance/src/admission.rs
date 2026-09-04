@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -766,7 +766,7 @@ fn sha256_reference(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut reference = String::from("sha256:");
     for byte in digest {
-        reference.push_str(&format!("{byte:02x}"));
+        let _ = write!(&mut reference, "{byte:02x}");
     }
     reference
 }
@@ -832,8 +832,7 @@ mod tests {
             source_date_epoch: Some("1700000000"),
             build_identity_override: None,
         });
-        let executable = std::env::current_exe().expect("resolve test executable");
-        capture_runtime_provenance(build, &executable)
+        capture_runtime_provenance(build)
     }
 
     fn artifact(runtime: &RuntimeProvenance) -> GateArtifactV1 {
@@ -860,7 +859,10 @@ mod tests {
         sha256_reference(bytes)
     }
 
-    fn strict_policy(source: GateArtifactSource, expected_digest: String) -> StartupAdmissionPolicy {
+    fn strict_policy(
+        source: GateArtifactSource,
+        expected_digest: String,
+    ) -> StartupAdmissionPolicy {
         StartupAdmissionPolicy {
             mode: StartupAdmissionMode::Strict,
             required_level: TestGateLevel::Fast,
@@ -882,8 +884,9 @@ mod tests {
             .bind("gate.json")
             .expect("bind source");
 
-        let evaluation = evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
-            .expect("valid policy");
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
+                .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Passed);
         assert_eq!(evaluation.reason_code, None);
         let _ = fs::remove_dir_all(root);
@@ -918,8 +921,9 @@ mod tests {
             .expect("bind root")
             .bind("gate.json")
             .expect("bind source");
-        let evaluation = evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
-            .expect("valid policy");
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
+                .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_TOO_LARGE));
         let _ = fs::remove_dir_all(root);
@@ -982,8 +986,9 @@ mod tests {
         fs::create_dir_all(&old_root).expect("replace root path");
         fs::write(old_root.join("gate.json"), b"wrong bytes").expect("write replacement");
 
-        let evaluation = evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
-            .expect("valid policy");
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
+                .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Passed);
         let _ = fs::remove_dir_all(root);
     }
@@ -1011,8 +1016,9 @@ mod tests {
             .expect("bind root")
             .bind("gate.json")
             .expect("bind source");
-        let evaluation = evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
-            .expect("valid policy");
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
+                .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_EXPIRED));
         let _ = fs::remove_dir_all(root);
@@ -1029,8 +1035,9 @@ mod tests {
             .expect("bind root")
             .bind("gate.json")
             .expect("bind source");
-        let evaluation = evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
-            .expect("valid policy");
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(source, digest(&bytes)), &runtime)
+                .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Passed);
         let _ = fs::remove_dir_all(root);
     }
@@ -1041,7 +1048,12 @@ mod tests {
         let expiry = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
-        let artifact = GateArtifactV1::passing(&runtime, TestGateLevel::Fast, TEST_MANIFEST_DIGEST, expiry);
+        let artifact = GateArtifactV1::passing(
+            &runtime,
+            TestGateLevel::Fast,
+            TEST_MANIFEST_DIGEST,
+            expiry,
+        );
         assert_eq!(artifact.schema_version, 1);
         assert_eq!(artifact.status, "pass");
         assert!(!artifact.issued_at.is_empty());

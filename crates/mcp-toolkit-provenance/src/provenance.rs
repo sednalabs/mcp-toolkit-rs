@@ -184,10 +184,18 @@ impl BuildProvenance {
     }
 }
 
-/// Capture process and binary observations from a path supplied by trusted
-/// startup/build configuration. The path is not used for admission decisions.
-pub fn capture_runtime_provenance(build: BuildProvenance, executable_path: &Path) -> RuntimeProvenance {
-    let metadata = fs::metadata(executable_path).ok();
+/// Capture process and binary observations for the currently running process.
+/// The executable path is obtained internally and is not caller-controlled.
+pub fn capture_runtime_provenance(build: BuildProvenance) -> RuntimeProvenance {
+    let executable_path = std::env::current_exe().ok();
+    capture_runtime_from_path(build, executable_path.as_deref())
+}
+
+fn capture_runtime_from_path(
+    build: BuildProvenance,
+    executable_path: Option<&Path>,
+) -> RuntimeProvenance {
+    let metadata = executable_path.and_then(|path| fs::metadata(path).ok());
     let modified_unix_ms = metadata
         .as_ref()
         .and_then(|meta| meta.modified().ok())
@@ -197,7 +205,9 @@ pub fn capture_runtime_provenance(build: BuildProvenance, executable_path: &Path
         build,
         process: ProcessProvenance {
             pid: std::process::id(),
-            executable_path: executable_path.display().to_string(),
+            executable_path: executable_path
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| UNKNOWN_VALUE.to_string()),
         },
         binary: BinaryProvenance {
             file_size_bytes: metadata.as_ref().map(|meta| meta.len()),
@@ -210,7 +220,7 @@ pub fn capture_current_runtime_provenance(
     build: BuildProvenance,
 ) -> std::io::Result<RuntimeProvenance> {
     let executable_path = std::env::current_exe()?;
-    Ok(capture_runtime_provenance(build, &executable_path))
+    Ok(capture_runtime_from_path(build, Some(&executable_path)))
 }
 
 pub fn build_attestation_envelope(
