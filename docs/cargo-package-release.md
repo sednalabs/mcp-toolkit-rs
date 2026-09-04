@@ -219,6 +219,77 @@ does not erase existing downloads. Consumers move to a corrected version, or
 restore their previously recorded lockfile and toolkit commit. Published
 versions must never be overwritten or silently replaced under another name.
 
+## First-release GitHub bootstrap workflow
+
+The reviewed first-release path is
+`.github/workflows/crates-io-first-release.yml`. It is `workflow_dispatch`
+only, checks out protected `main` (never a pull-request or user-supplied ref),
+and requires all of the following inputs:
+
+1. `expected_main_sha`: the exact lowercase 40-hex SHA currently at protected
+   `main`;
+2. `confirmation`: `PUBLISH_MCP_TOOLKIT_V0_1_0`; and
+3. `release_tag`: `v0.1.0`.
+
+The preflight and publish jobs both read back `main` and fail closed if it has
+moved. The publish job references the dedicated GitHub environment named
+`crates-io` and the only required environment-scoped secret is
+`CARGO_REGISTRY_TOKEN`. Do not create a repository-level copy of that secret,
+and do not put the value in a workflow input, command-line argument, artifact,
+or log. Configure environment reviewers and branch restrictions before the
+first dispatch; the workflow itself does not create or modify the environment
+or secret.
+
+The workflow packages and publishes only the nine approved crates, in the
+checked-in dependency order. Immediately before each publish it queries both
+the crates.io version API and sparse index. A missing crate name and version is
+the only state that permits a publish. If the version already exists, the
+workflow downloads it and requires all of these to match the local package
+made from the expected SHA: the API checksum, sparse-index checksum, download
+SHA-256, `.cargo_vcs_info.json` source SHA, and normalized packaged
+`Cargo.toml` digest. It also requires a non-empty authenticated owners response
+and an explicitly unyanked index entry. Any occupied name, checksum/source
+mismatch, owner/API failure, or indeterminate state stops without a retry,
+publish, or yank.
+
+After a new publish, the workflow waits for the API version, sparse-index
+entry, downloadable artifact, checksum agreement, source identity, owner
+evidence, and version state before advancing to the next package. This makes a
+rerun safe for a partial first release: already accepted versions are consumed
+only when the exact artifact identity is proven; a different artifact is a
+hard stop.
+
+Once all nine registry identities are accepted, the workflow records and
+attests an immutable provenance receipt containing the accepted package set,
+checksums, source SHA, and tag status. It never creates a Git tag or GitHub
+release itself. The current candidate changes workflow files, and GitHub's
+release API documents that the default Actions `GITHUB_TOKEN` cannot create a
+release for such a commit without workflow-write authorization. A separately
+authorized maintainer must therefore create `v0.1.0` after the acceptance
+receipt, then verify that the peeled tag resolves to the exact accepted source
+SHA before creating or publishing release notes. The provenance attestation
+does not claim that a tag or release exists.
+
+This bootstrap token path is first-release-only. Immediately after the nine
+crates and provenance receipt are accepted, configure crates.io trusted
+publishing for all nine packages, review and land the replacement workflow,
+and read back the exact publisher bindings. Only after that readback should
+the bootstrap token path be removed and the `CARGO_REGISTRY_TOKEN` secret
+deleted. The transition is a separate authority boundary; a successful
+bootstrap run does not authorize its own teardown or trusted-publisher setup.
+
+The workflow follows the Cargo registry contracts for package creation,
+publishing, registry API authentication, sparse-index checksums, and owner
+lookups described in the [Cargo publish command](https://doc.rust-lang.org/cargo/commands/cargo-publish.html),
+[Cargo publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html),
+[Cargo registry web API](https://doc.rust-lang.org/cargo/reference/registry-web-api.html),
+and [registry index](https://doc.rust-lang.org/cargo/reference/registry-index.html).
+Its dispatch, minimal permissions, environment, and secret behavior follows
+the [GitHub Actions workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax),
+[deployment-environment](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments),
+and [Actions secrets](https://docs.github.com/en/actions/concepts/security/secrets)
+contracts.
+
 ## Trusted publishing for later versions
 
 After 0.1.0, the preferred path is a dedicated protected workflow at
