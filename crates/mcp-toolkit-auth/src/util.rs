@@ -48,11 +48,13 @@ pub(crate) fn hash_identifier(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
-    let hex = digest.iter().fold(String::with_capacity(64), |mut hex, byte| {
-        use std::fmt::Write as _;
-        write!(&mut hex, "{byte:02x}").expect("writing a digest to String cannot fail");
-        hex
-    });
+    let hex = digest
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use std::fmt::Write as _;
+            write!(&mut hex, "{byte:02x}").expect("writing a digest to String cannot fail");
+            hex
+        });
     hex.chars().take(12).collect()
 }
 
