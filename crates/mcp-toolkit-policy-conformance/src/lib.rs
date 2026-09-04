@@ -335,14 +335,12 @@ pub fn validate_vectors_with_schema(
     let instance_json: Value =
         serde_json::from_str(raw_json).map_err(|err| format!("vector parse failed: {err}"))?;
 
-    let compiled = jsonschema::JSONSchema::compile(&schema_json)
+    let compiled = jsonschema::validator_for(&schema_json)
         .map_err(|err| format!("schema compile failed: {err}"))?;
 
-    if let Err(errors) = compiled.validate(&instance_json) {
-        let mut messages = Vec::new();
-        for error in errors {
-            messages.push(error.to_string());
-        }
+    let errors: Vec<_> = compiled.iter_errors(&instance_json).collect();
+    if !errors.is_empty() {
+        let messages: Vec<_> = errors.iter().map(ToString::to_string).collect();
         return Err(format!("schema validation failed: {}", messages.join("; ")));
     }
 
