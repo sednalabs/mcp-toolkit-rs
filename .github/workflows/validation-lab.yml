@@ -91,7 +91,7 @@ jobs:
       lane_set: ${{ steps.plan.outputs.lane_set }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -99,7 +99,7 @@ jobs:
           path: workflow-source
 
       - name: Checkout exact validation target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           # The workflow invocation SHA is immutable for this run.  Requested
           # refs remain display/identity inputs and are checked below; they do
@@ -196,7 +196,7 @@ jobs:
       TOOLKIT_VALIDATION_SCRIPT_ARGS: ${{ toJSON(matrix.script_args) }}
     steps:
       - name: Checkout exact target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -258,7 +258,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
