@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand_core::TryRngCore;
+use getrandom::fill;
 use rusqlite::{params, Connection};
 use tokio::sync::{mpsc, oneshot};
 
@@ -371,8 +371,7 @@ fn maybe_encrypt_payload(
     let cipher = Aes256Gcm::new_from_slice(encryption.key())
         .map_err(|_| "event store encryption key is invalid".to_string())?;
     let mut nonce_bytes = [0u8; 12];
-    rand_core::OsRng
-        .try_fill_bytes(&mut nonce_bytes)
+    fill(&mut nonce_bytes)
         .map_err(|_| "event store nonce generation failed".to_string())?;
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher

@@ -32,7 +32,7 @@ session-sqlite = [
   "dep:rusqlite",
   "dep:aes-gcm",
   "dep:base64",
-  "dep:rand_core",
+  "dep:getrandom",
 ]
 
 [dependencies]
@@ -43,13 +43,13 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 url = "2.5.4"
 futures = { version = "0.3.31", optional = true }
+getrandom = { version = "0.4.3", optional = true }
 rmcp = { version = "=3.2.0", default-features = false, features = ["base64", "macros", "server", "transport-streamable-http-server", "transport-streamable-http-server-session"], optional = true }
 tokio = { version = "1.49.0", features = ["sync"], optional = true }
 tracing = { version = "0.1.44", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
 aes-gcm = { version = "0.11.1", optional = true }
 base64 = { version = "0.23.1", optional = true }
-rand_core = { version = "0.10.1", optional = true }
 
 [dev-dependencies]
 bytes = "1.10.1"
