@@ -41,7 +41,7 @@ jobs:
             echo "- Validation posture: \`first-wave package readiness\`"
             echo "- Target ref: \`${GITHUB_REF_NAME}\`"
             echo "- Target SHA: \`${target_sha}\`"
-            echo "- Publication posture: \`no publish\`"
+            echo "- Publication execution: \`no publish\` (the first-wave candidate may be metadata-enabled)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate package metadata

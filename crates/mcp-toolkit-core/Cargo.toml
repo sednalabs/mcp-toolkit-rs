@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-core"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "protocol"]
 categories = ["data-structures", "development-tools"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true

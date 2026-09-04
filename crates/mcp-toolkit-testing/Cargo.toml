@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-testing"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "testing"]
 categories = ["development-tools", "development-tools::testing"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true

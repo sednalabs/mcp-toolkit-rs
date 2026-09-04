@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-server"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "server"]
 categories = ["network-programming", "web-programming"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true
