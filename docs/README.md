@@ -27,6 +27,7 @@ question at hand.
 - [Auth surface](auth-surface.md), [auth error contracts](auth-error-contracts.md), [auth replay stores](auth-replay-stores.md), and [token dependency posture](auth-token-dependency-posture.md).
 - [Auth control-plane policy](auth-control-plane-policy.md), [security profiles](security-profiles.md), [guarded action pattern](guarded-action-pattern.md), and [upstream OAuth](upstream-oauth.md).
 - [Policy kernel provenance acceptance](policy-kernel-provenance-acceptance.md), [SQL policy-kernel conformance](sql-policy-kernel-conformance.md), and [policy dependency governance](dependency-governance.md).
+- [Startup provenance admission](provenance-startup-admission.md) documents the read-only capability and digest contract for gate artifacts.
 - [Capability projections](capability-projections.md), [provider auth](provider-auth-and-client-config.md), and [MCP/rmcp alignment review](mcp-rmcp-alignment-review.md).
 
 ## Maintainers and release owners

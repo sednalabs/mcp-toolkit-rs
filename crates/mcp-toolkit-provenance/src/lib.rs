@@ -3,6 +3,13 @@
 //! Reusable build provenance, runtime attestation, and startup proof-admission
 //! primitives for Rust MCP services.
 //!
+//! Startup admission is intentionally read-only. A caller binds a
+//! [`TrustedGateRoot`] once, derives a [`GateArtifactSource`] for one relative
+//! artifact, and supplies the expected SHA-256 digest through its trusted
+//! launch/configuration channel. This crate never publishes or writes gate
+//! artifacts, and binary modification time is observational provenance rather
+//! than an admission input.
+//!
 //! This crate deliberately contains no provider-specific vocabulary and no MCP
 //! transport implementation. It standardizes operational identity and startup
 //! evidence that otherwise tends to be reimplemented independently by each
@@ -12,17 +19,18 @@ pub mod admission;
 pub mod provenance;
 
 pub use admission::{
-    evaluate_startup_admission, write_gate_artifact, AdmissionBypass, AdmissionEvaluation,
-    AdmissionOutcome, AdmissionPolicyError, GateArtifactV1, StartupAdmissionMode,
-    StartupAdmissionPolicy, TestGateLevel,
+    evaluate_startup_admission, AdmissionBypass, AdmissionEvaluation, AdmissionOutcome,
+    AdmissionPolicyError, GateArtifactSource, GateArtifactV1, GateReadError, GateSourceError,
+    StartupAdmissionMode, StartupAdmissionPolicy, TestGateLevel, TrustedGateRoot,
+    GATE_ARTIFACT_READ_LIMIT, MAX_GATE_ARTIFACT_BYTES,
 };
 pub use provenance::{
     build_attestation_envelope, build_identity, capture_current_runtime_provenance,
     capture_runtime_provenance, source_fingerprint, AttestationEnvelope, AttestationIdentity,
     AttestationOptions, AttestationPayload, AttestationRuntime, AttestationStatus,
     BinaryProvenance, BuildMetadata, BuildProvenance, BuildProvenanceInput, ProcessProvenance,
-    RuntimeProvenance, SourceProvenance, TrustedLocalPath, TrustedLocalPathError, UnavailableField,
-    ATTESTATION_SCHEMA_VERSION, UNKNOWN_VALUE,
+    RuntimeProvenance, SourceProvenance, UnavailableField, ATTESTATION_SCHEMA_VERSION,
+    UNKNOWN_VALUE,
 };
 
 /// Build canonical provenance from a consumer crate's compile-time environment.

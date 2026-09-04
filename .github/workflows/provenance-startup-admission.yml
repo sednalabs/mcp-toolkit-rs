@@ -1,0 +1,104 @@
+name: provenance-startup-admission
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/mcp-toolkit-provenance/**"
+      - ".github/workflows/provenance-startup-admission.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/mcp-toolkit-provenance/**"
+      - ".github/workflows/provenance-startup-admission.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provenance-startup-admission::${{ github.event_name }}::${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  provenance-ubuntu:
+    name: Provenance startup admission / Ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Test provenance admission
+        run: cargo test --package mcp-toolkit-provenance --all-targets --all-features
+
+      - name: Clippy provenance admission
+        run: cargo clippy --package mcp-toolkit-provenance --all-targets --all-features -- -D warnings
+
+  provenance-macos:
+    name: Provenance startup admission / macOS
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: clippy
+
+      - name: Test provenance admission
+        run: cargo test --package mcp-toolkit-provenance --all-targets --all-features
+
+      - name: Clippy provenance admission
+        run: cargo clippy --package mcp-toolkit-provenance --all-targets --all-features -- -D warnings
+
+  provenance-windows:
+    name: Provenance startup admission / Windows
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: clippy
+
+      - name: Test provenance admission
+        shell: bash
+        run: cargo test --package mcp-toolkit-provenance --all-targets --all-features
+
+      - name: Clippy provenance admission
+        shell: bash
+        run: cargo clippy --package mcp-toolkit-provenance --all-targets --all-features -- -D warnings
