@@ -278,7 +278,8 @@ fn signer_produces_verified_jwk_bound_ath_and_canonical_target() {
     assert_eq!(header.typ.as_deref(), Some("dpop+jwt"));
     assert_eq!(&jwk, signer.public_jwk().as_jwk());
     assert_eq!(
-        jwk.thumbprint(ThumbprintHash::SHA256),
+        jwk.thumbprint(ThumbprintHash::SHA256)
+            .expect("JWK thumbprint"),
         signer.public_jwk().thumbprint()
     );
     assert_eq!(claims["htu"], "https://resource.example/v1/items");
