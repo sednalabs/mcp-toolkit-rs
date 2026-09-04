@@ -1,8 +1,8 @@
 use std::fmt;
 use std::io::{self, Read};
-use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
