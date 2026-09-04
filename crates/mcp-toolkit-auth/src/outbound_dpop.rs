@@ -380,7 +380,9 @@ impl DpopSigner {
         let encoding_key = EncodingKey::from_ec_der(document.as_bytes());
         let jwk = Jwk::from_encoding_key(&encoding_key, Algorithm::ES256)
             .map_err(|_| OutboundDpopError::KeyInitialization)?;
-        let thumbprint = jwk.thumbprint(ThumbprintHash::SHA256);
+        let thumbprint = jwk
+            .thumbprint(ThumbprintHash::SHA256)
+            .map_err(|_| OutboundDpopError::KeyInitialization)?;
         Ok(Self {
             encoding_key,
             public_jwk: DpopPublicJwk { jwk, thumbprint },
