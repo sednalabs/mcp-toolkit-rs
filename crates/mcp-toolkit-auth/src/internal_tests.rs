@@ -341,7 +341,7 @@ mod tests {
         nonce: Option<&str>,
     ) -> SignedDpopProof {
         let signing_key = SigningKey::from_slice(&[42_u8; 32]).expect("fixed P-256 scalar");
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let point = signing_key.verifying_key().to_sec1_point(false);
         let x = URL_SAFE_NO_PAD.encode(point.x().expect("uncompressed x coordinate"));
         let y = URL_SAFE_NO_PAD.encode(point.y().expect("uncompressed y coordinate"));
         let jkt = dpop_verifier::thumbprint_ec_p256(&x, &y).expect("JKT");

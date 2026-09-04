@@ -2153,7 +2153,13 @@ impl PendingOAuthAuthorization {
 /// returned digest instead of logging or persisting the raw value.
 pub fn oauth_callback_correlation_key(state: &str) -> String {
     let digest = Sha256::digest(state.as_bytes());
-    format!("{digest:x}")
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use std::fmt::Write as _;
+            write!(&mut hex, "{byte:02x}").expect("writing a digest to String cannot fail");
+            hex
+        })
 }
 
 /// Prepares a provider-neutral PKCE authorization-code transaction.
