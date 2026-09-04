@@ -338,6 +338,10 @@ pub fn validate_vectors_with_schema(
     let compiled = jsonschema::validator_for(&schema_json)
         .map_err(|err| format!("schema compile failed: {err}"))?;
 
+    if compiled.is_valid(&instance_json) {
+        return validate_vectors(cases);
+    }
+
     let messages: Vec<_> = compiled
         .iter_errors(&instance_json)
         .map(|error| error.to_string())
