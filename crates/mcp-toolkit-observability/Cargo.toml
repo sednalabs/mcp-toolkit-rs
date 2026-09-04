@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-observability"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "observability"]
 categories = ["development-tools", "development-tools::debugging"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true

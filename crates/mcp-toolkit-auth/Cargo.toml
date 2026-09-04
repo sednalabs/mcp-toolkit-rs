@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-auth"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "authentication"]
 categories = ["authentication", "web-programming"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true

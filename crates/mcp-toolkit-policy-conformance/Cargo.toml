@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-policy-conformance"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "conformance"]
 categories = ["development-tools", "development-tools::testing"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true

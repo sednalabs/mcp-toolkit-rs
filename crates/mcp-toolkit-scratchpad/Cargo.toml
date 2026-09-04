@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-scratchpad"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "duckdb"]
 categories = ["database", "development-tools"]
-publish = false
 
 [package.metadata.docs.rs]
 all-features = true

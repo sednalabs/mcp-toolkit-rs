@@ -154,7 +154,9 @@ def dependency_items(package: Package) -> list[tuple[str, object, str]]:
     return items
 
 
-def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
+def validate_manifest(
+    package: Package, first_wave: set[str], publication_candidate: bool
+) -> list[str]:
     errors: list[str] = []
     metadata = package.package
 
@@ -247,7 +249,12 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
             f"{package.name}: package.description must be a string identifying the Sedna Labs MCP Toolkit for Rust"
         )
 
-    if metadata.get("publish") is not False:
+    if publication_candidate:
+        if metadata.get("publish") is False:
+            errors.append(
+                f"{package.name}: publication candidate must enable every first-wave package"
+            )
+    elif metadata.get("publish") is not False:
         errors.append(
             f"{package.name}: routine readiness checks must keep publish = false"
         )
@@ -267,6 +274,27 @@ def validate_manifest(package: Package, first_wave: set[str]) -> list[str]:
                 "both version and path"
             )
 
+    return errors
+
+
+def validate_excluded_publication_posture(
+    repo_root: Path, first_wave: set[str]
+) -> list[str]:
+    """Keep every non-first-wave workspace package publication-disabled."""
+
+    errors: list[str] = []
+    for manifest_path in sorted((repo_root / "crates").glob("*/Cargo.toml")):
+        with manifest_path.open("rb") as f:
+            manifest = tomllib.load(f)
+        package = manifest.get("package")
+        if not isinstance(package, dict):
+            continue
+        name = package.get("name")
+        if isinstance(name, str) and name not in first_wave:
+            if package.get("publish") is not False:
+                errors.append(
+                    f"{name}: non-first-wave packages must keep publish = false"
+                )
     return errors
 
 
@@ -361,9 +389,24 @@ def main() -> int:
         )
         return 1
 
+    publication_candidate = any(
+        package.package.get("publish") is not False for package in packages
+    )
+    if publication_candidate and not all(
+        package.package.get("publish") is not False for package in packages
+    ):
+        print(
+            "First-wave publication candidate must enable all nine approved packages.",
+            file=sys.stderr,
+        )
+        return 1
+
     errors: list[str] = []
     for package in packages:
-        errors.extend(validate_manifest(package, first_wave))
+        errors.extend(
+            validate_manifest(package, first_wave, publication_candidate)
+        )
+    errors.extend(validate_excluded_publication_posture(repo_root, first_wave))
     errors.extend(validate_readme(repo_root, FIRST_WAVE))
 
     if errors:
@@ -373,7 +416,12 @@ def main() -> int:
 
     github_summary("### Cargo package readiness\n\n")
     github_summary("- Manifest metadata: passed\n")
-    github_summary("- Routine publication guard: `publish = false` remains set\n")
+    if publication_candidate:
+        github_summary(
+            "- Publication posture: first-wave candidate enabled (execution remains no-publish)\n"
+        )
+    else:
+        github_summary("- Routine publication guard: `publish = false` remains set\n")
     github_summary("- Internal toolkit dependencies: version+path metadata present\n")
 
     if args.manifest_only:

@@ -109,22 +109,25 @@ Before a crate can move from Git-only consumption to crates.io publication:
 6. Record the validation run, package names, versions, and consumer migration
    notes in the release work item or PR.
 
-Routine pull requests keep publication disabled, but they should still prove
-the first-wave package shape. The `cargo-package-readiness` workflow runs
+Routine pull requests keep publication disabled, but a reviewed first-wave
+release candidate may enable exactly the nine approved package manifests. The
+`cargo-package-readiness` workflow runs
 `scripts/cargo_package_readiness.py`, which checks required manifest metadata,
-keeps the routine `publish = false` guard in place, verifies internal toolkit
-dependencies have both `version` and `path`, runs `cargo package --list` for
-the first-wave crates, runs full `cargo package` verification for first-wave
-crates without unpublished toolkit dependencies, and explicitly marks registry
-package verification as deferred for crates whose verification requires
-predecessor toolkit crates to be published or available in an approved staging
-registry first.
+rejects a partial first-wave enablement, keeps every non-first-wave package
+publish-disabled, verifies internal toolkit dependencies have both `version`
+and `path`, runs `cargo package --list` for the first-wave crates, runs full
+`cargo package` verification for first-wave crates without unpublished toolkit
+dependencies, and explicitly marks registry package verification as deferred
+for crates whose verification requires predecessor toolkit crates to be
+published or available in an approved staging registry first. The workflow
+never invokes `cargo publish`, even when the candidate manifests are enabled.
 
-## Publish-disabled archive and hosted-proof closure
+## Package-readiness archive and hosted-proof closure
 
-The release candidate remains explicitly `publish = false` for all workspace
-members, including the nine-crate first-wave set. A package-readiness result is
-therefore an archive and reproducibility receipt, not publication authority.
+The package-readiness result is an archive and reproducibility receipt, not
+publication authority. Routine candidates keep `publish = false` throughout;
+the approved release candidate enables only the nine first-wave manifests while
+the publication path and release-owner approval remain separate gates.
 For each of the nine approved crates, retain the exact candidate commit and
 tree, the resolved `Cargo.lock`, the `cargo package --list` file inventory, and
 the package verification result (or the recorded predecessor-availability

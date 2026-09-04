@@ -10,7 +10,6 @@ documentation = "https://docs.rs/mcp-toolkit-policy-core"
 readme = "../../README.md"
 keywords = ["mcp", "sednalabs", "rust", "policy"]
 categories = ["data-structures", "development-tools"]
-publish = false
 build = "build.rs"
 
 [package.metadata.docs.rs]

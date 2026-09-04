@@ -6,6 +6,7 @@ rust-version = "1.88"
 license = "Apache-2.0"
 description = "Optional SPARK runtime loader for policy decisions."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+publish = false
 
 [lib]
 path = "src/lib.rs"

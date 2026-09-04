@@ -141,6 +141,11 @@ jobs:
             python3 "$helper" --self-test --root "templates/$template"
           done
 
+      - name: Isolate Rustup state on macOS runners
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain 1.88.0 (the workspace MSRV)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8

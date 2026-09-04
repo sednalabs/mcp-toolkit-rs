@@ -9,7 +9,8 @@ are approved for publication.
   non-affiliation boundary in the public README and release documentation.
 - Added consistent crates.io metadata to the nine first-wave manifests,
   including component descriptions, keywords, categories, and the documented
-  Rust 1.88 compatibility floor; publication remains disabled.
+  Rust 1.88 compatibility floor; the reviewed candidate enables only these
+  nine manifests while publication execution remains disabled.
 - Added hosted first-wave Cargo package readiness validation for the planned
   Rust crate set.
 - Added docs.rs metadata requirements for first-wave crates.
@@ -17,7 +18,8 @@ are approved for publication.
   crates, including `mcp-toolkit-scratchpad` and `mcp-toolkit-server`.
 - Documented ordered manual publication, yank/consumer rollback guidance, and
   the later-version OIDC trusted-publisher workflow path.
-- Kept crates unpublished pending explicit release approval.
+- Kept crates unpublished pending explicit release-owner and publication-path
+  approval.
 
 ## 0.1.0 - Unpublished
 
