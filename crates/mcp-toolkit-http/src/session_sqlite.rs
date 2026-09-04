@@ -372,7 +372,7 @@ fn maybe_encrypt_payload(
         .map_err(|_| "event store encryption key is invalid".to_string())?;
     let mut nonce_bytes = [0u8; 12];
     fill(&mut nonce_bytes)
-        .map_err(|_| "event store nonce generation failed".to_string())?;
+        .map_err(|err| format!("event store nonce generation failed: {err}"))?;
     let nonce = Nonce::from(nonce_bytes);
     let ciphertext = cipher
         .encrypt(&nonce, payload.as_bytes())
