@@ -918,7 +918,10 @@ mod tests {
         let evaluation = evaluate_startup_admission(&strict_policy(source, expected), &runtime)
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
-        assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_DIGEST_MISMATCH));
+        assert_eq!(
+            evaluation.reason_code.as_deref(),
+            Some(CODE_DIGEST_MISMATCH)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1059,12 +1062,8 @@ mod tests {
         let expiry = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
-        let artifact = GateArtifactV1::passing(
-            &runtime,
-            TestGateLevel::Fast,
-            TEST_MANIFEST_DIGEST,
-            expiry,
-        );
+        let artifact =
+            GateArtifactV1::passing(&runtime, TestGateLevel::Fast, TEST_MANIFEST_DIGEST, expiry);
         assert_eq!(artifact.schema_version, 1);
         assert_eq!(artifact.status, "pass");
         assert!(!artifact.issued_at.is_empty());
