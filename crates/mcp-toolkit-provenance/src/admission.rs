@@ -825,9 +825,8 @@ mod tests {
     fn temp_root() -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = PathBuf::from(format!(
-            "target/mcp-toolkit-provenance-tree-{nonce}"
-        ));
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("target/mcp-toolkit-provenance-tree-{nonce}"));
         fs::create_dir_all(&path).expect("create temporary test directory");
         path
     }
