@@ -338,7 +338,10 @@ async fn current_protocol_tools_call_forwards_matching_standard_headers() {
         .expect("collect tools/call response body")
         .to_bytes();
     let payload = decode_jsonrpc_payload(&content_type, &body);
-    assert!(payload.get("error").is_none(), "unexpected error: {payload}");
+    assert!(
+        payload.get("error").is_none(),
+        "unexpected error: {payload}"
+    );
     assert_eq!(payload["result"]["content"][0]["text"], json!("us-west1"));
     assert_eq!(payload["result"]["resultType"], json!("complete"));
 }
