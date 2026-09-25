@@ -29,20 +29,20 @@
 //! * Providing valid configuration for model structures being built.
 
 use rmcp::model::{
-    ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParams, ProtocolVersion,
-    ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
+    ClientCapabilities, ClientConfig, Implementation, PaginatedRequestParams, ProtocolVersion,
+    ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig,
 };
 
 /// Build client info with an explicit protocol version.
 ///
-/// Use this when you want `ClientInfo` creation to stay consistent across
+/// Use this when you want `ClientConfig` creation to stay consistent across
 /// transport adapters or handshake helpers.
 pub fn client_info(
     protocol_version: ProtocolVersion,
     capabilities: ClientCapabilities,
     client_info: Implementation,
-) -> ClientInfo {
-    ClientInfo::new(capabilities, client_info).with_protocol_version(protocol_version)
+) -> ClientConfig {
+    ClientConfig::new(capabilities, client_info).with_protocol_version(protocol_version)
 }
 
 /// Build server info with an explicit protocol version and optional instructions.
@@ -54,8 +54,8 @@ pub fn server_info(
     capabilities: ServerCapabilities,
     server_info: Implementation,
     instructions: Option<String>,
-) -> ServerInfo {
-    let info = ServerInfo::new(capabilities)
+) -> ServerConfig {
+    let info = ServerConfig::new(capabilities)
         .with_protocol_version(protocol_version)
         .with_server_info(server_info);
     match instructions {
