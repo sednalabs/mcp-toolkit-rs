@@ -24,7 +24,7 @@ receives the exact identifier and must treat it as security-sensitive data.
 
 ## Runtime contract
 
-RMCP 3.2.0 materializes task operations with `tokio::spawn`, so
+RMCP 3.4.1 materializes task operations with `tokio::spawn`, so
 `TaskAuthority::spawn_for_principal` requires an entered Tokio runtime. Toolkit
 checks that requirement before entering RMCP and returns
 `TaskAuthorityError::RuntimeUnavailable` instead of allowing Tokio to panic or
@@ -37,7 +37,7 @@ RMCP.
 
 ## Failure boundary
 
-RMCP 3.2.0 materializes a task before invoking the operation factory, and it
+RMCP 3.4.1 materializes a task before invoking the operation factory, and it
 records terminal state only after the returned future finishes. Toolkit
 therefore contains both synchronous factory panics and asynchronous operation
 panics so an unlimited-retention task is not stranded indefinitely in
@@ -51,7 +51,7 @@ not execute under the RMCP mutex through the Toolkit API.
 
 ## Retention and capacity
 
-Toolkit follows RMCP's retention truth. RMCP 3.2.0 defaults tasks to a five
+Toolkit follows RMCP's retention truth. RMCP 3.4.1 defaults tasks to a five
 minute TTL and retains terminal state for one further TTL observation window.
 `ttl_ms: None` is an explicit unlimited-retention choice.
 
@@ -63,7 +63,7 @@ a global TTL sweep. Absolute retained-task admission and capacity are tracked in
 ## Wait and observation scaling
 
 `TaskAuthority::wait` uses Toolkit/RMCP transition hints plus a bounded 250 ms
-authoritative readback fallback. RMCP 3.2.0 performs a global TTL sweep during
+authoritative readback fallback. RMCP 3.4.1 performs a global TTL sweep during
 every `get_task`, so many simultaneous long-poll waiters can amplify readback
 work with the number of retained tasks.
 

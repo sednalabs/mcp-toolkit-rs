@@ -4,7 +4,7 @@ This note records the Streamable HTTP header contract used by the Toolkit's
 current MCP protocol path. It is a documentation and acceptance boundary, not
 a second HTTP or JSON-RPC implementation.
 
-The protocol authority is RMCP `3.2.0`. RMCP parses the request, validates the
+The protocol authority is RMCP `3.4.1`. RMCP parses the request, validates the
 standard headers against the JSON-RPC body and negotiated protocol, dispatches
 the method, and frames the response. Toolkit may compose deployment concerns
 around that service, such as host/origin policy, authentication, route policy,
@@ -13,7 +13,7 @@ weaken RMCP validation.
 
 See the MCP [Streamable HTTP request-metadata section](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#request-metadata),
 especially [standard request headers](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#standard-request-headers),
-and the [RMCP `3.2.0` API](https://docs.rs/rmcp/3.2.0/rmcp/).
+and the [RMCP `3.4.1` API](https://docs.rs/rmcp/3.4.1/rmcp/).
 
 ## Version boundary
 
@@ -38,7 +38,7 @@ For a current request, send all of the following as one coherent contract:
 | Surface | Requirement | Authority |
 | --- | --- | --- |
 | `MCP-Protocol-Version` | Present, supported, and consistent with the request's protocol metadata. | RMCP version negotiation and validation |
-| JSON-RPC `_meta` | Present on every current request. RMCP `RequestMetaObject` carries the per-request protocol/client context; in `3.2.0`, the current required keys are the protocol-version and client-capabilities entries. | RMCP request model |
+| JSON-RPC `_meta` | Present on every current request. RMCP `RequestMetaObject` carries the per-request protocol/client context; in `3.4.1`, the current required keys are the protocol-version and client-capabilities entries. | RMCP request model |
 | `Mcp-Method` | Present and exactly equal to the JSON-RPC `method` value. | RMCP SEP-2243 validator |
 | `Mcp-Name` | Present only when that method's parameters carry a routable name, URI, or task identifier, and equal to the body value. | RMCP method-specific mapping |
 | `Mcp-Param-*` | Present for each applicable annotated primitive tool argument and equal to its body value; absent when the argument is absent or null. | RMCP tool schema and validator |
@@ -62,7 +62,7 @@ The pre-2026 compatibility operations `resources/subscribe` and
 `resources/unsubscribe` may use their URI mapping only within that explicit
 legacy lifecycle. They are not current-protocol mappings. The current
 `subscriptions/listen` operation is their replacement for opening a long-lived
-notification stream; RMCP `3.2.0` does not define an `Mcp-Name` source for
+notification stream; RMCP `3.4.1` does not define an `Mcp-Name` source for
 `subscriptions/listen`, so clients and intermediaries must not invent one.
 
 Other methods do not acquire an invented name value. A name header that is
@@ -76,11 +76,11 @@ argument is present and non-null. Header names are non-empty RFC 9110 tokens
 and are case-insensitively unique within the schema. Structured or otherwise
 non-primitive values are not promoted by this contract.
 
-### RMCP 3.2.0 interoperability boundary
+### RMCP 3.4.1 interoperability boundary
 
 The normative SEP-2243 schema extension permits an `x-mcp-header` annotation on
 a nested property reachable through a chain of `properties` keys. RMCP
-`3.2.0`'s documented interoperable subset for this guidance is deliberately
+`3.4.1`'s documented interoperable subset for this guidance is deliberately
 narrower: only top-level primitive (`string`, `integer`, or `boolean`) tool
 properties are promoted. Nested-property promotion is a residual capability
 boundary, not an unspoken promise that Toolkit or a downstream service
@@ -101,7 +101,7 @@ wrapper is not permission to change or normalize the argument.
 
 For current requests RMCP compares the standard headers to the JSON-RPC body
 and relevant tool schema. Missing, mismatched, unexpected, or undecodable
-standard-header values are a bad request. RMCP `3.2.0` maps a SEP-2243 header
+standard-header values are a bad request. RMCP `3.4.1` maps a SEP-2243 header
 mismatch to HTTP `400` with its JSON-RPC error response (the SDK's conformance
 tests identify the header-mismatch error as `-32020`).
 

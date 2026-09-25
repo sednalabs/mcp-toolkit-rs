@@ -12,13 +12,13 @@ That keeps toolkit pull requests reviewable while still making drift visible.
 ## Protocol-era conformance
 
 The protocol date and the Rust SDK release are separate compatibility axes. The
-current migration is pinned to `rmcp = 3.2.0` and records both protocol eras
-explicitly:
+2026-09-25 migration candidate is pinned to `rmcp = 3.4.1` (with
+`rmcp-macros = 3.4.1`) and records both protocol eras explicitly:
 
 | Protocol date | Lifecycle exercised | Required evidence |
 | --- | --- | --- |
 | `2025-11-25` | Legacy `initialize`/`notifications/initialized` handshake, with `ProtocolVersion::LATEST` remaining an honest SDK alias for this era. | A hosted contract run must show the initialize response echoes `2025-11-25` and that the subsequent legacy `tools/list`/`tools/call` requests succeed. |
-| `2026-07-28` | Current stateless request model; no initialize handshake, and each request carries protocol version, client identity, and client capabilities in `params._meta`. | A hosted contract run must show current `tools/list`/`tools/call` requests with the complete `_meta` object and must bind the exact commit, workflow run, and `rmcp = 3.2.0` lockfile. |
+| `2026-07-28` | Current stateless request model; no initialize handshake, and each request carries protocol version, client identity, and client capabilities in `params._meta`. | A hosted contract run must show current `tools/list`/`tools/call` requests with the complete `_meta` object and must bind the exact commit, workflow run, and `rmcp = 3.4.1` lockfile. |
 
 `ProtocolVersion::LATEST` must not be used as a synonym for the newest protocol
 date supported by RMCP. The shared stdio contract harness selects
@@ -31,6 +31,27 @@ repository, workflow/run URL, exact head SHA, lockfile version, and the
 protocol-era case that the run exercised before treating conformance as
 accepted. Do not claim provider or production acceptance from these
 credential-free tests.
+
+Toolkit migration evidence comes from the HTTP lifecycle/header and `Origin`
+contract suites, plus stdio probes for current and legacy lifecycle selection.
+Discovery fallback changes are owned by the SDK; source inspection of those
+changes is not execution proof for a downstream discovery configuration.
+The HTTP and stdio/template suites establish producer conformance. A downstream
+adoption must additionally retest that consumer against the exact toolkit head.
+The SDK's optional event-store
+replay hook is not represented by toolkit recording managers, so downstream
+conformance must not claim modern replay or durability unless a consumer wires
+and tests that hook itself.
+
+Named consumers use the same boundary: `postgres-mcp` exercises database-policy
+and hosted HTTP contracts; `cloudflare-mcp` exercises public-release and
+header/auth deployment contracts; `google-search-console-mcp` exercises
+template, schema, and stdio/tool-list contracts. Their domain behavior remains
+consumer-owned and is not promoted by this migration. Producer acceptance binds
+the toolkit repository, exact head SHA, workflow/run identity, and lockfile.
+Downstream acceptance additionally binds the downstream revision; it is a
+separate adoption outcome. No hosted checks are
+claimed here, and no production or crates.io release is implied.
 
 ## What It Checks
 

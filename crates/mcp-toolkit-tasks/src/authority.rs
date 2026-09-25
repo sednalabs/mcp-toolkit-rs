@@ -352,7 +352,7 @@ impl TaskAuthority {
 
     /// Spawns an RMCP task bound to `principal`.
     ///
-    /// A current Tokio runtime is required because RMCP 3.2.0 materializes the
+    /// A current Tokio runtime is required because RMCP 3.4.1 materializes the
     /// task operation with `tokio::spawn`. Toolkit checks that requirement before
     /// entering RMCP so a synchronous caller gets [`TaskAuthorityError::RuntimeUnavailable`]
     /// instead of a Tokio panic or partially materialized task.
@@ -648,7 +648,7 @@ impl TaskAuthority {
 
     /// Probe one existing binding per spawn rather than probing every binding.
     ///
-    /// RMCP 3.2.0 performs a full TTL sweep inside every `get_task`, so calling
+    /// RMCP 3.4.1 performs a full TTL sweep inside every `get_task`, so calling
     /// `get_task` for every local binding makes cleanup quadratic. The rotation
     /// queue bounds the extra RMCP liveness probes to one per new task while
     /// still eventually removing stale local authority records under continued

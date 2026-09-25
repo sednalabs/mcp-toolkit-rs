@@ -14,7 +14,7 @@ The composition layer follows one rule:
 
 > RMCP owns MCP. Toolkit owns reusable production substrate around RMCP.
 
-For Streamable HTTP under RMCP 3.2.0 this means one primary
+For Streamable HTTP under RMCP 3.4.1 this means one primary
 `StreamableHttpService` is capable of serving both protocol eras:
 
 - MCP 2026-07-28 requests are stateless and carry protocol/client metadata per
@@ -132,7 +132,7 @@ A Toolkit task revision is an observed snapshot generation, not a duplicate
 task event log; it advances only after an authoritative RMCP `DetailedTask`
 read actually changes.
 
-RMCP 3.2.0's native task manager is process-local. A process restart cannot
+RMCP 3.4.1's native task manager is process-local. A process restart cannot
 honestly resurrect an in-flight Rust future merely because its last task record
 was persisted. Durable task support must first define an RMCP-native
 persistence/restoration boundary and explicit crash semantics; that work is

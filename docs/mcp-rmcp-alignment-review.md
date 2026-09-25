@@ -8,10 +8,17 @@ This review records the custom MCP-adjacent layers the toolkit maintains on
 top of `rmcp` and the invariants that keep those layers aligned with the
 official MCP specification and the official Rust SDK.
 
-Review date: 2026-07-11.
+Review date: 2026-07-11. This historical review date is retained.
 
 Migration conformance checkpoint: 2026-07-28 protocol behavior, rechecked
-against the exact `rmcp = 3.2.0` release on 2026-09-03.
+against the exact `rmcp = 3.4.1` release on 2026-09-25. The earlier
+2026-09-03 `3.2.0` check remains historical evidence, not current pin evidence.
+
+Current baseline (2026-09-25): the candidate pins `rmcp` and `rmcp-macros` to
+`3.4.1`. The published release is represented by commit
+`9427a929959e665e0d12e9395f674026baf4bd48`, is non-yanked on the registry, and
+has MSRV 1.88. This record does not claim that hosted checks have passed or
+that a package has been released from this candidate.
 
 The conformance boundary is deliberately explicit: `2025-11-25` is the legacy
 initialize/initialized lifecycle retained for compatibility, while
@@ -30,7 +37,7 @@ Primary references:
 
 Second-pass review note: the custom layers below were rechecked against the
 current public MCP specification, the public `rmcp` docs, and the exact
-workspace-pinned `rmcp` `3.2.0` source. The pinned SDK already owns Host
+published `rmcp` source for the migration candidate. The pinned SDK already owns Host
 validation, optional full `Origin` validation, Streamable HTTP session routing,
 protocol-version header checks, `Mcp-Session-Id`, `Last-Event-Id`, SSE event-id
 formatting, and `SessionManager` restoration hooks. Toolkit code must therefore
@@ -47,21 +54,60 @@ metadata before accepting a result.
 Fourth-pass review note: toolkit-owned protocol defaults were rechecked against
 the pinned SDK. Toolkit-owned fallbacks should use `ProtocolVersion::LATEST`
 from the pinned SDK unless a compatibility test deliberately passes an older
-version. `rmcp` 3.2.0 supports `2026-07-28` but intentionally keeps
+version. `rmcp` 3.4.1 supports `2026-07-28` but intentionally keeps
 `ProtocolVersion::LATEST` at `2025-11-25`; the stdio contract harness therefore
 selects the current `2026-07-28` cut line explicitly and retains an explicit
 legacy path.
 
 Fifth-pass review note: the workspace RMCP SDK pin has moved through the
-toolkit facade to `rmcp` and `rmcp-macros` `3.2.0`. `mcp-toolkit-core` now also
+toolkit facade to `rmcp` and `rmcp-macros` `3.4.1`. `mcp-toolkit-core` now also
 re-exports the pinned SDK so facade consumers can route direct SDK model and
 macro support through toolkit-owned version policy.
 
+## 2026-09-25 migration notes
+
+The 3.3 and 3.4 releases carry lifecycle, HTTP-header, and `Origin` handling
+changes; 3.4.1 also includes discovery fallback fixes. `ServerInfo` and
+`ClientInfo` are deprecated compatibility aliases for `ServerConfig` and
+`ClientConfig`. Toolkit helper functions remain public and are not removed by
+the alias migration. Protocol ownership stays upstream: the toolkit adapts
+deployment and authoring policy but does not create a second protocol state
+machine.
+
+The modern `2026-07-28` protocol and legacy `2025-11-25` protocol remain
+separate compatibility axes. `ProtocolVersion::LATEST` and the SDK default
+still denote the legacy date, so current-protocol callers must select
+`2026-07-28` explicitly. The toolkit already supports stateless current
+requests and modern subscriptions through the pre-migration SDK surface; a custom
+subscription bus is not a missing protocol feature.
+
+The modern specification removes SSE resume and session state from the core
+SSE contract, but the SDK's optional `SessionManager::event_store` hook can
+provide GET plus `Last-Event-ID` replay and persisted streams. Toolkit
+`BoundedSessionManager` and `RecordingSessionManager` do not forward that hook;
+therefore toolkit recording is not modern replay. Neither layer promises a
+domain-level durable ordering, deduplication, snapshot, or authorization
+guarantee. HTTP's default no-store path drops a cancelled stream, persisted SDK
+streams can continue running, and stdio cancellation remains explicit.
+Avoid blanket claims that the SDK cannot replay; the supported hook is
+optional and its use is a deployment decision.
+
+The delivery candidate also carries `rustls = 0.23.45`, including the
+RustSec-2026-0285 fix, and raises the PostgreSQL dependency floor. The
+OpenTelemetry family remains deferred until its coupled
+`tracing-opentelemetry` upgrade has all-feature proof. `jsonschema = 0.57` is
+deferred as a separate policy-validation semantics change. The existing general
+dependency update remains independent. Registry observations of
+`reqwest = 0.13.5` and `jsonwebtoken = 11.1.0` do not authorize a blind
+refresh from the current lockfile (`0.13.4` and `11.0` respectively); advisory
+evidence is an upcoming validation input, not a known security exception.
+
 ## SDK Version Posture
 
-As of this review, the workspace pins `rmcp` and `rmcp-macros` to the same
-published runtime version, `=3.2.0`, and the lockfile resolves both crates to
-`3.2.0`. That is intentional: the toolkit facade owns the SDK version used by
+As of the 2026-09-25 baseline, the workspace pins `rmcp` and `rmcp-macros` to
+the same published runtime version, `=3.4.1`, and the candidate lockfile is
+expected to resolve both crates to `3.4.1`. That is intentional: the toolkit
+facade owns the SDK version used by
 generated servers, and generated templates import the server-authoring surface
 through `mcp_toolkit::rmcp` instead of declaring their own direct `rmcp` or
 `rmcp-macros` dependencies.
@@ -180,9 +226,9 @@ or server-authoring policy:
 - OAuth metadata and protected-resource helpers;
 - provider-auth UX helpers that sit outside the MCP transport itself.
 
-## RMCP 3.2.0 model and result rationale
+## RMCP 3.4.1 model and result rationale
 
-The model boundary follows the exact RMCP `3.2.0` API. Toolkit adds policy and
+The model boundary follows the exact RMCP `3.4.1` API. Toolkit adds policy and
 composition around these types; it does not recreate protocol-facing models.
 
 - `MetaObject` is the general MCP `_meta` map for descriptors and results.
@@ -226,7 +272,7 @@ bounded waiting, and stale authority-record cleanup. A Toolkit task revision
 is an observed snapshot generation, not a duplicate task event log; it advances
 only after an authoritative RMCP `DetailedTask` read actually changes.
 
-RMCP 3.2.0's native task manager is process-local. A process restart cannot
+RMCP 3.4.1's native task manager is process-local. A process restart cannot
 honestly resurrect an in-flight Rust future merely because its last task record
 was persisted. Durable task support must first define an RMCP-native
 persistence/restoration boundary and explicit crash semantics. That work is
@@ -298,7 +344,7 @@ state machine into Toolkit.
 12. HTTP route-bundle and Streamable HTTP tests now serialize
     `rmcp::model::ProtocolVersion::LATEST` in initialize fixtures instead of
     carrying a stale literal protocol version.
-13. The RMCP SDK pin now moves through the toolkit facade at `3.2.0`; direct
+13. The RMCP SDK pin now moves through the toolkit facade at `3.4.1`; direct
     runtime and macro pins remain aligned, and facade consumers can import SDK
     model types through toolkit-owned re-exports.
 

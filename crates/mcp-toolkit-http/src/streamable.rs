@@ -472,7 +472,7 @@ mod tests {
     use http_body_util::{BodyExt, Full};
     use rmcp::{
         handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-        model::{ServerCapabilities, ServerInfo},
+        model::{ServerCapabilities, ServerConfig},
         schemars, tool, tool_router,
         transport::{
             common::http_header::HEADER_SESSION_ID,
@@ -510,8 +510,8 @@ mod tests {
     }
 
     impl ServerHandler for Calculator {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
                 .with_instructions("A simple calculator")
         }
     }

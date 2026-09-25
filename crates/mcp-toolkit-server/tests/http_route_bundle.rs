@@ -9,7 +9,7 @@ use mcp_toolkit_server::{
     http::{LocalMcpHttpRouterBuilder, LocalMcpHttpRuntimeBuilder, LocalMcpHttpServerBuilder},
     rmcp::{
         handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-        model::{ServerCapabilities, ServerInfo},
+        model::{ServerCapabilities, ServerConfig},
         schemars, tool, tool_router, ServerHandler,
     },
 };
@@ -43,8 +43,8 @@ impl TestMcp {
 }
 
 impl ServerHandler for TestMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("test server")
     }
 }
