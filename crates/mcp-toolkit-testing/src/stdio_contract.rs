@@ -353,9 +353,16 @@ mod tests {
         );
         assert_eq!(
             rmcp::model::ProtocolVersion::LATEST,
-            rmcp::model::ProtocolVersion::V_2025_11_25,
-            "RMCP 3.2 intentionally keeps LATEST on the legacy lifecycle"
+            rmcp::model::ProtocolVersion::V_2026_07_28,
+            "LATEST selects the newest stateless protocol"
         );
+        assert_eq!(
+            rmcp::model::ProtocolVersion::LATEST_WITH_INITIALIZE,
+            rmcp::model::ProtocolVersion::V_2025_11_25,
+            "initialize fixtures must select the newest handshake protocol"
+        );
+        assert!(!rmcp::model::ProtocolVersion::LATEST.has_initialize());
+        assert!(rmcp::model::ProtocolVersion::LATEST_WITH_INITIALIZE.has_initialize());
     }
 
     #[test]

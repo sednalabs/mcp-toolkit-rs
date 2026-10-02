@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{body::Body, extract::State};
 use http::{
-    header::{ACCEPT, CONTENT_TYPE, HOST},
+    header::{HeaderName, ACCEPT, CONTENT_TYPE, HOST},
     HeaderValue, Request, StatusCode,
 };
 use http_body_util::BodyExt;
@@ -319,6 +319,23 @@ async fn header_validation_response(
     .await
 }
 
+async fn duplicate_header_validation_response(
+    header_name: &'static str,
+    duplicate_value: &'static str,
+) -> axum::response::Response {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["127.0.0.1", "localhost"])
+        .build(|| Ok(HeaderValidationServer));
+    let state = runtime.into_state(false);
+    let mut request =
+        current_tool_call_request(Some("tools/call"), Some("deploy"), Some("us-west1"));
+    request.headers_mut().append(
+        HeaderName::from_static(header_name),
+        HeaderValue::from_static(duplicate_value),
+    );
+    handle_mcp(State(state), request).await
+}
+
 #[tokio::test]
 async fn current_protocol_tools_call_forwards_matching_standard_headers() {
     let response =
@@ -360,5 +377,21 @@ async fn current_protocol_tools_call_rejects_missing_or_mismatched_standard_head
             header_validation_response(headers.0, headers.1, headers.2).await,
         )
         .await;
+    }
+}
+
+#[tokio::test]
+async fn current_protocol_tools_call_rejects_duplicate_standard_headers() {
+    for (name, repeated_value, conflicting_value) in [
+        ("mcp-method", "tools/call", "tools/list"),
+        ("mcp-name", "deploy", "other"),
+        ("mcp-param-region", "us-west1", "eu-central1"),
+    ] {
+        for value in [repeated_value, conflicting_value] {
+            assert_header_mismatch_response(
+                duplicate_header_validation_response(name, value).await,
+            )
+            .await;
+        }
     }
 }

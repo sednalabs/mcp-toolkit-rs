@@ -57,7 +57,7 @@ fn init_body() -> String {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": mcp_toolkit_server::rmcp::model::ProtocolVersion::LATEST,
+            "protocolVersion": mcp_toolkit_server::rmcp::model::ProtocolVersion::LATEST_WITH_INITIALIZE,
             "capabilities": {},
             "clientInfo": {
                 "name": "test",
