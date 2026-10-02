@@ -20,6 +20,14 @@ Current baseline (2026-09-25): the candidate pins `rmcp` and `rmcp-macros` to
 has MSRV 1.88. This record does not claim that hosted checks have passed or
 that a package has been released from this candidate.
 
+Successor baseline note (2026-10-02): the current migration candidate moves
+the aligned `rmcp` and `rmcp-macros` pins to `3.5.0`; see
+[`current-mcp-baseline.md`](current-mcp-baseline.md) and
+[`downstream-conformance.md`](downstream-conformance.md) for its scope and
+consumer guidance. The review findings below remain the historical `3.4.1`
+alignment review; this note does not revise those findings or claim hosted
+validation for the successor candidate.
+
 The conformance boundary is deliberately explicit: `2025-11-25` is the legacy
 initialize/initialized lifecycle retained for compatibility, while
 `2026-07-28` is the current stateless request lifecycle. These are protocol
