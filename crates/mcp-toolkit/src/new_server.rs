@@ -476,13 +476,13 @@ fn render_asset(contents: &[u8], template: TemplateSpec, options: &NewServerOpti
     };
     let source_crate = cargo_crate_identifier(template.source_package);
     let target_crate = cargo_crate_identifier(&options.package_name);
+    let source_profile_key = profile_env_key(template.source_package);
+    let target_env_prefix = package_env_prefix(&options.package_name);
 
     let rendered = rewrite_toolkit_dependencies(
         &text
-            .replace(
-                "EXAMPLE_MCP_TOOL_PROFILE",
-                &profile_env_key(&options.package_name),
-            )
+            .replace("EXAMPLE_MCP_", &target_env_prefix)
+            .replace(&source_profile_key, &profile_env_key(&options.package_name))
             .replace(
                 &format!("templates/{}/Cargo.toml", template.source_dir),
                 "Cargo.toml",
@@ -497,7 +497,11 @@ fn render_asset(contents: &[u8], template: TemplateSpec, options: &NewServerOpti
 }
 
 fn profile_env_key(package_name: &str) -> String {
-    let mut key = String::with_capacity(package_name.len() + 18);
+    format!("{}TOOL_PROFILE", package_env_prefix(package_name))
+}
+
+fn package_env_prefix(package_name: &str) -> String {
+    let mut key = String::with_capacity(package_name.len() + 1);
     for ch in package_name.chars() {
         if ch.is_ascii_alphanumeric() {
             key.push(ch.to_ascii_uppercase());
@@ -505,7 +509,7 @@ fn profile_env_key(package_name: &str) -> String {
             key.push('_');
         }
     }
-    key.push_str("_TOOL_PROFILE");
+    key.push('_');
     key
 }
 

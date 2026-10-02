@@ -98,14 +98,21 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
             template.id
         );
 
-        let source = read(&output.join("src/lib.rs"));
+        let package_env_prefix = package_name.to_ascii_uppercase().replace('-', "_");
+        let library = read(&output.join("src/lib.rs"));
         assert!(
-            source.contains("Result<CallToolResponse, rmcp::ErrorData>"),
+            !library.contains("EXAMPLE_MCP_"),
+            "{} should not retain example-prefixed environment variables",
+            template.id
+        );
+
+        assert!(
+            library.contains("Result<CallToolResponse, rmcp::ErrorData>"),
             "{} should use rmcp 3 CallToolResponse in its ServerHandler",
             template.id
         );
         assert!(
-            source.contains("CallToolResult::error") && source.contains(".into()"),
+            library.contains("CallToolResult::error") && library.contains(".into()"),
             "{} should convert caller-visible tool errors into CallToolResponse",
             template.id
         );
@@ -152,6 +159,41 @@ fn generator_emits_contract_and_probe_artifacts_for_every_template() {
             let workflow = read(&output.join(".github/workflows/native-release-artifacts.yml"));
             assert!(workflow.contains("BINARY_NAME: single-crate-public-stdio-generated"));
             assert!(!workflow.contains("single-crate-public-stdio-server"));
+
+            let governance_workflow =
+                read(&output.join(".github/workflows/dependency-governance.yml"));
+            assert!(
+                governance_workflow.contains("run: bash ./scripts/dependency_governance_check.sh")
+            );
+            assert!(!governance_workflow.contains("run: ./scripts/dependency_governance_check.sh"));
+        }
+
+        if template.id == "curated-stdio-intent" || template.id == "single-crate-public-stdio" {
+            assert!(
+                library.contains(&format!("{package_env_prefix}_SERVICE_NAME")),
+                "{} should use a package-specific service name environment variable",
+                template.id
+            );
+
+            let smoke = read(&output.join("tests/stdio_smoke.rs"));
+            assert!(
+                smoke.contains(&format!(
+                    "{package_env_prefix}_TOOL_PROFILE = \\\"read_only\\\""
+                )),
+                "{} should assert on the generated package tool profile variable",
+                template.id
+            );
+            assert!(
+                !smoke.contains(&format!(
+                    "{}_TOOL_PROFILE",
+                    template
+                        .source_package
+                        .to_ascii_uppercase()
+                        .replace('-', "_")
+                )),
+                "{} should not retain the template package tool profile variable",
+                template.id
+            );
         }
     }
 
