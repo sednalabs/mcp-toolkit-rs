@@ -121,7 +121,7 @@ jobs:
       - name: Run dependency governance checks
         env:
           STRICT_OUTDATED: "0"
-        run: ./scripts/dependency_governance_check.sh
+        run: bash ./scripts/dependency_governance_check.sh
 
   dependency-governance:
     runs-on: ubuntu-24.04
