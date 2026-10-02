@@ -71,6 +71,12 @@ jobs:
             workspaces: |
               . -> target
             command: cargo clippy --workspace --all-targets --all-features -- -D warnings
+          - target_name: generated-servers
+            phase_name: tests
+            cache_key: generated-servers
+            workspaces: |
+              . -> target/generated-servers
+            command: python3 scripts/check_generated_servers.py
           - target_name: curated-stdio-intent-server
             phase_name: fmt
             cache_key: template-curated-stdio-intent-server
