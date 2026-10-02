@@ -46,7 +46,7 @@ def main() -> None:
             if template == "single-crate-public-stdio":
                 script = project / "scripts" / "dependency_governance_check.sh"
                 script.chmod(0o644)
-                workflow = (project / ".github" / "workflows" / "dependency-governance.yml").read_text()
+                workflow = (project / ".github" / "workflows" / "dependency-governance.yml").read_text(encoding="utf-8")
                 # Read the emitted invocation rather than separately hardcoding
                 # a working command that could mask a broken generated workflow.
                 commands = [line.strip().removeprefix("run: ") for line in workflow.splitlines()
