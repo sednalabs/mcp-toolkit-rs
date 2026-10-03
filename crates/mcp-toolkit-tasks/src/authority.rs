@@ -1016,26 +1016,42 @@ impl TaskAuthority {
             let notified = binding.observation_done.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-
-            let state = self.lock_state()?;
-            let Some(lease) = state.leases.get(task_id) else {
-                drop(state);
-                return if self.is_closed()? {
-                    Err(TaskAuthorityError::Closed)
-                } else {
-                    Err(TaskAuthorityError::TaskNotFound)
-                };
-            };
-            let observed = lease.observed_signal_generation;
-            drop(state);
-            if observed >= target_generation {
-                return binding.snapshot();
-            }
-            if self.is_closed()? {
-                return Err(TaskAuthorityError::Closed);
+            if let Some(snapshot) =
+                self.wait_observation_snapshot(binding, task_id, target_generation)?
+            {
+                return Ok(snapshot);
             }
             notified.await;
         }
+    }
+
+    fn wait_observation_snapshot(
+        &self,
+        binding: &TaskBinding,
+        task_id: &str,
+        target_generation: u64,
+    ) -> Result<Option<AuthorizedTaskSnapshot>, TaskAuthorityError> {
+        let observed_generation = {
+            let state = self.lock_state()?;
+            state
+                .leases
+                .get(task_id)
+                .map(|lease| lease.observed_signal_generation)
+        };
+        let Some(observed_generation) = observed_generation else {
+            return if self.is_closed()? {
+                Err(TaskAuthorityError::Closed)
+            } else {
+                Err(TaskAuthorityError::TaskNotFound)
+            };
+        };
+        if observed_generation >= target_generation {
+            return binding.snapshot().map(Some);
+        }
+        if self.is_closed()? {
+            return Err(TaskAuthorityError::Closed);
+        }
+        Ok(None)
     }
 
     fn is_closed(&self) -> Result<bool, TaskAuthorityError> {
