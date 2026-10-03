@@ -94,6 +94,28 @@ fn synchronous_observation_does_not_consume_a_hint_that_arrived_during_read() {
     authority.shutdown();
 }
 
+#[test]
+fn spawn_rejects_runtime_without_time_driver_before_rmcp_materialization() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("runtime without time driver");
+    let authority = TaskAuthority::new(test_config());
+    let owner = principal("owner-a");
+    let result = {
+        let _entered = runtime.enter();
+        authority.spawn_for_principal(owner, TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("must not materialize")) })
+        })
+    };
+    assert!(matches!(
+        result,
+        Err(TaskAuthorityError::RuntimeTimerUnavailable)
+    ));
+    assert_eq!(authority.metrics().active_waiters, 0);
+    assert_eq!(authority.running_task_count(), 0);
+    authority.shutdown();
+}
+
 #[tokio::test]
 async fn retained_capacity_counts_terminal_records_and_unlimited_ttl() {
     let authority = TaskAuthority::new(limited_config(1, 4, 4));

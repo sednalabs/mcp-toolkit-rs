@@ -30,10 +30,15 @@ checks that requirement before entering RMCP and returns
 `TaskAuthorityError::RuntimeUnavailable` instead of allowing Tokio to panic or
 RMCP to partially materialize a task.
 
+Task observation also uses Tokio timers for bounded settlement retries and TTL
+readback. Spawn checks for the time driver before reserving or materializing a
+task and returns `TaskAuthorityError::RuntimeTimerUnavailable` when it is
+disabled. This keeps the shared observer available for later terminal and
+expiry observations instead of allowing a detached timer panic to stop it.
+
 `TaskAuthority::wait` uses Tokio timers for its timeout and bounded authoritative
-readback fallback. Custom Tokio runtimes that use this API must enable the time
-driver. Toolkit does not introduce a second executor or timer runtime around
-RMCP.
+readback fallback. Toolkit does not introduce a second executor or timer runtime
+around RMCP.
 
 ## Failure boundary
 

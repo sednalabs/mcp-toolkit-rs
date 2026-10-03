@@ -73,6 +73,8 @@ pub enum TaskAuthorityError {
     TaskNotFound,
     /// Task spawning requires an entered Tokio runtime.
     RuntimeUnavailable,
+    /// Task observation requires a Tokio runtime with its time driver enabled.
+    RuntimeTimerUnavailable,
     /// The authority has been shut down and cannot be reopened.
     Closed,
     /// The caller-configured retained-task authority capacity is exhausted.
@@ -91,6 +93,12 @@ impl fmt::Display for TaskAuthorityError {
             Self::InvalidPrincipal => write!(f, "invalid task principal"),
             Self::TaskNotFound => write!(f, "task not found"),
             Self::RuntimeUnavailable => write!(f, "task spawning requires a Tokio runtime"),
+            Self::RuntimeTimerUnavailable => {
+                write!(
+                    f,
+                    "task spawning requires a Tokio runtime with time enabled"
+                )
+            }
             Self::Closed => write!(f, "task authority is shut down"),
             Self::CapacityReached => write!(f, "task authority capacity reached"),
             Self::WaiterCapacityReached => write!(f, "task wait capacity reached"),
@@ -537,6 +545,9 @@ impl TaskAuthority {
         self.ensure_open()?;
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(TaskAuthorityError::RuntimeUnavailable);
+        }
+        if catch_unwind(AssertUnwindSafe(|| tokio::time::sleep(Duration::ZERO))).is_err() {
+            return Err(TaskAuthorityError::RuntimeTimerUnavailable);
         }
         self.reserve_capacity()?;
         self.ensure_open()?;
