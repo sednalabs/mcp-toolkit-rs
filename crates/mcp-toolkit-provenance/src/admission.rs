@@ -4,14 +4,14 @@
 
 use std::fmt;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::provenance::{RuntimeProvenance, UNKNOWN_VALUE};
+use crate::provenance::{is_unknown, system_time_to_unix_ms, RuntimeProvenance};
 
 pub const CODE_DISABLED: &str = "admission.disabled";
 pub const CODE_OVERRIDE: &str = "admission.override.active";
@@ -209,6 +209,7 @@ impl StartupAdmissionPolicy {
 ///
 /// # Security
 /// The artifact is not treated as the source of trust for the expected manifest digest.
+/// Callers must restrict the gate path and file permissions to the deployment trust boundary.
 pub fn evaluate_startup_admission(
     policy: &StartupAdmissionPolicy,
     runtime: &RuntimeProvenance,
@@ -275,8 +276,10 @@ pub fn evaluate_startup_admission(
         ));
     }
 
-    let gate_meta = match fs::metadata(&policy.gate_path) {
-        Ok(meta) => meta,
+    // Open once so the freshness metadata and artifact contents come from the
+    // same file, even if a caller replaces the path between operations.
+    let mut gate_file = match fs::File::open(&policy.gate_path) {
+        Ok(file) => file,
         Err(err) => {
             return Ok(warning_or_reject(
                 policy,
@@ -294,8 +297,20 @@ pub fn evaluate_startup_admission(
         }
     };
 
-    let raw = match fs::read_to_string(&policy.gate_path) {
-        Ok(raw) => raw,
+    let gate_meta = match gate_file.metadata() {
+        Ok(meta) => meta,
+        Err(err) => {
+            return Ok(warning_or_reject(
+                policy,
+                CODE_MISSING,
+                format!("failed to inspect opened gate artifact: {err}"),
+            ));
+        }
+    };
+
+    let mut raw = String::new();
+    match gate_file.read_to_string(&mut raw) {
+        Ok(_) => {}
         Err(err) => {
             return Ok(warning_or_reject(
                 policy,
@@ -535,10 +550,6 @@ fn missing_required_provenance_fields(runtime: &RuntimeProvenance) -> Vec<&'stat
     missing
 }
 
-fn is_unknown(value: &str) -> bool {
-    value.trim().is_empty() || value.eq_ignore_ascii_case(UNKNOWN_VALUE)
-}
-
 fn bounded_text(value: &str, max_chars: usize) -> String {
     let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.chars().count() <= max_chars {
@@ -550,11 +561,6 @@ fn bounded_text(value: &str, max_chars: usize) -> String {
     out
 }
 
-fn system_time_to_unix_ms(value: std::time::SystemTime) -> Option<u64> {
-    let duration = value.duration_since(UNIX_EPOCH).ok()?;
-    Some(duration.as_millis().min(u128::from(u64::MAX)) as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -563,7 +569,9 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use super::*;
-    use crate::provenance::{capture_runtime_provenance, BuildProvenance, BuildProvenanceInput};
+    use crate::provenance::{
+        capture_runtime_provenance, BuildProvenance, BuildProvenanceInput, UNKNOWN_VALUE,
+    };
 
     fn temp_path(prefix: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(1);

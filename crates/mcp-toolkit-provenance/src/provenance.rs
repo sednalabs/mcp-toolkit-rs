@@ -414,7 +414,7 @@ fn normalized_option(value: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn is_unknown(value: &str) -> bool {
+pub(crate) fn is_unknown(value: &str) -> bool {
     value.trim().is_empty() || value.eq_ignore_ascii_case(UNKNOWN_VALUE)
 }
 
@@ -426,7 +426,7 @@ fn unavailable_field(field: &str, code: &str, reason: &str) -> UnavailableField 
     }
 }
 
-fn system_time_to_unix_ms(value: std::time::SystemTime) -> Option<u64> {
+pub(crate) fn system_time_to_unix_ms(value: std::time::SystemTime) -> Option<u64> {
     let duration = value.duration_since(UNIX_EPOCH).ok()?;
     Some(duration.as_millis().min(u128::from(u64::MAX)) as u64)
 }
