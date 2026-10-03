@@ -573,10 +573,12 @@ mod tests {
         capture_runtime_provenance, BuildProvenance, BuildProvenanceInput, UNKNOWN_VALUE,
     };
 
-    fn temp_path(prefix: &str) -> PathBuf {
+    fn temp_path(directory: &tempfile::TempDir, prefix: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("mcp-toolkit-{prefix}-{nonce}"))
+        directory
+            .path()
+            .join(format!("mcp-toolkit-{prefix}-{nonce}"))
     }
 
     fn runtime_for(executable: &Path) -> RuntimeProvenance {
@@ -609,10 +611,11 @@ mod tests {
 
     #[test]
     fn strict_mode_rejects_missing_gate() {
-        let executable = temp_path("exe");
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
-        let gate_path = temp_path("missing-gate");
+        let gate_path = temp_path(&fixture_dir, "missing-gate");
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
@@ -622,7 +625,8 @@ mod tests {
 
     #[test]
     fn every_required_provenance_field_blocks_strict_and_warns_in_warn_mode() {
-        let executable = temp_path("exe");
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let complete = runtime_for(&executable);
         let fields = [
@@ -664,7 +668,7 @@ mod tests {
                 (StartupAdmissionMode::Strict, AdmissionOutcome::Rejected),
                 (StartupAdmissionMode::Warn, AdmissionOutcome::Warning),
             ] {
-                let mut policy = strict_policy(temp_path("gate"));
+                let mut policy = strict_policy(temp_path(&fixture_dir, "gate"));
                 policy.mode = mode;
                 let evaluation =
                     evaluate_startup_admission(&policy, &runtime).expect("valid policy");
@@ -687,11 +691,12 @@ mod tests {
 
     #[test]
     fn strict_mode_accepts_gate_bound_to_running_build() {
-        let executable = temp_path("exe");
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = temp_path("gate");
+        let gate_path = temp_path(&fixture_dir, "gate");
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
@@ -712,11 +717,12 @@ mod tests {
 
     #[test]
     fn gate_bound_to_different_build_is_rejected() {
-        let executable = temp_path("exe");
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         std::thread::sleep(Duration::from_millis(25));
-        let gate_path = temp_path("gate");
+        let gate_path = temp_path(&fixture_dir, "gate");
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
@@ -739,10 +745,11 @@ mod tests {
 
     #[test]
     fn expected_manifest_digest_is_required_and_compared_exactly() {
-        let executable = temp_path("exe");
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
-        let missing = temp_path("missing-gate");
+        let missing = temp_path(&fixture_dir, "missing-gate");
         let mut policy = strict_policy(missing);
         policy.expected_command_manifest_digest = None;
         let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
@@ -751,7 +758,7 @@ mod tests {
             Some(CODE_EXPECTED_MANIFEST_UNAVAILABLE)
         );
 
-        let gate_path = temp_path("gate");
+        let gate_path = temp_path(&fixture_dir, "gate");
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
@@ -775,10 +782,11 @@ mod tests {
 
     #[test]
     fn malformed_gate_and_expected_digest_do_not_pass_strict_mode() {
-        let executable = temp_path("exe");
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
-        let gate_path = temp_path("malformed-gate");
+        let gate_path = temp_path(&fixture_dir, "malformed-gate");
         fs::write(&gate_path, "not-json").expect("write malformed gate");
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
             .expect("valid policy");
@@ -797,7 +805,8 @@ mod tests {
 
     #[test]
     fn production_controls_and_expired_bypass_are_enforced() {
-        let mut policy = strict_policy(temp_path("gate"));
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let mut policy = strict_policy(temp_path(&fixture_dir, "gate"));
         policy.production_mode = true;
         policy.mode = StartupAdmissionMode::Off;
         assert_eq!(
@@ -818,7 +827,7 @@ mod tests {
         policy.allow_production_bypass = true;
         assert_eq!(policy.validate(), Ok(()));
 
-        let executable = temp_path("exe");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
         let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
@@ -829,7 +838,7 @@ mod tests {
         );
         let _ = fs::remove_file(executable);
 
-        let mut invalid = strict_policy(temp_path("gate"));
+        let mut invalid = strict_policy(temp_path(&fixture_dir, "gate"));
         invalid.bypass = Some(AdmissionBypass {
             reason: "  ".to_string(),
             expires_at: "not-a-timestamp".to_string(),
@@ -850,10 +859,11 @@ mod tests {
 
     #[test]
     fn active_break_glass_bypass_requires_expiry_and_reason() {
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
         let policy = StartupAdmissionPolicy {
             mode: StartupAdmissionMode::Strict,
             required_level: TestGateLevel::Standard,
-            gate_path: temp_path("gate"),
+            gate_path: temp_path(&fixture_dir, "gate"),
             production_mode: false,
             allow_production_bypass: false,
             bypass: Some(AdmissionBypass {
@@ -864,7 +874,7 @@ mod tests {
             }),
             expected_command_manifest_digest: Some(format!("sha256:{}", "a".repeat(64))),
         };
-        let executable = temp_path("exe");
+        let executable = temp_path(&fixture_dir, "exe");
         fs::write(&executable, "binary").expect("write executable fixture");
         let runtime = runtime_for(&executable);
 
