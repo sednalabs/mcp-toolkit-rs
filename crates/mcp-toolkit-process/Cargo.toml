@@ -17,4 +17,5 @@ libc = "0.2.180"
 tokio = { version = "1.49.0", features = ["io-util", "process", "rt", "sync", "time"] }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tokio = { version = "1.49.0", features = ["io-util", "macros", "process", "rt", "sync", "time"] }

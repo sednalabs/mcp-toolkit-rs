@@ -626,32 +626,29 @@ fn parse_u64(value: Option<&&[u8]>) -> Result<u64, SourceUnavailableReason> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDirectory(PathBuf);
+    struct TestDirectory(tempfile::TempDir);
 
     impl TestDirectory {
         fn new() -> Self {
-            let nonce = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "mcp-toolkit-linux-resources-{}-{nonce}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).expect("create private resource test directory");
-            Self(path)
+            let temp_dir = tempfile::Builder::new()
+                .prefix("mcp-toolkit-linux-resources-")
+                .permissions(fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .expect("create private resource test directory");
+            let mode = fs::metadata(temp_dir.path())
+                .expect("inspect private resource test directory")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "resource test directory must be private");
+            Self(temp_dir)
         }
 
         fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            self.0.path()
         }
     }
 
