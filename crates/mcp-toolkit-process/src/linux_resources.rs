@@ -472,7 +472,7 @@ fn parse_memory_events_local(input: &[u8]) -> Result<MemoryEvents, SourceUnavail
 #[cfg(target_os = "linux")]
 fn parse_key_u64_lines(
     input: &[u8],
-) -> Result<std::collections::BTreeMap<String, u64>, SourceUnavailableReason> {
+) -> Result<std::collections::BTreeMap<&str, u64>, SourceUnavailableReason> {
     use std::collections::BTreeMap;
 
     if input.len() > MAX_RESOURCE_BYTES {
@@ -512,7 +512,7 @@ fn parse_key_u64_lines(
             .map_err(|_| SourceUnavailableReason::Malformed)?
             .parse::<u64>()
             .map_err(|_| SourceUnavailableReason::Malformed)?;
-        if entries.insert(key.to_owned(), value).is_some() {
+        if entries.insert(key, value).is_some() {
             return Err(SourceUnavailableReason::Malformed);
         }
     }
