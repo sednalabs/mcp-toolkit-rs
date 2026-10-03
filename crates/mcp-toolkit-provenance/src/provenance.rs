@@ -3,7 +3,7 @@
 //! Values are provider-neutral metadata; they are not cryptographic attestations.
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -68,18 +68,69 @@ pub struct ProcessProvenance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Describes available metadata for the running executable.
+/// Describes reportable executable metadata, which may be advisory only.
 pub struct BinaryProvenance {
     pub file_size_bytes: Option<u64>,
     pub modified_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Combines build, process, and binary metadata.
+/// Combines build, process, and binary report data without asserting loaded-image identity.
 pub struct RuntimeProvenance {
     pub build: BuildProvenance,
     pub process: ProcessProvenance,
     pub binary: BinaryProvenance,
+}
+
+/// Holds reportable provenance plus private evidence captured from the loaded image.
+///
+/// Only [`capture_current_runtime_provenance`] can construct this value. It is not
+/// serializable or cloneable, so decoded or caller-built report data cannot be
+/// used as startup freshness evidence.
+///
+/// ```compile_fail
+/// use mcp_toolkit_provenance::CapturedRuntimeProvenance;
+/// let _forged = serde_json::from_str::<CapturedRuntimeProvenance>("{}").unwrap();
+/// ```
+///
+/// ```compile_fail
+/// use mcp_toolkit_provenance::{CapturedRuntimeProvenance, RuntimeProvenance};
+/// let runtime: RuntimeProvenance = todo!();
+/// let _forged = CapturedRuntimeProvenance { runtime, loaded_image: None };
+/// ```
+pub struct CapturedRuntimeProvenance {
+    runtime: RuntimeProvenance,
+    loaded_image: Option<LoadedImageEvidence>,
+}
+
+impl CapturedRuntimeProvenance {
+    /// Returns the reportable provenance without exposing its loaded-image proof.
+    pub fn runtime(&self) -> &RuntimeProvenance {
+        &self.runtime
+    }
+
+    pub(crate) fn loaded_image_modified_unix_ms(&self) -> Option<u64> {
+        self.loaded_image
+            .as_ref()
+            .map(|evidence| evidence.modified_unix_ms)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_mut_for_test(&mut self) -> &mut RuntimeProvenance {
+        &mut self.runtime
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_loaded_image_for_test(&mut self) {
+        self.loaded_image = None;
+    }
+}
+
+struct LoadedImageEvidence {
+    // Retaining this handle ties the measured metadata to the opened loaded image.
+    _file: File,
+    file_size_bytes: u64,
+    modified_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,10 +258,14 @@ impl BuildProvenance {
     }
 }
 
-/// Captures process and executable metadata for the supplied binary path.
+/// Captures advisory process and executable metadata for the supplied path.
 ///
 /// # Errors
 /// This function reports unavailable filesystem values in the result rather than failing.
+///
+/// # Security
+/// The supplied path is caller-selected. Its metadata is descriptive only and
+/// cannot be used as proof of the currently loaded executable.
 pub fn capture_runtime_provenance(
     build: BuildProvenance,
     executable_path: &Path,
@@ -234,15 +289,102 @@ pub fn capture_runtime_provenance(
     }
 }
 
-/// Captures metadata for the currently running executable.
+/// Captures descriptive provenance and, when supported, private loaded-image evidence.
 ///
 /// # Errors
 /// Returns the operating system error when the current executable path cannot be read.
+///
+/// # Security
+/// The executable path is descriptive. Strict startup freshness uses metadata
+/// from a private handle opened through verified procfs on Linux; unsupported
+/// or unavailable providers do not fall back to pathname metadata. The host
+/// or supervisor must control the process mount namespace so an untrusted
+/// caller cannot replace the procfs view used for capture.
 pub fn capture_current_runtime_provenance(
     build: BuildProvenance,
-) -> std::io::Result<RuntimeProvenance> {
+) -> std::io::Result<CapturedRuntimeProvenance> {
     let executable_path = std::env::current_exe()?;
-    Ok(capture_runtime_provenance(build, &executable_path))
+    let loaded_image = capture_loaded_image();
+    let binary = loaded_image.as_ref().map_or(
+        BinaryProvenance {
+            file_size_bytes: None,
+            modified_unix_ms: None,
+        },
+        |evidence| BinaryProvenance {
+            file_size_bytes: Some(evidence.file_size_bytes),
+            modified_unix_ms: Some(evidence.modified_unix_ms),
+        },
+    );
+
+    Ok(CapturedRuntimeProvenance {
+        runtime: RuntimeProvenance {
+            build,
+            process: ProcessProvenance {
+                pid: std::process::id(),
+                executable_path: executable_path.display().to_string(),
+            },
+            binary,
+        },
+        loaded_image,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn capture_loaded_image() -> Option<LoadedImageEvidence> {
+    use std::ffi::CStr;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    const PROC_SUPER_MAGIC: libc::c_long = 0x9fa0;
+    const O_CLOEXEC: libc::c_int = libc::O_CLOEXEC;
+    const O_RDONLY: libc::c_int = libc::O_RDONLY;
+
+    // Opening /proc/self once anchors both the filesystem check and the
+    // executable lookup to the same mount. The deployment must keep this mount
+    // namespace under OS/supervisor control so an untrusted caller cannot
+    // replace procfs or its view between process start and capture.
+    let proc_self = File::open("/proc/self").ok()?;
+    let mut fs_info = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: proc_self owns a live directory fd and fs_info points to writable
+    // storage of the libc-defined statfs layout for this Linux target.
+    let fs_result = unsafe { libc::fstatfs(proc_self.as_raw_fd(), fs_info.as_mut_ptr()) };
+    if fs_result != 0 {
+        return None;
+    }
+    // SAFETY: successful fstatfs initialized the complete statfs value.
+    let fs_info = unsafe { fs_info.assume_init() };
+    if fs_info.f_type as libc::c_long != PROC_SUPER_MAGIC {
+        return None;
+    }
+
+    let exe_name = CStr::from_bytes_with_nul(b"exe\0").ok()?;
+    // SAFETY: proc_self remains open; exe_name is a NUL-terminated constant;
+    // flags request a read-only close-on-exec descriptor. The fd is converted
+    // to File exactly once below, including the ownership transfer.
+    let exe_fd = unsafe {
+        libc::openat(
+            proc_self.as_raw_fd(),
+            exe_name.as_ptr(),
+            O_RDONLY | O_CLOEXEC,
+        )
+    };
+    if exe_fd < 0 {
+        return None;
+    }
+    // SAFETY: openat returned a new owned descriptor, transferred to File.
+    let file = unsafe { File::from_raw_fd(exe_fd) };
+    let metadata = file.metadata().ok()?;
+    let modified_unix_ms = metadata.modified().ok().and_then(system_time_to_unix_ms)?;
+
+    Some(LoadedImageEvidence {
+        _file: file,
+        file_size_bytes: metadata.len(),
+        modified_unix_ms,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn capture_loaded_image() -> Option<LoadedImageEvidence> {
+    None
 }
 
 /// Creates a schema-v2 envelope and lists every unavailable required field.
@@ -571,5 +713,47 @@ mod tests {
         let envelope = build_attestation_envelope(&runtime, AttestationOptions::default());
         assert_eq!(envelope.status, AttestationStatus::Ok);
         assert!(envelope.unavailable.is_empty());
+    }
+
+    #[test]
+    fn current_capture_uses_private_loaded_image_metadata_when_supported() {
+        let captured =
+            capture_current_runtime_provenance(BuildProvenance::from_input(input(Some(false))))
+                .expect("capture current executable");
+
+        #[cfg(target_os = "linux")]
+        {
+            let evidence = captured
+                .loaded_image
+                .as_ref()
+                .expect("verified procfs should provide loaded-image evidence");
+            assert_eq!(
+                captured.runtime.binary.file_size_bytes,
+                Some(evidence.file_size_bytes)
+            );
+            assert_eq!(
+                captured.runtime.binary.modified_unix_ms,
+                Some(evidence.modified_unix_ms)
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert!(captured.loaded_image.is_none());
+            assert_eq!(captured.runtime.binary.file_size_bytes, None);
+            assert_eq!(captured.runtime.binary.modified_unix_ms, None);
+        }
+
+        let envelope =
+            build_attestation_envelope(captured.runtime(), AttestationOptions::default());
+        let json = serde_json::to_value(envelope).expect("serialize schema-v2 envelope");
+        assert!(json.get("attestation").is_some());
+        assert!(json["attestation"]["runtime"]
+            .get("executable_path")
+            .is_some());
+        assert!(json["attestation"]["runtime"]
+            .get("binary_modified_unix_ms")
+            .is_some());
+        assert!(json.get("loaded_image").is_none());
     }
 }

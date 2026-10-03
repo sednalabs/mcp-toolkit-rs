@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::provenance::{is_unknown, system_time_to_unix_ms, RuntimeProvenance};
+use crate::provenance::{
+    is_unknown, system_time_to_unix_ms, CapturedRuntimeProvenance, RuntimeProvenance,
+};
 
 pub const CODE_DISABLED: &str = "admission.disabled";
 pub const CODE_OVERRIDE: &str = "admission.override.active";
@@ -210,9 +212,20 @@ impl StartupAdmissionPolicy {
 /// # Security
 /// The artifact is not treated as the source of trust for the expected manifest digest.
 /// Callers must restrict the gate path and file permissions to the deployment trust boundary.
+///
+/// A decoded or caller-built report cannot be supplied as loaded-image evidence:
+///
+/// ```compile_fail
+/// use mcp_toolkit_provenance::{
+///     evaluate_startup_admission, RuntimeProvenance, StartupAdmissionPolicy,
+/// };
+/// let policy: StartupAdmissionPolicy = todo!();
+/// let report: RuntimeProvenance = todo!();
+/// let _ = evaluate_startup_admission(&policy, &report);
+/// ```
 pub fn evaluate_startup_admission(
     policy: &StartupAdmissionPolicy,
-    runtime: &RuntimeProvenance,
+    captured: &CapturedRuntimeProvenance,
 ) -> Result<AdmissionEvaluation, AdmissionPolicyError> {
     policy.validate()?;
 
@@ -249,6 +262,7 @@ pub fn evaluate_startup_admission(
         expired_bypass = true;
     }
 
+    let runtime = captured.runtime();
     let unavailable_fields = missing_required_provenance_fields(runtime);
     if !unavailable_fields.is_empty() {
         return Ok(warning_or_reject(
@@ -425,11 +439,11 @@ pub fn evaluate_startup_admission(
     }
 
     let gate_modified_ms = gate_meta.modified().ok().and_then(system_time_to_unix_ms);
-    let Some(binary_modified_ms) = runtime.binary.modified_unix_ms else {
+    let Some(binary_modified_ms) = captured.loaded_image_modified_unix_ms() else {
         return Ok(warning_or_reject(
             policy,
             CODE_TIMESTAMP_INVALID,
-            "runtime binary modification time is unavailable".to_string(),
+            "loaded-image metadata evidence is unavailable".to_string(),
         ));
     };
     let Some(gate_modified_ms) = gate_modified_ms else {
@@ -563,14 +577,15 @@ fn bounded_text(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant, UNIX_EPOCH};
 
     use time::Duration as TimeDuration;
 
     use super::*;
     use crate::provenance::{
-        capture_runtime_provenance, BuildProvenance, BuildProvenanceInput, UNKNOWN_VALUE,
+        capture_current_runtime_provenance, BuildProvenance, BuildProvenanceInput, UNKNOWN_VALUE,
     };
 
     fn temp_path(directory: &tempfile::TempDir, prefix: &str) -> PathBuf {
@@ -581,7 +596,7 @@ mod tests {
             .join(format!("mcp-toolkit-{prefix}-{nonce}"))
     }
 
-    fn runtime_for(executable: &Path) -> RuntimeProvenance {
+    fn runtime_for() -> CapturedRuntimeProvenance {
         let build = BuildProvenance::from_input(BuildProvenanceInput {
             component: "example-mcp",
             server_version: "1.0.0",
@@ -594,7 +609,7 @@ mod tests {
             source_date_epoch: None,
             build_identity_override: None,
         });
-        capture_runtime_provenance(build, executable)
+        capture_current_runtime_provenance(build).expect("capture current executable")
     }
 
     fn strict_policy(gate_path: PathBuf) -> StartupAdmissionPolicy {
@@ -612,23 +627,17 @@ mod tests {
     #[test]
     fn strict_mode_rejects_missing_gate() {
         let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
+        let runtime = runtime_for();
         let gate_path = temp_path(&fixture_dir, "missing-gate");
         let evaluation =
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_MISSING));
-        let _ = fs::remove_file(executable);
     }
 
     #[test]
     fn every_required_provenance_field_blocks_strict_and_warns_in_warn_mode() {
         let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let complete = runtime_for(&executable);
         let fields = [
             "component",
             "server_version",
@@ -644,25 +653,30 @@ mod tests {
             "binary_modified_unix_ms",
         ];
         for field in fields {
-            let mut runtime = complete.clone();
-            match field {
-                "component" => runtime.build.component = UNKNOWN_VALUE.to_string(),
-                "server_version" => runtime.build.server_version = UNKNOWN_VALUE.to_string(),
-                "revision" => runtime.build.source.revision = UNKNOWN_VALUE.to_string(),
-                "reference" => runtime.build.source.reference = UNKNOWN_VALUE.to_string(),
-                "dirty" => runtime.build.source.dirty = None,
-                "build_identity" => runtime.build.build_identity = UNKNOWN_VALUE.to_string(),
-                "source_fingerprint" => {
-                    runtime.build.source_fingerprint = UNKNOWN_VALUE.to_string()
+            let mut captured = runtime_for();
+            {
+                let runtime = captured.runtime_mut_for_test();
+                match field {
+                    "component" => runtime.build.component = UNKNOWN_VALUE.to_string(),
+                    "server_version" => runtime.build.server_version = UNKNOWN_VALUE.to_string(),
+                    "revision" => runtime.build.source.revision = UNKNOWN_VALUE.to_string(),
+                    "reference" => runtime.build.source.reference = UNKNOWN_VALUE.to_string(),
+                    "dirty" => runtime.build.source.dirty = None,
+                    "build_identity" => runtime.build.build_identity = UNKNOWN_VALUE.to_string(),
+                    "source_fingerprint" => {
+                        runtime.build.source_fingerprint = UNKNOWN_VALUE.to_string()
+                    }
+                    "rustc_version" => {
+                        runtime.build.build_metadata.rustc_version = UNKNOWN_VALUE.to_string()
+                    }
+                    "pid" => runtime.process.pid = 0,
+                    "executable_path" => {
+                        runtime.process.executable_path = UNKNOWN_VALUE.to_string()
+                    }
+                    "binary_size_bytes" => runtime.binary.file_size_bytes = None,
+                    "binary_modified_unix_ms" => runtime.binary.modified_unix_ms = None,
+                    _ => unreachable!("test field is listed above"),
                 }
-                "rustc_version" => {
-                    runtime.build.build_metadata.rustc_version = UNKNOWN_VALUE.to_string()
-                }
-                "pid" => runtime.process.pid = 0,
-                "executable_path" => runtime.process.executable_path = UNKNOWN_VALUE.to_string(),
-                "binary_size_bytes" => runtime.binary.file_size_bytes = None,
-                "binary_modified_unix_ms" => runtime.binary.modified_unix_ms = None,
-                _ => unreachable!("test field is listed above"),
             }
             for (mode, expected) in [
                 (StartupAdmissionMode::Strict, AdmissionOutcome::Rejected),
@@ -671,7 +685,7 @@ mod tests {
                 let mut policy = strict_policy(temp_path(&fixture_dir, "gate"));
                 policy.mode = mode;
                 let evaluation =
-                    evaluate_startup_admission(&policy, &runtime).expect("valid policy");
+                    evaluate_startup_admission(&policy, &captured).expect("valid policy");
                 assert_eq!(
                     evaluation.outcome, expected,
                     "field {field} in {mode:?} mode"
@@ -686,48 +700,240 @@ mod tests {
                 );
             }
         }
-        let _ = fs::remove_file(executable);
     }
 
     #[test]
     fn strict_mode_accepts_gate_bound_to_running_build() {
         let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
-        std::thread::sleep(Duration::from_millis(25));
+        let runtime = runtime_for();
         let gate_path = temp_path(&fixture_dir, "gate");
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
         let artifact = GateArtifactV1::passing(
-            &runtime,
+            runtime.runtime(),
             TestGateLevel::Fast,
             format!("sha256:{}", "a".repeat(64)),
             expires_at,
         );
         write_gate_artifact(&gate_path, &artifact).expect("write gate");
 
+        #[cfg(target_os = "linux")]
+        {
+            let loaded_image_ms = runtime
+                .runtime()
+                .binary
+                .modified_unix_ms
+                .expect("Linux loaded-image metadata");
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&gate_path)
+                .expect("open gate for timestamp setup")
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(UNIX_EPOCH + Duration::from_millis(loaded_image_ms)),
+                )
+                .expect("set gate equal to loaded-image time");
+        }
+
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
             .expect("valid policy");
+        #[cfg(target_os = "linux")]
         assert_eq!(evaluation.outcome, AdmissionOutcome::Passed);
-        let _ = fs::remove_file(executable);
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+            assert_eq!(
+                evaluation.reason_code.as_deref(),
+                Some(CODE_PROVENANCE_UNAVAILABLE)
+            );
+        }
         let _ = fs::remove_file(gate_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gate_older_than_loaded_image_is_rejected() {
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let runtime = runtime_for();
+        let loaded_image_ms = runtime
+            .runtime()
+            .binary
+            .modified_unix_ms
+            .expect("Linux loaded image metadata");
+        let gate_path = temp_path(&fixture_dir, "older-gate");
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expiry");
+        let artifact = GateArtifactV1::passing(
+            runtime.runtime(),
+            TestGateLevel::Fast,
+            format!("sha256:{}", "a".repeat(64)),
+            expires_at,
+        );
+        write_gate_artifact(&gate_path, &artifact).expect("write gate");
+        let old_mtime = UNIX_EPOCH + Duration::from_millis(loaded_image_ms - 1_000);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&gate_path)
+            .expect("open gate for timestamp setup")
+            .set_times(fs::FileTimes::new().set_modified(old_mtime))
+            .expect("set gate timestamp");
+
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
+        assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_EXPIRED));
+        assert!(evaluation.detail.contains("older than the running binary"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_private_image_evidence_cannot_use_report_metadata_as_fallback() {
+        let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
+        let mut runtime = runtime_for();
+        let gate_path = temp_path(&fixture_dir, "valid-gate");
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expiry");
+        let artifact = GateArtifactV1::passing(
+            runtime.runtime(),
+            TestGateLevel::Fast,
+            format!("sha256:{}", "a".repeat(64)),
+            expires_at,
+        );
+        write_gate_artifact(&gate_path, &artifact).expect("write gate");
+        runtime.clear_loaded_image_for_test();
+
+        let evaluation =
+            evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
+        assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+        assert_eq!(
+            evaluation.reason_code.as_deref(),
+            Some(CODE_TIMESTAMP_INVALID)
+        );
+        assert!(evaluation.detail.contains("loaded-image metadata evidence"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn loaded_image_freshness_ignores_replaced_invocation_path() {
+        const CHILD_ENV: &str = "MCP_TOOLKIT_LOADED_IMAGE_REPLACEMENT_CHILD";
+
+        if let Some(directory) = std::env::var_os(CHILD_ENV) {
+            let directory = PathBuf::from(directory);
+            let expected_loaded_mtime = std::env::var("MCP_TOOLKIT_LOADED_IMAGE_MTIME")
+                .expect("parent supplies loaded-image mtime")
+                .parse::<u64>()
+                .expect("valid loaded-image mtime");
+            fs::write(directory.join("ready"), b"ready").expect("signal child readiness");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !directory.join("release").exists() {
+                assert!(Instant::now() < deadline, "parent did not release child");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            let runtime = runtime_for();
+            assert_eq!(
+                runtime.runtime().binary.modified_unix_ms,
+                Some(expected_loaded_mtime),
+                "capture follows the loaded image after its invocation path is replaced"
+            );
+            let policy = strict_policy(directory.join("gate.json"));
+            let evaluation =
+                evaluate_startup_admission(&policy, &runtime).expect("valid child policy");
+            assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
+            assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_EXPIRED));
+            return;
+        }
+
+        let current_exe = std::env::current_exe().expect("locate test executable");
+        let parent = current_exe.parent().expect("test executable has parent");
+        let directory = tempfile::tempdir_in(parent).expect("create executable-local fixture");
+        let invoked_path = directory.path().join("invoked-test-binary");
+        let saved_path = directory.path().join("saved-test-binary");
+        fs::hard_link(&current_exe, &invoked_path).expect("create executable hardlink");
+
+        let runtime = runtime_for();
+        let loaded_image_ms = runtime
+            .runtime()
+            .binary
+            .modified_unix_ms
+            .expect("Linux loaded-image metadata");
+        let gate_path = directory.path().join("gate.json");
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+            .format(&Rfc3339)
+            .expect("format expiry");
+        let artifact = GateArtifactV1::passing(
+            runtime.runtime(),
+            TestGateLevel::Fast,
+            format!("sha256:{}", "a".repeat(64)),
+            expires_at,
+        );
+        write_gate_artifact(&gate_path, &artifact).expect("write current-build gate");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&gate_path)
+            .expect("open gate for timestamp setup")
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(UNIX_EPOCH + Duration::from_millis(loaded_image_ms - 1_000)),
+            )
+            .expect("set gate between decoy and loaded image");
+
+        let mut child = Command::new(&invoked_path)
+            .arg("--exact")
+            .arg("admission::tests::loaded_image_freshness_ignores_replaced_invocation_path")
+            .arg("--nocapture")
+            .env(CHILD_ENV, directory.path())
+            .env(
+                "MCP_TOOLKIT_LOADED_IMAGE_MTIME",
+                loaded_image_ms.to_string(),
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start child through hardlink path");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !directory.path().join("ready").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "child did not reach capture barrier"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        fs::rename(&invoked_path, &saved_path).expect("remove invoked pathname");
+        fs::write(&invoked_path, b"older-mtime decoy").expect("install path decoy");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&invoked_path)
+            .expect("open decoy for timestamp setup")
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(UNIX_EPOCH + Duration::from_millis(loaded_image_ms - 2_000)),
+            )
+            .expect("set decoy older than gate");
+        fs::write(directory.path().join("release"), b"capture").expect("release child");
+
+        let status = child.wait().expect("wait for child capture result");
+        assert!(
+            status.success(),
+            "child rejected or accepted unexpected evidence"
+        );
     }
 
     #[test]
     fn gate_bound_to_different_build_is_rejected() {
         let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
+        let runtime = runtime_for();
         std::thread::sleep(Duration::from_millis(25));
         let gate_path = temp_path(&fixture_dir, "gate");
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
             .format(&Rfc3339)
             .expect("format expiry");
         let mut artifact = GateArtifactV1::passing(
-            &runtime,
+            runtime.runtime(),
             TestGateLevel::Fast,
             format!("sha256:{}", "a".repeat(64)),
             expires_at,
@@ -739,16 +945,13 @@ mod tests {
             .expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_BUILD_MISMATCH));
-        let _ = fs::remove_file(executable);
         let _ = fs::remove_file(gate_path);
     }
 
     #[test]
     fn expected_manifest_digest_is_required_and_compared_exactly() {
         let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
+        let runtime = runtime_for();
         let missing = temp_path(&fixture_dir, "missing-gate");
         let mut policy = strict_policy(missing);
         policy.expected_command_manifest_digest = None;
@@ -763,7 +966,7 @@ mod tests {
             .format(&Rfc3339)
             .expect("format expiry");
         let artifact = GateArtifactV1::passing(
-            &runtime,
+            runtime.runtime(),
             TestGateLevel::Fast,
             format!("sha256:{}", "b".repeat(64)),
             expires_at,
@@ -776,16 +979,13 @@ mod tests {
             evaluation.reason_code.as_deref(),
             Some(CODE_MANIFEST_MISMATCH)
         );
-        let _ = fs::remove_file(executable);
         let _ = fs::remove_file(gate_path);
     }
 
     #[test]
     fn malformed_gate_and_expected_digest_do_not_pass_strict_mode() {
         let fixture_dir = tempfile::tempdir().expect("create isolated fixture directory");
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
+        let runtime = runtime_for();
         let gate_path = temp_path(&fixture_dir, "malformed-gate");
         fs::write(&gate_path, "not-json").expect("write malformed gate");
         let evaluation = evaluate_startup_admission(&strict_policy(gate_path.clone()), &runtime)
@@ -799,7 +999,6 @@ mod tests {
             evaluation.reason_code.as_deref(),
             Some(CODE_EXPECTED_MANIFEST_UNAVAILABLE)
         );
-        let _ = fs::remove_file(executable);
         let _ = fs::remove_file(gate_path);
     }
 
@@ -827,16 +1026,13 @@ mod tests {
         policy.allow_production_bypass = true;
         assert_eq!(policy.validate(), Ok(()));
 
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
+        let runtime = runtime_for();
         let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(
             evaluation.reason_code.as_deref(),
             Some(CODE_OVERRIDE_EXPIRED)
         );
-        let _ = fs::remove_file(executable);
 
         let mut invalid = strict_policy(temp_path(&fixture_dir, "gate"));
         invalid.bypass = Some(AdmissionBypass {
@@ -874,13 +1070,10 @@ mod tests {
             }),
             expected_command_manifest_digest: Some(format!("sha256:{}", "a".repeat(64))),
         };
-        let executable = temp_path(&fixture_dir, "exe");
-        fs::write(&executable, "binary").expect("write executable fixture");
-        let runtime = runtime_for(&executable);
+        let runtime = runtime_for();
 
         let evaluation = evaluate_startup_admission(&policy, &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Bypassed);
         assert!(evaluation.override_active);
-        let _ = fs::remove_file(executable);
     }
 }
