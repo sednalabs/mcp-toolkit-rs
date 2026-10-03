@@ -924,20 +924,25 @@ mod tests {
         let ready_reader = std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
+            let mut reported_ready = false;
             loop {
                 line.clear();
                 match reader.read_line(&mut line) {
                     Ok(0) => {
-                        let _ = ready_tx.send(false);
+                        if !reported_ready {
+                            let _ = ready_tx.send(false);
+                        }
                         return;
                     }
-                    Ok(_) if line.trim_end() == CHILD_READY => {
+                    Ok(_) if !reported_ready && line.trim_end() == CHILD_READY => {
+                        reported_ready = true;
                         let _ = ready_tx.send(true);
-                        return;
                     }
                     Ok(_) => {}
                     Err(_) => {
-                        let _ = ready_tx.send(false);
+                        if !reported_ready {
+                            let _ = ready_tx.send(false);
+                        }
                         return;
                     }
                 }
@@ -947,9 +952,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(30))
             .expect("child did not report readiness within the deadline");
         assert!(ready, "child exited before the capture barrier");
-        ready_reader
-            .join()
-            .expect("child readiness reader should finish");
 
         fs::rename(&invoked_path, &saved_path).expect("remove invoked pathname");
         fs::write(&invoked_path, b"older-mtime decoy").expect("install path decoy");
@@ -978,6 +980,9 @@ mod tests {
             .expect("flush child release");
 
         let status = child.0.wait().expect("wait for child capture result");
+        ready_reader
+            .join()
+            .expect("child output reader should finish");
         assert!(
             status.success(),
             "child rejected or accepted unexpected evidence"
