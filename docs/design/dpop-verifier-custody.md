@@ -8,6 +8,10 @@ Sedna Labs maintainers own this decision. Reassess no later than 2027-01-01 UTC,
 or earlier if a newer release, advisory, relevant verifier defect, or package
 provenance change appears. Do not silently extend the exception.
 
+This decision supersedes the 2026-08-26 expiry recorded in issue #166. Issue
+#166 remains open until this decision is documented in the repository and its
+required hosted qualification and protected landing evidence are complete.
+
 The 90-day interval is longer than the dependency-governance target of 30 days.
 It gives maintainers one bounded upstream monitoring interval while retaining
 automatic reassessment triggers. The exception accepts weak independent-use
