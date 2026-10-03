@@ -83,10 +83,10 @@ jobs:
         run: echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
-        # dtolnay/rust-toolchain 1.88.0 (the workspace MSRV)
+        # dtolnay/rust-toolchain 1.99.0 (the Toolkit compatibility floor)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          toolchain: 1.88.0
+          toolchain: 1.99.0
 
       - name: Verify native target
         shell: bash

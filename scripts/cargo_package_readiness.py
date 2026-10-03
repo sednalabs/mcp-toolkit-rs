@@ -61,7 +61,7 @@ REQUIRED_PACKAGE_FIELDS = {
 }
 
 REPOSITORY_URL = "https://github.com/sednalabs/mcp-toolkit-rs"
-EXPECTED_RUST_VERSION = "1.88"
+EXPECTED_RUST_VERSION = "1.99"
 EXPECTED_README = "../../README.md"
 REQUIRED_KEYWORDS = {"mcp", "sednalabs"}
 EXPECTED_CATEGORIES = {

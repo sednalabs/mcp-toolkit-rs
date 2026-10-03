@@ -2,7 +2,7 @@
 name = "mcp-toolkit"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.99"
 license = "Apache-2.0"
 description = "Umbrella crate for reusable Rust MCP toolkit components."
 repository = "https://github.com/sednalabs/mcp-toolkit-rs"

@@ -1,10 +1,12 @@
 # Current MCP Baseline
 
-Baseline date: 2026-10-02
+Baseline date: 2026-10-03
 
 The migration candidate pins `rmcp` and `rmcp-macros` to `3.5.0`. The release
-is non-yanked on the registry and has MSRV 1.88. This is a documentation
-baseline, not hosted validation, landing, or a crates.io release promise.
+is non-yanked on the registry and has MSRV 1.88. RMCP 3.5.0 retains that
+own compiler requirement; the Toolkit deliberately raises its own compatibility
+floor to Rust 1.99 with this baseline upgrade. This records the Toolkit source
+contract, not hosted validation, landing, or a crates.io release promise.
 
 ## Gap matrix
 
