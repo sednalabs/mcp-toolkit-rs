@@ -1,12 +1,21 @@
 use std::sync::{Arc, Barrier};
 
-use mcp_toolkit_tasks::{TaskAuthority, TaskAuthorityError, TaskPrincipal};
+use mcp_toolkit_tasks::{TaskAuthority, TaskAuthorityConfig, TaskAuthorityError, TaskPrincipal};
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::task_manager::TaskOptions;
+use std::num::NonZeroUsize;
 use tokio::sync::oneshot;
 
 fn principal(value: &str) -> TaskPrincipal {
     TaskPrincipal::new(value).expect("valid principal")
+}
+
+fn authority() -> TaskAuthority {
+    TaskAuthority::new(TaskAuthorityConfig {
+        max_retained_tasks: NonZeroUsize::new(1024).expect("nonzero task capacity"),
+        max_waiters: NonZeroUsize::new(1024).expect("nonzero waiter capacity"),
+        fallback_reads_per_second: NonZeroUsize::new(1024).expect("nonzero read budget"),
+    })
 }
 
 fn ok_result(text: &str) -> CallToolResult {
@@ -15,7 +24,7 @@ fn ok_result(text: &str) -> CallToolResult {
 
 #[test]
 fn spawn_without_tokio_runtime_returns_typed_error() {
-    let authority = TaskAuthority::new();
+    let authority = authority();
     let result =
         authority.spawn_for_principal(principal("owner-a"), TaskOptions::default(), |_ctx| {
             Box::pin(async { Ok(ok_result("must not run")) })
@@ -40,7 +49,7 @@ fn principal_debug_is_redacted() {
 
 #[tokio::test]
 async fn explicit_shutdown_is_irreversible_across_clones() {
-    let authority = TaskAuthority::new();
+    let authority = authority();
     let surviving_clone = authority.clone();
 
     authority.shutdown();
@@ -60,7 +69,7 @@ async fn explicit_shutdown_is_irreversible_across_clones() {
 
 #[tokio::test]
 async fn shutdown_inside_factory_prevents_task_publication() {
-    let authority = TaskAuthority::new();
+    let authority = authority();
     let shutdown_handle = authority.clone();
 
     let result = authority.spawn_for_principal(
@@ -98,7 +107,7 @@ impl Drop for DropSignal {
 #[tokio::test]
 async fn concurrent_final_handle_drops_abort_unlimited_task() {
     let (dropped_tx, dropped_rx) = oneshot::channel();
-    let authority = TaskAuthority::new();
+    let authority = authority();
     authority
         .spawn_for_principal(
             principal("owner-a"),

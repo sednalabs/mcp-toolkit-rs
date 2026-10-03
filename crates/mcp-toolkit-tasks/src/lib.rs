@@ -10,7 +10,9 @@
 //!
 //! * exact task-to-principal binding;
 //! * fail-closed cross-principal access;
+//! * caller-configured retained-task and concurrent-waiter capacity;
 //! * monotonic observed-state revisions;
+//! * fair coalesced RMCP observation with aggregate fallback-read limits;
 //! * race-safe wait-for-change and wait-for-terminal observation;
 //! * panic containment around task factories and task futures;
 //! * stale authority-binding cleanup after RMCP evicts task records.
@@ -35,8 +37,8 @@ pub mod history;
 pub mod lifecycle;
 
 pub use authority::{
-    AuthorizedTaskSnapshot, ManagedTaskContext, TaskAuthority, TaskAuthorityError, TaskPrincipal,
-    TaskWaitCondition,
+    AuthorizedTaskSnapshot, ManagedTaskContext, TaskAuthority, TaskAuthorityConfig,
+    TaskAuthorityError, TaskAuthorityMetrics, TaskPrincipal, TaskWaitCondition,
 };
 /// Exact RMCP SDK coordinated with this Toolkit Tasks crate.
 pub use rmcp;

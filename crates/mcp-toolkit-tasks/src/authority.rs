@@ -1,19 +1,22 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::{poll_fn, Future};
+use std::num::NonZeroUsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
 
 use rmcp::model::{DetailedTask, InputRequest, Task};
 use rmcp::task_manager::{TaskContext, TaskExit, TaskFuture, TaskManager, TaskOptions};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 
 mod panic_future;
 use panic_future::{contain_task_future, discard_panic_payload};
 
-const OBSERVATION_TICK: Duration = Duration::from_millis(250);
+const SETTLEMENT_RECHECK: Duration = Duration::from_millis(250);
 
 /// Stable opaque principal identifier used to bind an MCP task to its caller.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -70,8 +73,14 @@ pub enum TaskAuthorityError {
     TaskNotFound,
     /// Task spawning requires an entered Tokio runtime.
     RuntimeUnavailable,
+    /// Task observation requires a Tokio runtime with its time driver enabled.
+    RuntimeTimerUnavailable,
     /// The authority has been shut down and cannot be reopened.
     Closed,
+    /// The caller-configured retained-task authority capacity is exhausted.
+    CapacityReached,
+    /// The caller-configured concurrent waiter capacity is exhausted.
+    WaiterCapacityReached,
     /// RMCP rejected an otherwise authorized task operation.
     Rmcp(rmcp::ErrorData),
     /// Internal task-authority state became unavailable.
@@ -84,7 +93,15 @@ impl fmt::Display for TaskAuthorityError {
             Self::InvalidPrincipal => write!(f, "invalid task principal"),
             Self::TaskNotFound => write!(f, "task not found"),
             Self::RuntimeUnavailable => write!(f, "task spawning requires a Tokio runtime"),
+            Self::RuntimeTimerUnavailable => {
+                write!(
+                    f,
+                    "task spawning requires a Tokio runtime with time enabled"
+                )
+            }
             Self::Closed => write!(f, "task authority is shut down"),
+            Self::CapacityReached => write!(f, "task authority capacity reached"),
+            Self::WaiterCapacityReached => write!(f, "task wait capacity reached"),
             Self::Rmcp(error) => write!(f, "RMCP task operation failed: {error}"),
             Self::StateUnavailable => write!(f, "task authority state unavailable"),
         }
@@ -117,20 +134,36 @@ struct ObservedTaskState {
     task: DetailedTask,
 }
 
-#[derive(Debug)]
 struct TaskBinding {
     principal: TaskPrincipal,
     observed: Mutex<ObservedTaskState>,
-    notify: Arc<Notify>,
+    signal: TaskSignal,
+    read_gate: AsyncMutex<()>,
+    last_read_at: Mutex<Option<std::time::Instant>>,
+    observation_done: Notify,
 }
 
 impl TaskBinding {
-    fn new(principal: TaskPrincipal, task: DetailedTask, notify: Arc<Notify>) -> Self {
+    fn new(principal: TaskPrincipal, task: DetailedTask, signal: TaskSignal) -> Self {
         Self {
             principal,
             observed: Mutex::new(ObservedTaskState { revision: 1, task }),
-            notify,
+            signal,
+            read_gate: AsyncMutex::new(()),
+            last_read_at: Mutex::new(None),
+            observation_done: Notify::new(),
         }
+    }
+
+    fn snapshot(&self) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        let observed = self
+            .observed
+            .lock()
+            .map_err(|_| TaskAuthorityError::StateUnavailable)?;
+        Ok(AuthorizedTaskSnapshot {
+            task: observed.task.clone(),
+            revision: observed.revision,
+        })
     }
 
     fn observe(&self, task: DetailedTask) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
@@ -141,7 +174,7 @@ impl TaskBinding {
         if observed.task != task {
             observed.revision = observed.revision.saturating_add(1);
             observed.task = task.clone();
-            self.notify.notify_waiters();
+            self.signal.waiters.notify_waiters();
         }
         Ok(AuthorizedTaskSnapshot {
             task,
@@ -150,21 +183,111 @@ impl TaskBinding {
     }
 
     fn hint(&self) {
-        self.notify.notify_waiters();
+        self.signal.hint(false);
+        self.observation_done.notify_waiters();
+    }
+}
+
+#[derive(Clone)]
+struct TaskSignal {
+    waiters: Arc<Notify>,
+    observer: Arc<Notify>,
+    generation: Arc<AtomicU64>,
+    settlement_pending: Arc<AtomicBool>,
+}
+
+impl TaskSignal {
+    fn new(observer: Arc<Notify>) -> Self {
+        Self {
+            waiters: Arc::new(Notify::new()),
+            observer,
+            generation: Arc::new(AtomicU64::new(0)),
+            settlement_pending: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn hint(&self, _settlement: bool) -> u64 {
+        if _settlement {
+            self.settlement_pending.store(true, Ordering::Release);
+        }
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        self.waiters.notify_waiters();
+        self.observer.notify_one();
+        generation
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    fn is_settlement_pending(&self) -> bool {
+        self.settlement_pending.load(Ordering::Acquire)
+    }
+}
+
+struct LeaseInfo {
+    ttl: Option<Duration>,
+    created_at: std::time::Instant,
+    next_probe_at: Option<std::time::Instant>,
+    observed_signal_generation: u64,
+}
+
+struct WaiterLease {
+    state: Arc<Mutex<AuthorityState>>,
+}
+
+impl Drop for WaiterLease {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active_waiters = state.active_waiters.saturating_sub(1);
+        }
     }
 }
 
 #[derive(Default)]
 struct AuthorityState {
     bindings: HashMap<String, Arc<TaskBinding>>,
-    /// Round-robin liveness probes used to amortize stale binding cleanup.
-    ///
-    /// Entries removed through normal access are left in this queue lazily;
-    /// probing skips them without touching RMCP.
-    prune_queue: VecDeque<String>,
+    /// Capacity leases are independent of waiter-held binding Arcs.
+    leases: HashMap<String, LeaseInfo>,
+    reserved_leases: usize,
+    active_waiters: usize,
+    observer_principals: VecDeque<TaskPrincipal>,
+    observer_tasks: HashMap<TaskPrincipal, VecDeque<String>>,
 }
 
-#[derive(Default)]
+/// Caller-selected limits for retained task authority and observation.
+///
+/// No task or waiter capacity is selected implicitly by Toolkit. A finite
+/// retained-task limit is required because RMCP retains task records until a
+/// later authoritative operation sweeps them.
+#[derive(Debug, Clone, Copy)]
+pub struct TaskAuthorityConfig {
+    /// Maximum number of materialized or retained RMCP task records.
+    pub max_retained_tasks: NonZeroUsize,
+    /// Maximum number of authorized active waits across all principals.
+    pub max_waiters: NonZeroUsize,
+    /// Maximum RMCP fallback reads admitted per second across all task IDs.
+    pub fallback_reads_per_second: NonZeroUsize,
+}
+
+/// Aggregate counters for task wait admission and observation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TaskAuthorityMetrics {
+    /// Number of waiters currently registered with this authority.
+    pub active_waiters: usize,
+    /// Reads avoided because another waiter recently observed the same task.
+    pub coalesced_reads: u64,
+    /// Aggregate fallback RMCP reads issued by waiters.
+    pub fallback_reads: u64,
+    /// Total observed latency, in microseconds, across successful RMCP reads.
+    pub observation_latency_micros: u64,
+    /// Waits rejected by configured waiter admission.
+    pub rejected_waits: u64,
+}
+
 struct AuthorityLifecycle {
     /// Publication gate and irreversible closed bit.
     ///
@@ -172,6 +295,7 @@ struct AuthorityLifecycle {
     /// point without holding Toolkit state across caller-controlled factory
     /// code. Once true, the authority never transitions back to open.
     closed: Mutex<bool>,
+    observer_stop: Arc<Notify>,
 }
 
 /// Arc-owned teardown guard.
@@ -204,6 +328,7 @@ fn close_and_drain(
         };
         *closed = true;
     }
+    lifecycle.observer_stop.notify_one();
     manager.shutdown();
     let bindings = match state.lock() {
         Ok(mut state) => {
@@ -212,7 +337,11 @@ fn close_and_drain(
                 .drain()
                 .map(|(_, binding)| binding)
                 .collect::<Vec<_>>();
-            state.prune_queue.clear();
+            state.leases.clear();
+            state.reserved_leases = 0;
+            state.active_waiters = 0;
+            state.observer_principals.clear();
+            state.observer_tasks.clear();
             bindings
         }
         Err(_) => return,
@@ -223,12 +352,12 @@ fn close_and_drain(
 }
 
 struct NotifyOnDrop {
-    notify: Arc<Notify>,
+    signal: TaskSignal,
 }
 
 impl Drop for NotifyOnDrop {
     fn drop(&mut self) {
-        self.notify.notify_waiters();
+        self.signal.hint(true);
     }
 }
 
@@ -244,7 +373,7 @@ fn panic_task_exit(message: &'static str) -> TaskExit {
 #[derive(Clone)]
 pub struct ManagedTaskContext {
     inner: TaskContext,
-    notify: Arc<Notify>,
+    signal: TaskSignal,
 }
 
 impl ManagedTaskContext {
@@ -271,14 +400,14 @@ impl ManagedTaskContext {
             Poll::Pending => Poll::Ready(None),
         })
         .await;
-        self.notify.notify_waiters();
+        self.signal.hint(false);
 
         if let Some(result) = immediate {
             return result;
         }
 
         let result = request_future.await;
-        self.notify.notify_waiters();
+        self.signal.hint(false);
         result
     }
 
@@ -290,7 +419,7 @@ impl ManagedTaskContext {
     pub fn set_status_message(&self, message: impl Into<String>) {
         let message = message.into();
         self.inner.set_status_message(message);
-        self.notify.notify_waiters();
+        self.signal.hint(false);
     }
 
     /// Returns true when RMCP has received a cooperative cancellation request.
@@ -320,16 +449,60 @@ impl ManagedTaskContext {
 #[derive(Clone)]
 pub struct TaskAuthority {
     manager: TaskManager,
+    config: TaskAuthorityConfig,
     state: Arc<Mutex<AuthorityState>>,
     lifecycle: Arc<AuthorityLifecycle>,
+    metrics: Arc<AtomicMetrics>,
+    observer_notify: Arc<Notify>,
+    observer_started: Arc<AtomicBool>,
+    fallback_window: Arc<Mutex<VecDeque<std::time::Instant>>>,
     _last_handle: Arc<LastHandleGuard>,
 }
 
-impl Default for TaskAuthority {
-    fn default() -> Self {
+#[derive(Default)]
+struct AtomicMetrics {
+    coalesced_reads: AtomicU64,
+    fallback_reads: AtomicU64,
+    observation_latency_micros: AtomicU64,
+    rejected_waits: AtomicU64,
+}
+
+fn rotate_observer_task_to_back(queue: &mut VecDeque<String>, task_id: &str) {
+    let Some(position) = queue.iter().position(|queued| queued == task_id) else {
+        return;
+    };
+    let Some(task_id) = queue.remove(position) else {
+        return;
+    };
+    queue.push_back(task_id);
+}
+
+fn rotate_observer_principal_to_back(
+    queue: &mut VecDeque<TaskPrincipal>,
+    principal: &TaskPrincipal,
+) {
+    let Some(position) = queue.iter().position(|queued| queued == principal) else {
+        return;
+    };
+    let Some(principal) = queue.remove(position) else {
+        return;
+    };
+    queue.push_back(principal);
+}
+
+impl TaskAuthority {
+    /// Creates an empty task authority with explicit task and waiter limits.
+    pub fn new(config: TaskAuthorityConfig) -> Self {
         let manager = TaskManager::new();
         let state = Arc::new(Mutex::new(AuthorityState::default()));
-        let lifecycle = Arc::new(AuthorityLifecycle::default());
+        let lifecycle = Arc::new(AuthorityLifecycle {
+            closed: Mutex::new(false),
+            observer_stop: Arc::new(Notify::new()),
+        });
+        let metrics = Arc::new(AtomicMetrics::default());
+        let observer_notify = Arc::new(Notify::new());
+        let observer_started = Arc::new(AtomicBool::new(false));
+        let fallback_window = Arc::new(Mutex::new(VecDeque::new()));
         let last_handle = Arc::new(LastHandleGuard {
             manager: manager.clone(),
             state: state.clone(),
@@ -337,22 +510,39 @@ impl Default for TaskAuthority {
         });
         Self {
             manager,
+            config,
             state,
             lifecycle,
+            metrics,
+            observer_notify,
+            observer_started,
+            fallback_window,
             _last_handle: last_handle,
         }
     }
-}
 
-impl TaskAuthority {
-    /// Creates an empty task authority.
-    pub fn new() -> Self {
-        Self::default()
+    /// Returns bounded aggregate task-observation counters.
+    pub fn metrics(&self) -> TaskAuthorityMetrics {
+        let active_waiters = self
+            .state
+            .lock()
+            .map(|state| state.active_waiters)
+            .unwrap_or(0);
+        TaskAuthorityMetrics {
+            active_waiters,
+            coalesced_reads: self.metrics.coalesced_reads.load(Ordering::Relaxed),
+            fallback_reads: self.metrics.fallback_reads.load(Ordering::Relaxed),
+            observation_latency_micros: self
+                .metrics
+                .observation_latency_micros
+                .load(Ordering::Relaxed),
+            rejected_waits: self.metrics.rejected_waits.load(Ordering::Relaxed),
+        }
     }
 
     /// Spawns an RMCP task bound to `principal`.
     ///
-    /// A current Tokio runtime is required because RMCP 3.4.1 materializes the
+    /// A current Tokio runtime is required because RMCP 3.5.0 materializes the
     /// task operation with `tokio::spawn`. Toolkit checks that requirement before
     /// entering RMCP so a synchronous caller gets [`TaskAuthorityError::RuntimeUnavailable`]
     /// instead of a Tokio panic or partially materialized task.
@@ -385,57 +575,123 @@ impl TaskAuthority {
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(TaskAuthorityError::RuntimeUnavailable);
         }
-        self.prune_one_stale_binding()?;
+        if catch_unwind(AssertUnwindSafe(|| tokio::time::sleep(Duration::ZERO))).is_err() {
+            return Err(TaskAuthorityError::RuntimeTimerUnavailable);
+        }
+        self.reserve_capacity()?;
         self.ensure_open()?;
 
-        let notify = Arc::new(Notify::new());
-        let operation_notify = notify.clone();
-        let task = self.manager.spawn(options, move |context| {
-            let drop_hint = NotifyOnDrop {
-                notify: operation_notify.clone(),
-            };
-            let managed = ManagedTaskContext {
-                inner: context,
-                notify: operation_notify,
-            };
-            let future: TaskFuture = match catch_unwind(AssertUnwindSafe(|| make_future(managed))) {
-                Ok(future) => contain_task_future(future),
-                Err(panic) => {
-                    discard_panic_payload(panic);
-                    Box::pin(async { Err(panic_task_exit("task operation factory panicked")) })
-                }
-            };
+        let ttl = options.ttl_ms.map(Duration::from_millis);
+        let signal = TaskSignal::new(self.observer_notify.clone());
+        let operation_signal = signal.clone();
+        let task = match catch_unwind(AssertUnwindSafe(|| {
+            self.manager.spawn(options, move |context| {
+                let drop_hint = NotifyOnDrop {
+                    signal: operation_signal.clone(),
+                };
+                let managed = ManagedTaskContext {
+                    inner: context,
+                    signal: operation_signal,
+                };
+                let future: TaskFuture = match catch_unwind(AssertUnwindSafe(|| {
+                    make_future(managed)
+                })) {
+                    Ok(future) => contain_task_future(future),
+                    Err(panic) => {
+                        discard_panic_payload(panic);
+                        Box::pin(async { Err(panic_task_exit("task operation factory panicked")) })
+                    }
+                };
 
-            Box::pin(async move {
-                let drop_hint = drop_hint;
-                let result = future.await;
-                drop(drop_hint);
-                result
+                Box::pin(async move {
+                    let drop_hint = drop_hint;
+                    let result = future.await;
+                    drop(drop_hint);
+                    result
+                })
             })
-        });
+        })) {
+            Ok(task) => task,
+            Err(panic) => {
+                discard_panic_payload(panic);
+                self.force_close();
+                return Err(TaskAuthorityError::StateUnavailable);
+            }
+        };
 
-        if self.is_closed()? {
-            self.manager.shutdown();
-            return Err(TaskAuthorityError::Closed);
+        // Keep this reservation until the RMCP record is published, confirmed
+        // absent, or drained by shutdown. The permit covers that interval.
+        {
+            let mut state = self.lock_state()?;
+            state.reserved_leases = state.reserved_leases.saturating_sub(1);
+            let created_at = std::time::Instant::now();
+            state.leases.insert(
+                task.task_id.clone(),
+                LeaseInfo {
+                    ttl,
+                    created_at,
+                    next_probe_at: ttl.and_then(|ttl| created_at.checked_add(ttl)),
+                    observed_signal_generation: 0,
+                },
+            );
+        }
+
+        match self.is_closed() {
+            Ok(true) => {
+                self.force_close();
+                return Err(TaskAuthorityError::Closed);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.force_close();
+                return Err(error);
+            }
         }
 
         let initial = match self.manager.get_task(&task.task_id) {
             Ok(task) => task,
             Err(error) => {
-                if self.is_closed()? {
-                    self.manager.shutdown();
-                    return Err(TaskAuthorityError::Closed);
+                match self.is_closed() {
+                    Ok(true) => {
+                        self.force_close();
+                        return Err(TaskAuthorityError::Closed);
+                    }
+                    Ok(false) => {}
+                    Err(state_error) => {
+                        self.force_close();
+                        return Err(state_error);
+                    }
                 }
-                let _ = self.manager.cancel_task(&task.task_id);
+                // `get_task` is the authoritative absence confirmation. This
+                // materialization never reached binding publication, so its
+                // lease can now be released safely.
+                match self.state.lock() {
+                    Ok(mut state) => {
+                        state.leases.remove(&task.task_id);
+                    }
+                    Err(_) => {
+                        self.force_close();
+                        return Err(TaskAuthorityError::StateUnavailable);
+                    }
+                }
                 return Err(TaskAuthorityError::Rmcp(error));
             }
         };
-        let binding = Arc::new(TaskBinding::new(principal, initial, notify));
+        let binding = Arc::new(TaskBinding::new(principal, initial, signal));
+        if let Ok(mut last_read_at) = binding.last_read_at.lock() {
+            *last_read_at = Some(std::time::Instant::now());
+        }
 
-        let lifecycle = self.lock_lifecycle()?;
+        let lifecycle = match self.lock_lifecycle() {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                self.force_close();
+                return Err(error);
+            }
+        };
         if *lifecycle {
             drop(lifecycle);
-            self.manager.shutdown();
+            self.force_close();
             return Err(TaskAuthorityError::Closed);
         }
         let mut state = match self.state.lock() {
@@ -452,10 +708,25 @@ impl TaskAuthority {
             self.force_close();
             return Err(TaskAuthorityError::StateUnavailable);
         }
-        state.prune_queue.push_back(task.task_id.clone());
+        let principal_queue_was_empty = state
+            .observer_tasks
+            .get(&binding.principal)
+            .is_none_or(VecDeque::is_empty);
+        state
+            .observer_tasks
+            .entry(binding.principal.clone())
+            .or_default()
+            .push_back(task.task_id.clone());
+        if principal_queue_was_empty {
+            state
+                .observer_principals
+                .push_back(binding.principal.clone());
+        }
         state.bindings.insert(task.task_id.clone(), binding);
         drop(state);
         drop(lifecycle);
+        self.start_observer();
+        self.observer_notify.notify_one();
         Ok(task)
     }
 
@@ -466,9 +737,10 @@ impl TaskAuthority {
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
+        let signal_generation = binding.signal.generation();
         let task = self.manager.get_task(task_id);
         if let Ok(task) = task {
-            return self.observe_or_close(&binding, task);
+            return self.observe_or_close(&binding, task_id, task, signal_generation);
         }
         self.remove_binding(task_id);
         if self.is_closed()? {
@@ -522,11 +794,11 @@ impl TaskAuthority {
     /// Waits for an observed newer revision or a terminal RMCP task state.
     ///
     /// Wake-up hints cover Toolkit-controlled transitions immediately. A drop
-    /// hint nudges observers when the operation future is cancelled, aborted,
-    /// panics, or otherwise leaves scope. A bounded 250 ms observation tick
-    /// remains the correctness fallback for RMCP-owned transitions, including
-    /// terminal completion and TTL expiry. Returns `Ok(None)` when the timeout
-    /// expires.
+    /// hint creates a settlement obligation that the shared observer retries
+    /// until RMCP publishes terminal state, expires the record, or shutdown
+    /// closes the authority. The shared observer schedules TTL readbacks and
+    /// applies one aggregate caller-configured read budget across task IDs.
+    /// Returns `Ok(None)` when the timeout expires.
     pub async fn wait(
         &self,
         principal: &TaskPrincipal,
@@ -536,37 +808,34 @@ impl TaskAuthority {
         condition: TaskWaitCondition,
     ) -> Result<Option<AuthorizedTaskSnapshot>, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
-        let initial = self.get_task_for_principal(principal, task_id)?;
-        let baseline = after_revision.unwrap_or(initial.revision);
-
-        if Self::wait_condition_ready(condition, baseline, &initial) {
-            return Ok(Some(initial));
-        }
-
+        let _waiter = self.register_waiter()?;
         let wait = async {
+            let initial = self.observe_wait_initial(&binding, task_id).await?;
+            let baseline = after_revision.unwrap_or(initial.revision);
+            if Self::wait_condition_ready(condition, baseline, &initial) {
+                return Ok(initial);
+            }
             loop {
-                // `notify_waiters` records its generation when `notified()` is
-                // created, so constructing this future before the read closes
-                // the read-to-await wake-up race even before the future is
-                // polled.
-                let notified = binding.notify.notified();
-                let snapshot = self.get_task_for_principal(principal, task_id)?;
+                let notified = binding.signal.waiters.notified();
+                let snapshot = binding.snapshot()?;
                 if Self::wait_condition_ready(condition, baseline, &snapshot) {
                     return Ok(snapshot);
                 }
-
-                tokio::select! {
-                    _ = notified => {}
-                    _ = tokio::time::sleep(OBSERVATION_TICK) => {}
+                if self.is_closed()? {
+                    return Err(TaskAuthorityError::Closed);
                 }
+                notified.await;
             }
         };
 
-        let outcome = tokio::time::timeout(timeout, wait).await;
-        if let Ok(result) = outcome {
-            return result.map(Some);
+        let outcome = {
+            let timeout_future = tokio::time::timeout(timeout, wait);
+            timeout_future.await
+        };
+        match outcome {
+            Ok(result) => result.map(Some),
+            Err(_) => Ok(None),
         }
-        Ok(None)
     }
 
     /// Returns the number of currently non-terminal RMCP tasks.
@@ -587,6 +856,25 @@ impl TaskAuthority {
         close_and_drain(&self.manager, &self.state, &self.lifecycle);
     }
 
+    fn start_observer(&self) {
+        if self
+            .observer_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        tokio::spawn(observation_loop(
+            self.manager.clone(),
+            Arc::downgrade(&self.state),
+            Arc::downgrade(&self.lifecycle),
+            self.observer_notify.clone(),
+            self.fallback_window.clone(),
+            self.config,
+            self.metrics.clone(),
+        ));
+    }
+
     fn wait_condition_ready(
         condition: TaskWaitCondition,
         baseline: u64,
@@ -603,9 +891,10 @@ impl TaskAuthority {
         binding: &TaskBinding,
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        let signal_generation = binding.signal.generation();
         let task = self.manager.get_task(task_id);
         if let Ok(task) = task {
-            return self.observe_or_close(binding, task);
+            return self.observe_or_close(binding, task_id, task, signal_generation);
         }
         self.remove_binding(task_id);
         if self.is_closed()? {
@@ -617,10 +906,41 @@ impl TaskAuthority {
     fn observe_or_close(
         &self,
         binding: &TaskBinding,
+        task_id: &str,
         task: DetailedTask,
+        signal_generation: u64,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         match binding.observe(task) {
-            Ok(snapshot) => Ok(snapshot),
+            Ok(snapshot) => {
+                if let Ok(mut last_read_at) = binding.last_read_at.lock() {
+                    *last_read_at = Some(std::time::Instant::now());
+                }
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        self.force_close();
+                        return Err(TaskAuthorityError::StateUnavailable);
+                    }
+                };
+                if let Some(lease) = state.leases.get_mut(task_id) {
+                    lease.observed_signal_generation = signal_generation;
+                    if snapshot.task.status().is_terminal() {
+                        binding
+                            .signal
+                            .settlement_pending
+                            .store(false, Ordering::Release);
+                        lease.next_probe_at = lease
+                            .ttl
+                            .and_then(|ttl| std::time::Instant::now().checked_add(ttl));
+                    } else if binding.signal.is_settlement_pending() {
+                        lease.next_probe_at =
+                            std::time::Instant::now().checked_add(SETTLEMENT_RECHECK);
+                    }
+                }
+                drop(state);
+                binding.observation_done.notify_waiters();
+                Ok(snapshot)
+            }
             Err(error) => {
                 self.force_close();
                 Err(error)
@@ -646,50 +966,12 @@ impl TaskAuthority {
         Ok(binding)
     }
 
-    /// Probe one existing binding per spawn rather than probing every binding.
-    ///
-    /// RMCP 3.4.1 performs a full TTL sweep inside every `get_task`, so calling
-    /// `get_task` for every local binding makes cleanup quadratic. The rotation
-    /// queue bounds the extra RMCP liveness probes to one per new task while
-    /// still eventually removing stale local authority records under continued
-    /// task creation.
-    fn prune_one_stale_binding(&self) -> Result<usize, TaskAuthorityError> {
-        self.ensure_open()?;
-        let candidate = {
-            let mut state = self.lock_state()?;
-            loop {
-                match state.prune_queue.pop_front() {
-                    Some(task_id) if state.bindings.contains_key(&task_id) => break Some(task_id),
-                    Some(_) => {}
-                    None => break None,
-                }
-            }
-        };
-        let Some(task_id) = candidate else {
-            return Ok(0);
-        };
-
-        let live = self.manager.get_task(&task_id).is_ok();
-        let mut state = self.lock_state()?;
-        if live {
-            if state.bindings.contains_key(&task_id) {
-                state.prune_queue.push_back(task_id);
-            }
-            return Ok(0);
-        }
-
-        let removed = state.bindings.remove(&task_id);
-        drop(state);
-        if let Some(binding) = removed {
-            binding.hint();
-            return Ok(1);
-        }
-        Ok(0)
-    }
-
     fn remove_binding(&self, task_id: &str) {
         let removed = match self.state.lock() {
-            Ok(mut state) => state.bindings.remove(task_id),
+            Ok(mut state) => {
+                state.leases.remove(task_id);
+                state.bindings.remove(task_id)
+            }
             Err(_) => {
                 self.force_close();
                 return;
@@ -706,6 +988,100 @@ impl TaskAuthority {
         } else {
             Ok(())
         }
+    }
+
+    fn reserve_capacity(&self) -> Result<(), TaskAuthorityError> {
+        self.ensure_open()?;
+        let mut state = self.lock_state()?;
+        if state.leases.len() + state.reserved_leases >= self.config.max_retained_tasks.get() {
+            return Err(TaskAuthorityError::CapacityReached);
+        }
+        state.reserved_leases += 1;
+        Ok(())
+    }
+
+    fn register_waiter(&self) -> Result<WaiterLease, TaskAuthorityError> {
+        let mut state = self.lock_state()?;
+        if state.active_waiters >= self.config.max_waiters.get() {
+            self.metrics.rejected_waits.fetch_add(1, Ordering::Relaxed);
+            return Err(TaskAuthorityError::WaiterCapacityReached);
+        }
+        state.active_waiters += 1;
+        Ok(WaiterLease {
+            state: self.state.clone(),
+        })
+    }
+
+    async fn observe_wait_initial(
+        &self,
+        binding: &TaskBinding,
+        task_id: &str,
+    ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        let clean_cached_read = binding
+            .last_read_at
+            .lock()
+            .map_err(|_| TaskAuthorityError::StateUnavailable)?
+            .is_some_and(|last| last.elapsed() < SETTLEMENT_RECHECK)
+            && self
+                .state
+                .lock()
+                .map_err(|_| TaskAuthorityError::StateUnavailable)?
+                .leases
+                .get(task_id)
+                .is_some_and(|lease| {
+                    lease.observed_signal_generation == binding.signal.generation()
+                        && !binding.signal.is_settlement_pending()
+                });
+        if clean_cached_read {
+            self.metrics.coalesced_reads.fetch_add(1, Ordering::Relaxed);
+            return binding.snapshot();
+        }
+
+        // Initial waiter observations use the same fair coordinator and global
+        // fallback budget as later readbacks. Multiple waiters on this task
+        // advance one generation and can be satisfied by a shared read.
+        let target_generation = binding.signal.hint(false);
+        self.observer_notify.notify_one();
+        loop {
+            let notified = binding.observation_done.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(snapshot) =
+                self.wait_observation_snapshot(binding, task_id, target_generation)?
+            {
+                return Ok(snapshot);
+            }
+            notified.await;
+        }
+    }
+
+    fn wait_observation_snapshot(
+        &self,
+        binding: &TaskBinding,
+        task_id: &str,
+        target_generation: u64,
+    ) -> Result<Option<AuthorizedTaskSnapshot>, TaskAuthorityError> {
+        let observed_generation = {
+            let state = self.lock_state()?;
+            state
+                .leases
+                .get(task_id)
+                .map(|lease| lease.observed_signal_generation)
+        };
+        let Some(observed_generation) = observed_generation else {
+            return if self.is_closed()? {
+                Err(TaskAuthorityError::Closed)
+            } else {
+                Err(TaskAuthorityError::TaskNotFound)
+            };
+        };
+        if observed_generation >= target_generation {
+            return binding.snapshot().map(Some);
+        }
+        if self.is_closed()? {
+            return Err(TaskAuthorityError::Closed);
+        }
+        Ok(None)
     }
 
     fn is_closed(&self) -> Result<bool, TaskAuthorityError> {
@@ -740,6 +1116,294 @@ impl TaskAuthority {
 
     fn force_close(&self) {
         close_and_drain(&self.manager, &self.state, &self.lifecycle);
+    }
+}
+
+async fn observation_loop(
+    manager: TaskManager,
+    state: std::sync::Weak<Mutex<AuthorityState>>,
+    lifecycle: std::sync::Weak<AuthorityLifecycle>,
+    observer_notify: Arc<Notify>,
+    fallback_window: Arc<Mutex<VecDeque<std::time::Instant>>>,
+    config: TaskAuthorityConfig,
+    metrics: Arc<AtomicMetrics>,
+) {
+    let Some(lifecycle_owner) = lifecycle.upgrade() else {
+        return;
+    };
+    let stop = lifecycle_owner.observer_stop.clone();
+    drop(lifecycle_owner);
+
+    loop {
+        let notified = observer_notify.notified();
+        let next_probe = {
+            let Some(lifecycle_owner) = lifecycle.upgrade() else {
+                return;
+            };
+            let Ok(closed) = lifecycle_owner.closed.lock() else {
+                manager.shutdown();
+                return;
+            };
+            if *closed {
+                return;
+            }
+            let Some(state_owner) = state.upgrade() else {
+                return;
+            };
+            let Ok(mut state) = state_owner.lock() else {
+                manager.shutdown();
+                return;
+            };
+            drop(closed);
+            drop(lifecycle_owner);
+
+            let now = std::time::Instant::now();
+            let mut earliest = state
+                .leases
+                .values()
+                .filter_map(|lease| lease.next_probe_at)
+                .min();
+            let mut selected = None;
+            let principal_turns = state.observer_principals.len();
+            for _ in 0..principal_turns {
+                let Some(principal) = state.observer_principals.pop_front() else {
+                    break;
+                };
+                let task_turns = state
+                    .observer_tasks
+                    .get(&principal)
+                    .map_or(0, VecDeque::len);
+                if task_turns == 0 {
+                    state.observer_tasks.remove(&principal);
+                    continue;
+                }
+                // Inspect this bounded principal bucket in full. A clean task
+                // at the front must not hide a due task behind it when the
+                // global read window reopens.
+                for _ in 0..task_turns {
+                    let Some(task_id) = state
+                        .observer_tasks
+                        .get_mut(&principal)
+                        .and_then(VecDeque::pop_front)
+                    else {
+                        break;
+                    };
+                    if let Some(binding) = state.bindings.get(&task_id).cloned() {
+                        let generation = binding.signal.generation();
+                        let lease = state.leases.get(&task_id);
+                        let due = lease.is_some_and(|lease| {
+                            generation != lease.observed_signal_generation
+                                || lease.next_probe_at.is_some_and(|deadline| deadline <= now)
+                                || (binding.signal.is_settlement_pending()
+                                    && lease.next_probe_at.is_none_or(|deadline| deadline <= now))
+                        });
+                        if due && selected.is_none() {
+                            selected = Some((task_id.clone(), binding.clone(), generation));
+                        }
+                        if let Some(deadline) = lease.and_then(|lease| lease.next_probe_at) {
+                            earliest =
+                                Some(earliest.map_or(deadline, |current| current.min(deadline)));
+                        }
+
+                        state
+                            .observer_tasks
+                            .entry(principal.clone())
+                            .or_default()
+                            .push_back(task_id);
+                    }
+                }
+                if selected.is_some() {
+                    // Preserve the selected principal at the front while the
+                    // shared read window is closed. Advance it only after an
+                    // actual RMCP observation completes.
+                    state.observer_principals.push_front(principal);
+                    break;
+                }
+                if state
+                    .observer_tasks
+                    .get(&principal)
+                    .is_some_and(|queue| !queue.is_empty())
+                {
+                    // This principal had no due task. Rotate it so another
+                    // principal can use the next shared read slot.
+                    state.observer_principals.push_back(principal);
+                } else {
+                    state.observer_tasks.remove(&principal);
+                }
+            }
+            (selected, earliest)
+        };
+
+        let (selected, deadline) = next_probe;
+        let Some((task_id, binding, generation)) = selected else {
+            // No task is due yet. Wake on hints or the nearest known TTL edge.
+            if let Some(deadline) = deadline {
+                tokio::select! {
+                    _ = notified => {},
+                    _ = stop.notified() => return,
+                    _ = tokio::time::sleep_until(deadline.into()) => {},
+                }
+            } else {
+                tokio::select! {
+                    _ = notified => {},
+                    _ = stop.notified() => return,
+                }
+            }
+            continue;
+        };
+
+        let delay = {
+            let mut window = match fallback_window.lock() {
+                Ok(window) => window,
+                Err(_) => {
+                    manager.shutdown();
+                    return;
+                }
+            };
+            let now = std::time::Instant::now();
+            while window
+                .front()
+                .is_some_and(|time| now.duration_since(*time) >= Duration::from_secs(1))
+            {
+                window.pop_front();
+            }
+            if window.len() < config.fallback_reads_per_second.get() {
+                window.push_back(now);
+                Duration::ZERO
+            } else {
+                window
+                    .front()
+                    .map(|time| Duration::from_secs(1).saturating_sub(now.duration_since(*time)))
+                    .unwrap_or(Duration::ZERO)
+            }
+        };
+        if !delay.is_zero() {
+            tokio::select! {
+                _ = stop.notified() => return,
+                _ = tokio::time::sleep(delay) => {},
+            }
+            // Re-evaluate deadlines and fair queues before spending a slot.
+            continue;
+        }
+
+        let _read_guard = binding.read_gate.lock().await;
+        let recent_read = binding
+            .last_read_at
+            .lock()
+            .ok()
+            .and_then(|last| *last)
+            .filter(|last| last.elapsed() < SETTLEMENT_RECHECK);
+        let clean_since_last_read = match state.upgrade() {
+            Some(state_owner) => match state_owner.lock() {
+                Ok(state) => state.leases.get(&task_id).is_some_and(|lease| {
+                    lease.observed_signal_generation == binding.signal.generation()
+                        && !binding.signal.is_settlement_pending()
+                }),
+                Err(_) => false,
+            },
+            None => false,
+        };
+        if let Some(last_read) = recent_read.filter(|_| clean_since_last_read) {
+            if let Some(state_owner) = state.upgrade() {
+                let lock_result = state_owner.lock();
+                if let Ok(mut state) = lock_result {
+                    if let Some(lease) = state.leases.get_mut(&task_id) {
+                        lease.next_probe_at = lease.ttl.and_then(|ttl| {
+                            lease
+                                .created_at
+                                .checked_add(ttl)
+                                .zip(last_read.checked_add(SETTLEMENT_RECHECK))
+                                .map(|(deadline, coalesce_deadline)| {
+                                    deadline.max(coalesce_deadline)
+                                })
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+
+        metrics.fallback_reads.fetch_add(1, Ordering::Relaxed);
+        let started = std::time::Instant::now();
+        let result = manager.get_task(&task_id);
+        metrics.observation_latency_micros.fetch_add(
+            started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+        if let Ok(mut last_read_at) = binding.last_read_at.lock() {
+            *last_read_at = Some(std::time::Instant::now());
+        }
+        let Some(state_owner) = state.upgrade() else {
+            return;
+        };
+        match result {
+            Ok(task) => {
+                if binding.observe(task.clone()).is_err() {
+                    manager.shutdown();
+                    return;
+                }
+                let now = std::time::Instant::now();
+                let signal_generation = binding.signal.generation();
+                let terminal = task.status().is_terminal();
+                if terminal {
+                    binding
+                        .signal
+                        .settlement_pending
+                        .store(false, Ordering::Release);
+                }
+                let Ok(mut state) = state_owner.lock() else {
+                    manager.shutdown();
+                    return;
+                };
+                if let Some(lease) = state.leases.get_mut(&task_id) {
+                    if signal_generation == generation {
+                        lease.observed_signal_generation = signal_generation;
+                    }
+                    if terminal {
+                        lease.next_probe_at = lease.ttl.and_then(|ttl| now.checked_add(ttl));
+                    } else if binding.signal.is_settlement_pending() {
+                        lease.next_probe_at = now.checked_add(SETTLEMENT_RECHECK);
+                    } else {
+                        lease.next_probe_at =
+                            lease.ttl.and_then(|ttl| lease.created_at.checked_add(ttl));
+                    }
+                }
+                rotate_observer_task_to_back(
+                    state
+                        .observer_tasks
+                        .entry(binding.principal.clone())
+                        .or_default(),
+                    &task_id,
+                );
+                rotate_observer_principal_to_back(
+                    &mut state.observer_principals,
+                    &binding.principal,
+                );
+                drop(state);
+                binding.observation_done.notify_waiters();
+            }
+            Err(_) => {
+                let Ok(mut state) = state_owner.lock() else {
+                    manager.shutdown();
+                    return;
+                };
+                state.bindings.remove(&task_id);
+                state.leases.remove(&task_id);
+                rotate_observer_task_to_back(
+                    state
+                        .observer_tasks
+                        .entry(binding.principal.clone())
+                        .or_default(),
+                    &task_id,
+                );
+                rotate_observer_principal_to_back(
+                    &mut state.observer_principals,
+                    &binding.principal,
+                );
+                drop(state);
+                binding.hint();
+            }
+        }
     }
 }
 
