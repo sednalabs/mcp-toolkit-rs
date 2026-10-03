@@ -11,6 +11,19 @@ fn principal(value: &str) -> TaskPrincipal {
     TaskPrincipal::new(value).expect("valid principal")
 }
 
+fn test_config() -> TaskAuthorityConfig {
+    limited_config(1024, 1024, 1024)
+}
+
+fn limited_config(tasks: usize, waiters: usize, reads_per_second: usize) -> TaskAuthorityConfig {
+    TaskAuthorityConfig {
+        max_retained_tasks: NonZeroUsize::new(tasks).expect("nonzero task capacity"),
+        max_waiters: NonZeroUsize::new(waiters).expect("nonzero waiter capacity"),
+        fallback_reads_per_second: NonZeroUsize::new(reads_per_second)
+            .expect("nonzero read budget"),
+    }
+}
+
 fn ok_result(text: &str) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(text.to_string())])
 }
@@ -40,6 +53,165 @@ fn binding_count(authority: &TaskAuthority) -> usize {
         .len()
 }
 
+#[tokio::test]
+async fn retained_capacity_counts_terminal_records_and_unlimited_ttl() {
+    let authority = TaskAuthority::new(limited_config(1, 4, 4));
+    let owner = principal("owner-a");
+    let first = authority
+        .spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("done")) })
+        })
+        .expect("first task admitted");
+    let terminal = authority
+        .wait(
+            &owner,
+            &first.task_id,
+            None,
+            Duration::from_secs(2),
+            TaskWaitCondition::Terminal,
+        )
+        .await
+        .expect("wait succeeds")
+        .expect("terminal task returned");
+    assert!(terminal.task.status().is_terminal());
+    assert!(matches!(
+        authority.spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("must not run")) })
+        }),
+        Err(TaskAuthorityError::CapacityReached)
+    ));
+
+    authority.shutdown();
+    let unlimited = TaskAuthority::new(limited_config(1, 4, 4));
+    unlimited
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| Box::pin(async { Ok(ok_result("retained")) }),
+        )
+        .expect("unlimited-retention task admitted");
+    assert!(matches!(
+        unlimited.spawn_for_principal(owner, TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("must not run")) })
+        }),
+        Err(TaskAuthorityError::CapacityReached)
+    ));
+}
+
+#[tokio::test]
+async fn ttl_failure_keeps_capacity_until_rmcp_evicts_the_record() {
+    let authority = TaskAuthority::new(limited_config(1, 4, 4));
+    let owner = principal("owner-a");
+    authority
+        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(20), |_ctx| {
+            Box::pin(async { std::future::pending::<Result<CallToolResult, TaskExit>>().await })
+        })
+        .expect("task admitted");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(matches!(
+        authority.spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("too early")) })
+        }),
+        Err(TaskAuthorityError::CapacityReached)
+    ));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    authority
+        .spawn_for_principal(owner, TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("after eviction")) })
+        })
+        .expect("capacity released only after actual RMCP eviction");
+}
+
+#[tokio::test]
+async fn waiter_capacity_is_authorized_before_registration_and_released_on_cancel() {
+    let authority = Arc::new(TaskAuthority::new(limited_config(4, 1, 2)));
+    let owner = principal("owner-a");
+    let (started_tx, started_rx) = oneshot::channel();
+    let task = authority
+        .spawn_for_principal(owner.clone(), TaskOptions::default(), move |_ctx| {
+            Box::pin(async move {
+                let _ = started_tx.send(());
+                std::future::pending::<Result<CallToolResult, TaskExit>>().await
+            })
+        })
+        .expect("task admitted");
+    let waiter_authority = authority.clone();
+    let waiter_owner = owner.clone();
+    let task_id = task.task_id.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_authority
+            .wait(
+                &waiter_owner,
+                &task_id,
+                None,
+                Duration::from_secs(30),
+                TaskWaitCondition::Terminal,
+            )
+            .await
+    });
+    let _ = started_rx.await;
+    tokio::task::yield_now().await;
+    assert!(matches!(
+        authority
+            .wait(
+                &owner,
+                &task.task_id,
+                None,
+                Duration::from_secs(1),
+                TaskWaitCondition::Terminal,
+            )
+            .await,
+        Err(TaskAuthorityError::WaiterCapacityReached)
+    ));
+    waiter.abort();
+    let _ = waiter.await;
+    assert_eq!(authority.metrics().active_waiters, 0);
+}
+
+#[tokio::test]
+async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
+    let authority = Arc::new(TaskAuthority::new(limited_config(8, 32, 2)));
+    let owner = principal("owner-a");
+    let mut task_ids = Vec::new();
+    for _ in 0..4 {
+        let task = authority
+            .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(80), |_ctx| {
+                Box::pin(async { std::future::pending::<Result<CallToolResult, TaskExit>>().await })
+            })
+            .expect("task admitted");
+        task_ids.push(task.task_id);
+    }
+
+    let mut waiters = Vec::new();
+    for task_id in &task_ids {
+        for _ in 0..3 {
+            let authority = authority.clone();
+            let owner = owner.clone();
+            let task_id = task_id.clone();
+            waiters.push(tokio::spawn(async move {
+                authority
+                    .wait(
+                        &owner,
+                        &task_id,
+                        None,
+                        Duration::from_secs(6),
+                        TaskWaitCondition::Terminal,
+                    )
+                    .await
+            }));
+        }
+    }
+
+    for waiter in waiters {
+        let result = waiter.await.expect("waiter task joins");
+        assert!(result.expect("wait succeeds").is_some());
+    }
+    let metrics = authority.metrics();
+    assert_eq!(metrics.active_waiters, 0);
+    assert!(metrics.coalesced_reads >= 4);
+    assert!(metrics.fallback_reads <= 16);
+}
+
 #[test]
 fn principal_identity_is_exact_and_surrounding_whitespace_is_rejected() {
     let owner = TaskPrincipal::new("owner-a").expect("principal");
@@ -63,8 +235,47 @@ fn principal_identity_is_exact_and_surrounding_whitespace_is_rejected() {
 }
 
 #[tokio::test]
+async fn concurrent_creation_reserves_the_exact_retained_capacity_limit() {
+    let authority = Arc::new(TaskAuthority::new(limited_config(1, 4, 2)));
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let runtime = tokio::runtime::Handle::current();
+    let mut workers = Vec::new();
+    for owner in ["owner-a", "owner-b"] {
+        let authority = authority.clone();
+        let barrier = barrier.clone();
+        let runtime = runtime.clone();
+        workers.push(std::thread::spawn(move || {
+            let _entered = runtime.enter();
+            barrier.wait();
+            authority.spawn_for_principal(
+                principal(owner),
+                TaskOptions::new().with_ttl_ms(None),
+                |_ctx| {
+                    Box::pin(async {
+                        std::future::pending::<Result<CallToolResult, TaskExit>>().await
+                    })
+                },
+            )
+        }));
+    }
+    barrier.wait();
+    let outcomes = workers
+        .into_iter()
+        .map(|worker| worker.join().expect("worker returns"))
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, Err(TaskAuthorityError::CapacityReached)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn cross_principal_task_access_is_concealed() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let other = principal("owner-b");
     let task = authority
@@ -96,7 +307,7 @@ async fn cross_principal_task_access_is_concealed() {
 
 #[tokio::test]
 async fn repeated_reads_keep_revision_stable_without_rmcp_change() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(owner.clone(), TaskOptions::default(), |ctx| {
@@ -123,7 +334,7 @@ async fn repeated_reads_keep_revision_stable_without_rmcp_change() {
 
 #[tokio::test]
 async fn status_message_change_wakes_revision_waiter() {
-    let authority = Arc::new(TaskAuthority::new());
+    let authority = Arc::new(TaskAuthority::new(test_config()));
     let owner = principal("owner-a");
     let (context_tx, context_rx) = oneshot::channel::<ManagedTaskContext>();
     let task = authority
@@ -174,7 +385,7 @@ async fn status_message_change_wakes_revision_waiter() {
 
 #[tokio::test]
 async fn input_required_update_and_completion_are_observed_from_rmcp_state() {
-    let authority = Arc::new(TaskAuthority::new());
+    let authority = Arc::new(TaskAuthority::new(test_config()));
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(owner.clone(), TaskOptions::default(), |ctx| {
@@ -236,7 +447,7 @@ async fn input_required_update_and_completion_are_observed_from_rmcp_state() {
 
 #[tokio::test]
 async fn owner_cancel_reaches_terminal_state() {
-    let authority = Arc::new(TaskAuthority::new());
+    let authority = Arc::new(TaskAuthority::new(test_config()));
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(owner.clone(), TaskOptions::default(), |ctx| {
@@ -266,7 +477,7 @@ async fn owner_cancel_reaches_terminal_state() {
 
 #[tokio::test]
 async fn synchronous_factory_panic_is_contained_as_failed_task() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(
@@ -293,7 +504,7 @@ async fn synchronous_factory_panic_is_contained_as_failed_task() {
 
 #[tokio::test]
 async fn asynchronous_operation_panic_is_contained_as_failed_task() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(
@@ -351,7 +562,7 @@ impl Drop for ReadyDropPanicFuture {
 
 #[tokio::test]
 async fn operation_destructor_panic_is_contained_as_failed_task() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(
@@ -394,7 +605,7 @@ impl From<PanicMessage> for String {
 
 #[tokio::test]
 async fn status_message_conversion_panic_does_not_poison_rmcp_manager() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(None), |ctx| {
@@ -430,7 +641,7 @@ async fn status_message_conversion_panic_does_not_poison_rmcp_manager() {
 
 #[tokio::test]
 async fn panicking_update_iterator_does_not_poison_rmcp_manager() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(owner.clone(), TaskOptions::default(), |ctx| {
@@ -480,7 +691,7 @@ impl Drop for DropSignalFuture {
 async fn dropping_last_authority_handle_aborts_unlimited_task() {
     let (dropped_tx, dropped_rx) = oneshot::channel();
     {
-        let authority = TaskAuthority::new();
+        let authority = TaskAuthority::new(test_config());
         let owner = principal("owner-a");
         authority
             .spawn_for_principal(owner, TaskOptions::new().with_ttl_ms(None), move |_ctx| {
@@ -499,7 +710,7 @@ async fn dropping_last_authority_handle_aborts_unlimited_task() {
 
 #[tokio::test]
 async fn stale_cancel_is_normalized_to_task_not_found_and_drops_binding() {
-    let authority = TaskAuthority::new();
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let task = authority
         .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(10), |_ctx| {
@@ -526,8 +737,8 @@ async fn stale_cancel_is_normalized_to_task_not_found_and_drops_binding() {
 }
 
 #[tokio::test]
-async fn stale_binding_pruning_is_incremental_after_rmcp_global_sweep() {
-    let authority = TaskAuthority::new();
+async fn observer_releases_stale_bindings_after_rmcp_global_sweep() {
+    let authority = TaskAuthority::new(test_config());
     let owner = principal("owner-a");
     let first = authority
         .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(10), |_ctx| {
@@ -547,16 +758,13 @@ async fn stale_binding_pruning_is_incremental_after_rmcp_global_sweep() {
         .expect("spawn second task");
 
     assert_eq!(binding_count(&authority), 2);
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(authority.prune_one_stale_binding().expect("first probe"), 0);
-    tokio::time::sleep(Duration::from_millis(20)).await;
-
-    assert_eq!(
-        authority.prune_one_stale_binding().expect("second probe"),
-        1
-    );
-    assert_eq!(binding_count(&authority), 1);
-    assert_eq!(authority.prune_one_stale_binding().expect("third probe"), 1);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while binding_count(&authority) != 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("observer eventually confirms both evictions");
     assert_eq!(binding_count(&authority), 0);
 
     assert!(authority.manager.get_task(&first.task_id).is_err());
