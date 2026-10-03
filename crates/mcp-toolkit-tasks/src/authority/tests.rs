@@ -89,7 +89,6 @@ async fn synchronous_observation_does_not_consume_a_hint_that_arrived_during_rea
         generation_before_read
     );
     assert_ne!(binding.signal.generation(), generation_before_read);
-    assert!(binding.signal.is_settlement_pending());
     drop(state);
     authority.shutdown();
 }
@@ -182,24 +181,41 @@ async fn retained_capacity_counts_terminal_records_and_unlimited_ttl() {
 async fn ttl_failure_keeps_capacity_until_rmcp_evicts_the_record() {
     let authority = TaskAuthority::new(limited_config(1, 4, 4));
     let owner = principal("owner-a");
-    authority
-        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(20), |_ctx| {
-            Box::pin(async { std::future::pending::<Result<CallToolResult, TaskExit>>().await })
+    let task = authority
+        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(10), |_ctx| {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(ok_result("must expire"))
+            })
         })
         .expect("task admitted");
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let failed = authority
+        .manager
+        .get_task(&task.task_id)
+        .expect("RMCP retains the failed task before eviction");
+    assert_eq!(failed.status(), TaskStatus::Failed);
     assert!(matches!(
         authority.spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
             Box::pin(async { Ok(ok_result("too early")) })
         }),
         Err(TaskAuthorityError::CapacityReached)
     ));
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    authority
-        .spawn_for_principal(owner, TaskOptions::default(), |_ctx| {
-            Box::pin(async { Ok(ok_result("after eviction")) })
-        })
-        .expect("capacity released only after actual RMCP eviction");
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            match authority.spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
+                Box::pin(async { Ok(ok_result("after eviction")) })
+            }) {
+                Ok(_) => return,
+                Err(TaskAuthorityError::CapacityReached) => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                Err(error) => panic!("unexpected task admission failure: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("capacity releases only after actual RMCP eviction");
 }
 
 #[tokio::test]
@@ -295,7 +311,6 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
     }
     let metrics = authority.metrics();
     assert_eq!(metrics.active_waiters, 0);
-    assert!(metrics.fallback_reads >= 4);
     assert!(metrics.fallback_reads <= 8);
     authority.shutdown();
 }

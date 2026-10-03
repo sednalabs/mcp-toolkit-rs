@@ -1266,24 +1266,21 @@ async fn observation_loop(
             None => false,
         };
         if let Some(last_read) = recent_read.filter(|_| clean_since_last_read) {
-            match state.upgrade() {
-                Some(state_owner) => match state_owner.lock() {
-                    Ok(mut state) => {
-                        if let Some(lease) = state.leases.get_mut(&task_id) {
-                            lease.next_probe_at = lease.ttl.and_then(|ttl| {
-                                lease
-                                    .created_at
-                                    .checked_add(ttl)
-                                    .zip(last_read.checked_add(SETTLEMENT_RECHECK))
-                                    .map(|(deadline, coalesce_deadline)| {
-                                        deadline.max(coalesce_deadline)
-                                    })
-                            });
-                        }
+            if let Some(state_owner) = state.upgrade() {
+                let lock_result = state_owner.lock();
+                if let Ok(mut state) = lock_result {
+                    if let Some(lease) = state.leases.get_mut(&task_id) {
+                        lease.next_probe_at = lease.ttl.and_then(|ttl| {
+                            lease
+                                .created_at
+                                .checked_add(ttl)
+                                .zip(last_read.checked_add(SETTLEMENT_RECHECK))
+                                .map(|(deadline, coalesce_deadline)| {
+                                    deadline.max(coalesce_deadline)
+                                })
+                        });
                     }
-                    Err(_) => {}
-                },
-                None => {}
+                }
             }
             continue;
         }
