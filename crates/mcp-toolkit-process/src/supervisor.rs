@@ -17,7 +17,7 @@ use tokio::{
     process::{Child, ChildStderr, ChildStdout, Command},
     sync::watch,
     task::JoinHandle,
-    time::timeout,
+    time::{sleep_until, Instant},
 };
 
 use crate::{
@@ -314,6 +314,48 @@ fn resolve_scope(
     }
 }
 
+const WAIT_ERROR_RETRY_BACKOFF: Duration = Duration::from_millis(10);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GraceAction {
+    ObserveUntil(Instant),
+    AttemptKill,
+    Complete,
+}
+
+struct GraceWindow {
+    deadline: Instant,
+    kill_started: bool,
+}
+
+impl GraceWindow {
+    fn from_term_attempt(attempt: Instant, grace: Duration) -> Self {
+        Self {
+            deadline: attempt + grace,
+            kill_started: false,
+        }
+    }
+
+    fn next_action(&mut self, now: Instant) -> GraceAction {
+        if self.kill_started {
+            GraceAction::Complete
+        } else if now >= self.deadline {
+            self.kill_started = true;
+            GraceAction::AttemptKill
+        } else {
+            GraceAction::ObserveUntil(self.deadline)
+        }
+    }
+
+    fn retry_delay(&self, now: Instant) -> Duration {
+        if now >= self.deadline {
+            Duration::ZERO
+        } else {
+            WAIT_ERROR_RETRY_BACKOFF.min(self.deadline - now)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +454,25 @@ mod tests {
     }
 
     #[test]
+    fn transient_wait_errors_do_not_extend_grace_or_repeat_kill_action() {
+        let term_attempt = Instant::now();
+        let grace = Duration::from_millis(100);
+        let deadline = term_attempt + grace;
+        let mut window = GraceWindow::from_term_attempt(term_attempt, grace);
+
+        // Model repeated wait errors at distinct times; each retry still uses
+        // the original TERM-time deadline and bounds its backoff to that deadline.
+        for elapsed in [Duration::from_millis(10), Duration::from_millis(65)] {
+            let now = term_attempt + elapsed;
+            assert_eq!(window.next_action(now), GraceAction::ObserveUntil(deadline));
+            assert!(window.retry_delay(now) <= deadline - now);
+        }
+
+        assert_eq!(window.next_action(deadline), GraceAction::AttemptKill);
+        assert_eq!(window.next_action(deadline), GraceAction::Complete);
+    }
+
+    #[test]
     fn wait_and_signal_failures_have_distinct_types() {
         let wait = ProcessFailure::Wait(wait_failure(
             io::Error::other("synthetic wait failure"),
@@ -495,22 +556,42 @@ async fn supervise(
         return;
     }
 
+    let term_attempt = Instant::now();
     if let Some(os_pid) = os_pid {
         record_signal(&mut failures, os_pid, scope, ProcessSignal::Terminate);
     }
+    let mut grace_window = GraceWindow::from_term_attempt(term_attempt, grace);
     publish_pending(id, scope, &failures, &status);
-    match timeout(grace, child.wait()).await {
-        Ok(Ok(exit)) => {
-            let _ = status.send(ProcessStatus::Exited {
-                id,
-                scope,
-                status: exit,
-                failures,
-            });
-            return;
+    loop {
+        match grace_window.next_action(Instant::now()) {
+            GraceAction::ObserveUntil(deadline) => {
+                tokio::select! {
+                    biased;
+                    _ = sleep_until(deadline) => break,
+                    result = child.wait() => match result {
+                        Ok(exit) => {
+                            let _ = status.send(ProcessStatus::Exited {
+                                id,
+                                scope,
+                                status: exit,
+                                failures,
+                            });
+                            return;
+                        }
+                        Err(error) => {
+                            record_wait_failure(&mut failures, error, scope);
+                            publish_pending(id, scope, &failures, &status);
+                            let delay = grace_window.retry_delay(Instant::now());
+                            if !delay.is_zero() {
+                                tokio::time::sleep(delay).await;
+                            }
+                        }
+                    }
+                }
+            }
+            GraceAction::AttemptKill => break,
+            GraceAction::Complete => break,
         }
-        Ok(Err(error)) => record_wait_failure(&mut failures, error, scope),
-        Err(_) => {}
     }
 
     if let Some(os_pid) = os_pid {
