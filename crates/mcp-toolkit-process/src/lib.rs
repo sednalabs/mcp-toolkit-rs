@@ -28,6 +28,9 @@
 
 pub mod supervisor;
 
+/// Read-only resource evidence for the current process's Linux cgroup.
+pub mod linux_resources;
+
 use std::fmt;
 
 /// Errors arising from process group management operations.
