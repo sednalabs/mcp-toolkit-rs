@@ -52,6 +52,9 @@ pub use mcp_toolkit_policy_ffi as policy_ffi;
 #[cfg(feature = "process")]
 pub use mcp_toolkit_process as process;
 
+#[cfg(feature = "provenance")]
+pub use mcp_toolkit_provenance as provenance;
+
 #[cfg(feature = "scratchpad")]
 pub use mcp_toolkit_scratchpad as scratchpad;
 

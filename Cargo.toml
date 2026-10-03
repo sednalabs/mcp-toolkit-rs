@@ -15,6 +15,7 @@ members = [
   "crates/mcp-toolkit-postgres",
   "crates/mcp-toolkit-private-artifact",
   "crates/mcp-toolkit-process",
+  "crates/mcp-toolkit-provenance",
   "crates/mcp-toolkit-scratchpad",
   "crates/mcp-toolkit-tasks",
   "crates/mcp-toolkit-testing",
