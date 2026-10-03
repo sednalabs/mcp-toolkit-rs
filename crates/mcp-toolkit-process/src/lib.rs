@@ -23,7 +23,10 @@
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for binding PIDs/PGIDs to authorized operation
-//! handles and for waiting/reaping child processes after termination.
+//! handles, draining child streams, and interpreting child output. The
+//! [`supervisor`] module owns Tokio child waiting and reaping.
+
+pub mod supervisor;
 
 use std::fmt;
 
