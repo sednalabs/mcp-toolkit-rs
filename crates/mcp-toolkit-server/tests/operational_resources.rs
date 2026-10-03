@@ -21,6 +21,14 @@ fn uri_validation_requires_distinct_custom_schemes() {
         Err(OperationalResourceError::InvalidUri)
     );
     assert_eq!(
+        OperationalResourceUris::new("wss://example/status", "example://attestation"),
+        Err(OperationalResourceError::InvalidUri)
+    );
+    assert_eq!(
+        OperationalResourceUris::new("custom://host/%", "example://attestation"),
+        Err(OperationalResourceError::InvalidUri)
+    );
+    assert_eq!(
         OperationalResourceUris::new("example://same", "example://same"),
         Err(OperationalResourceError::DuplicateUris)
     );

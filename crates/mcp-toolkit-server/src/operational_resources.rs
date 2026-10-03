@@ -234,13 +234,102 @@ fn is_custom_resource_uri(uri: &str) -> bool {
         || !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '.' | '-'))
         || matches!(
             scheme.to_ascii_lowercase().as_str(),
-            "http" | "https" | "file" | "ftp"
+            "http"
+                | "https"
+                | "ws"
+                | "wss"
+                | "file"
+                | "ftp"
+                | "ftps"
+                | "sftp"
+                | "ssh"
+                | "git"
+                | "tcp"
+                | "udp"
+                | "telnet"
+                | "ldap"
+                | "ldaps"
+                | "dns"
+                | "mqtt"
+                | "amqp"
+                | "coap"
+                | "coaps"
+                | "imap"
+                | "imaps"
+                | "pop"
+                | "pop3"
+                | "nntp"
+                | "rtsp"
+                | "rtmp"
+                | "mysql"
+                | "postgres"
+                | "redis"
+                | "mongodb"
+                | "smb"
+                | "nfs"
+                | "s3"
+                | "gopher"
+                | "irc"
+                | "ircs"
         )
     {
         return false;
     }
-    let authority = authority_and_path.split('/').next().unwrap_or_default();
-    !authority.is_empty() && !uri.chars().any(|ch| matches!(ch, '?' | '#'))
+    let (authority, path) = authority_and_path
+        .split_once('/')
+        .map_or((authority_and_path, None), |(authority, path)| {
+            (authority, Some(path))
+        });
+    if authority.is_empty()
+        || authority.starts_with('.')
+        || authority.ends_with('.')
+        || !authority
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return false;
+    }
+    let Some(path) = path else {
+        return true;
+    };
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let Some(high) = bytes.next() else {
+                return false;
+            };
+            let Some(low) = bytes.next() else {
+                return false;
+            };
+            if !high.is_ascii_hexdigit() || !low.is_ascii_hexdigit() {
+                return false;
+            }
+        } else if !(byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+            ))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn validate_component_version(
