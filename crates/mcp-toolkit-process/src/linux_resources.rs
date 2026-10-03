@@ -625,6 +625,35 @@ fn parse_u64(value: Option<&&[u8]>) -> Result<u64, SourceUnavailableReason> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let nonce = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "mcp-toolkit-linux-resources-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create private resource test directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn parses_unified_membership_only() {
@@ -727,6 +756,96 @@ mod tests {
         assert_eq!(
             discovery_reason(&io::Error::from(io::ErrorKind::PermissionDenied)),
             DiscoveryFailureReason::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn reads_each_resource_independently_and_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TestDirectory::new();
+        fs::write(directory.path().join("memory.events.local"), b"oom 2\n")
+            .expect("write local OOM fixture");
+        fs::write(
+            directory.path().join("cpu.pressure"),
+            b"some avg10=1.00 avg60=0.50 avg300=0.25 total=42\n",
+        )
+        .expect("write CPU pressure fixture");
+        fs::write(
+            directory.path().join("outside.pressure"),
+            b"some avg10=1.00 avg60=1.00 avg300=1.00 total=9\n",
+        )
+        .expect("write symlink target fixture");
+        symlink(
+            directory.path().join("outside.pressure"),
+            directory.path().join("io.pressure"),
+        )
+        .expect("create symlink fixture");
+        fs::create_dir(directory.path().join("memory.pressure"))
+            .expect("create unreadable resource fixture");
+
+        let oom = read_source(
+            directory.path(),
+            "memory.events.local",
+            parse_memory_events_local,
+        );
+        let cpu = read_source(directory.path(), "cpu.pressure", parse_pressure);
+        let missing = read_source(directory.path(), "missing.pressure", parse_pressure);
+        let directory_read = read_source(directory.path(), "memory.pressure", parse_pressure);
+        let symlink_read = read_source(directory.path(), "io.pressure", parse_pressure);
+
+        assert!(matches!(
+            oom,
+            SourceObservation::Available(MemoryEvents { oom: Some(2), .. })
+        ));
+        assert!(matches!(
+            cpu,
+            SourceObservation::Available(PressureMetrics {
+                some: PressureLine {
+                    total_microseconds: 42,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert_eq!(
+            missing,
+            SourceObservation::Unavailable(SourceUnavailableReason::NotPresent)
+        );
+        assert_eq!(
+            directory_read,
+            SourceObservation::Unavailable(SourceUnavailableReason::IoFailure)
+        );
+        assert_eq!(
+            symlink_read,
+            SourceObservation::Unavailable(SourceUnavailableReason::IoFailure)
+        );
+    }
+
+    #[test]
+    fn source_reads_apply_the_byte_limit_to_real_files() {
+        let directory = TestDirectory::new();
+        fs::write(
+            directory.path().join("cpu.pressure"),
+            vec![b'x'; MAX_RESOURCE_BYTES + 1],
+        )
+        .expect("write oversized resource fixture");
+        assert_eq!(
+            read_source(directory.path(), "cpu.pressure", parse_pressure),
+            SourceObservation::Unavailable(SourceUnavailableReason::TooLarge)
+        );
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod unsupported_platform_tests {
+    use super::{capture_current, CgroupDiscoveryError};
+
+    #[test]
+    fn reports_unsupported_platform_without_fabricating_a_snapshot() {
+        assert_eq!(
+            capture_current(),
+            Err(CgroupDiscoveryError::UnsupportedPlatform)
         );
     }
 }
