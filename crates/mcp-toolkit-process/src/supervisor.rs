@@ -180,9 +180,24 @@ impl ProcessManager {
     /// # Security
     /// The caller supplies the command, arguments and environment and remains
     /// responsible for authorization and output handling.
-    pub fn spawn(&self, mut command: Command) -> Result<RunningProcess, ProcessManagerError> {
+    pub fn spawn(&self, command: Command) -> Result<RunningProcess, ProcessManagerError> {
+        self.spawn_with_registry_lock(command, || {})
+    }
+
+    fn spawn_with_registry_lock(
+        &self,
+        mut command: Command,
+        after_lock: impl FnOnce(),
+    ) -> Result<RunningProcess, ProcessManagerError> {
         tokio::runtime::Handle::try_current()
             .map_err(|_| ProcessManagerError::RuntimeUnavailable)?;
+        // Hold the registry lock through OS spawn and publication so shutdown's
+        // snapshot cannot miss a child created by this call.
+        let mut entries = match self.inner.entries.lock() {
+            Ok(entries) => entries,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        after_lock();
         let scope = resolve_scope(
             self.policy,
             configure_child_process_group(command.as_std_mut()),
@@ -210,10 +225,6 @@ impl ProcessManager {
             status: status_rx.clone(),
             _supervisor: supervisor,
         };
-        let mut entries = match self.inner.entries.lock() {
-            Ok(entries) => entries,
-            Err(poisoned) => poisoned.into_inner(),
-        };
         // The child may exit before the spawned supervisor's first poll.
         // Skip registry retention if its terminal status has already arrived.
         if !entry.status.borrow().is_exited() {
@@ -230,8 +241,9 @@ impl ProcessManager {
 
     /// Requests cleanup for all children and snapshots those not yet reaped.
     ///
-    /// This call is intentionally non-blocking. A returned pending status keeps
-    /// its supervisor and child in the registry; it is never cleanup completion.
+    /// This call serializes with child spawn publication but does not wait for
+    /// process exit or reaping. A returned pending status keeps its supervisor
+    /// and child in the registry; it is never cleanup completion.
     pub fn shutdown(&self) -> ShutdownReport {
         let entries = match self.inner.entries.lock() {
             Ok(entries) => entries,
@@ -601,6 +613,78 @@ fn publish_pending(
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_snapshot_serializes_with_child_spawn_publication() {
+        let manager = ProcessManager::new(Duration::from_millis(20), ProcessGroupPolicy::Required);
+        let (spawn_locked_tx, spawn_locked_rx) = std::sync::mpsc::channel();
+        let (release_spawn_tx, release_spawn_rx) = std::sync::mpsc::channel();
+        let spawn_manager = manager.clone();
+        let spawn_task = tokio::task::spawn_blocking(move || {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 10"]);
+            spawn_manager
+                .spawn_with_registry_lock(command, move || {
+                    spawn_locked_tx
+                        .send(())
+                        .expect("test should still receive spawn barrier");
+                    release_spawn_rx
+                        .recv()
+                        .expect("test should release spawn barrier");
+                })
+                .expect("test child should spawn")
+        });
+        spawn_locked_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("spawn should acquire the registry lock before the OS spawn");
+
+        let (shutdown_started_tx, shutdown_started_rx) = std::sync::mpsc::channel();
+        let (shutdown_report_tx, shutdown_report_rx) = std::sync::mpsc::channel();
+        let shutdown_manager = manager.clone();
+        let shutdown_thread = std::thread::spawn(move || {
+            shutdown_started_tx
+                .send(())
+                .expect("test should receive shutdown start");
+            shutdown_report_tx
+                .send(shutdown_manager.shutdown())
+                .expect("test should receive shutdown report");
+        });
+        shutdown_started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("shutdown thread should start");
+        assert!(matches!(
+            shutdown_report_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        release_spawn_tx
+            .send(())
+            .expect("spawn should be released for publication");
+        let process = spawn_task.await.expect("spawn worker should finish");
+        let id = process.id();
+        let report = shutdown_report_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("shutdown should report the newly published child");
+        shutdown_thread
+            .join()
+            .expect("shutdown worker should finish");
+        assert_eq!(report.pending.len(), 1);
+        assert_eq!(report.pending[0].id(), id);
+        assert!(!report.pending[0].is_exited());
+
+        tokio::time::timeout(Duration::from_secs(3), async move {
+            let mut process = process;
+            while !process.status().is_exited() {
+                process
+                    .changed()
+                    .await
+                    .expect("supervisor should remain alive through shutdown");
+            }
+        })
+        .await
+        .expect("shutdown should request cleanup for the published child");
+    }
 
     #[cfg(unix)]
     #[tokio::test]
