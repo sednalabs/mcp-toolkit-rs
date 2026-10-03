@@ -141,6 +141,10 @@ Future implementations must preserve principal ownership, TTL semantics,
 terminal integrity, and duplicate-execution safety without copying RMCP's task
 state machine into Toolkit.
 
+The proposed restart contract and upstream storage hook are specified in
+[durable RMCP Tasks](durable-rmcp-tasks.md). That design does not claim that a
+store or recovered-task conformance implementation exists in the current SDK.
+
 ## Replay and event retention
 
 Do not conflate Toolkit's existing legacy session recorder with RMCP 3 native

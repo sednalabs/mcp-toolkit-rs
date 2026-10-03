@@ -95,4 +95,8 @@ retaining an authority handle as well; avoid self-retaining reference cycles,
 especially with `ttl_ms: None`.
 
 Durable restart/recovery semantics are intentionally separate and tracked in
-#191. A Rust future cannot be truthfully reconstructed after process death.
+[#191](https://github.com/sednalabs/mcp-toolkit-rs/issues/191). A Rust future
+cannot be truthfully reconstructed after process death. The proposed RMCP
+storage hook and crash contract are specified in
+[durable RMCP Tasks](durable-rmcp-tasks.md); they are not implemented by the
+current SDK pin.

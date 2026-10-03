@@ -12,6 +12,7 @@ question at hand.
 - [Reference-server atlas](reference-server-atlas.md) — living public implementations to study.
 - [Pattern manifests](pattern-manifests.md) and [pattern recipes](pattern-recipes.md) — machine-readable shapes and adoption guidance.
 - [Downstream conformance](downstream-conformance.md) — checking a consuming server against a reference pattern.
+- [Durable RMCP Tasks boundary](durable-rmcp-tasks.md) — persistence, crash recovery, and the proposed RMCP-owned storage seam.
 
 ## Server authors
 
