@@ -342,8 +342,12 @@ impl OpenAiMcpToolSearchConfig {
             _ => Map::new(),
         };
         payload.insert(
-            "historical_minimum_model_for_tool_search".to_string(),
+            "minimum_model_for_tool_search".to_string(),
             json!(self.minimum_model_for_tool_search),
+        );
+        payload.insert(
+            "model_compatibility_status".to_string(),
+            json!("historical"),
         );
         if let Some(approval_override) = &self.optional_trusted_read_only_approval_override {
             payload.insert(
@@ -532,10 +536,8 @@ mod tests {
 
         let value = config.to_documentation_value();
 
-        assert_eq!(
-            value["historical_minimum_model_for_tool_search"],
-            json!("gpt-5.4")
-        );
+        assert_eq!(value["minimum_model_for_tool_search"], json!("gpt-5.4"));
+        assert_eq!(value["model_compatibility_status"], json!("historical"));
         assert!(value["tools"][0]["require_approval"].is_null());
         assert_eq!(
             value["optional_trusted_read_only_approval_override"]["require_approval"]["never"]
