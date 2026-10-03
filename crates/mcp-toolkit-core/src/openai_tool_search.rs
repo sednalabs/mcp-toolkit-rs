@@ -467,9 +467,7 @@ mod tests {
 
     use super::{
         OpenAiMcpServerTool, OpenAiMcpToolSearchConfig, OpenAiMcpToolSearchRequest,
-        OpenAiReadOnlyApprovalOverride, OpenAiToolSearchCapabilities,
-        OPENAI_TOOL_SEARCH_MINIMUM_MODEL, OPENAI_TOOL_SEARCH_RECOMMENDED_MODEL,
-        OPENAI_TOOL_SEARCH_TYPE,
+        OpenAiReadOnlyApprovalOverride, OpenAiToolSearchCapabilities, OPENAI_TOOL_SEARCH_TYPE,
     };
     use serde_json::json;
 
