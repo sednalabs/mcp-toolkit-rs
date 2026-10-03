@@ -778,9 +778,11 @@ async fn handle_get<S>(state: LocalMcpHttpState<S>, req: Request) -> Response
 where
     S: ServerHandler + Send + 'static,
 {
-    // MCP 2026-07-28 GET is stateless and may be used by RMCP for retained-event
-    // replay. Do not apply legacy session preflight to current requests, even if
-    // they also carry a stale legacy session header.
+    // MCP 2026-07-28 removes the GET stream endpoint and protocol-level
+    // sessions. Current requests are forwarded to RMCP, which responds with
+    // 405; retained-event and Last-Event-ID replay belong to legacy sessions.
+    // Do not apply legacy session preflight to current requests, even if they
+    // also carry a stale legacy session header.
     if declares_current_protocol(req.headers()) {
         return forward_service(state.stateful_service, req, "current_stateless_get").await;
     }
