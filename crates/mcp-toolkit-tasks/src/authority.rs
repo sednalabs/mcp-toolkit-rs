@@ -134,7 +134,6 @@ struct ObservedTaskState {
     task: DetailedTask,
 }
 
-#[derive(Debug)]
 struct TaskBinding {
     principal: TaskPrincipal,
     observed: Mutex<ObservedTaskState>,
@@ -1144,12 +1143,11 @@ async fn observation_loop(
                 if let Some(binding) = binding {
                     let generation = binding.signal.generation();
                     let lease = state.leases.get(&task_id);
-                    let dirty = lease.is_some_and(|lease| {
-                        generation != lease.observed_signal_generation
-                            || binding.signal.is_settlement_pending()
-                    });
                     let due = lease.is_some_and(|lease| {
-                        dirty || lease.next_probe_at.is_some_and(|deadline| deadline <= now)
+                        generation != lease.observed_signal_generation
+                            || lease.next_probe_at.is_some_and(|deadline| deadline <= now)
+                            || (binding.signal.is_settlement_pending()
+                                && lease.next_probe_at.is_none_or(|deadline| deadline <= now))
                     });
                     if due && selected.is_none() {
                         selected = Some((task_id.clone(), binding.clone(), generation));
@@ -1234,16 +1232,17 @@ async fn observation_loop(
             .ok()
             .and_then(|last| *last)
             .filter(|last| last.elapsed() < SETTLEMENT_RECHECK);
-        let clean_since_last_read = state
-            .upgrade()
-            .and_then(|owner| owner.lock().ok())
-            .and_then(|state| {
-                state.leases.get(&task_id).map(|lease| {
+        let clean_since_last_read = if let Some(state_owner) = state.upgrade() {
+            match state_owner.lock() {
+                Ok(state) => state.leases.get(&task_id).is_some_and(|lease| {
                     lease.observed_signal_generation == binding.signal.generation()
                         && !binding.signal.is_settlement_pending()
-                })
-            })
-            .unwrap_or(false);
+                }),
+                Err(_) => false,
+            }
+        } else {
+            false
+        };
         if let Some(last_read) = recent_read.filter(|_| clean_since_last_read) {
             if let Some(state_owner) = state.upgrade() {
                 if let Ok(mut state) = state_owner.lock() {
