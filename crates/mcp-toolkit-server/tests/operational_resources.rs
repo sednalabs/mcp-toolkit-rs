@@ -124,6 +124,45 @@ fn uri_mismatch_and_unbounded_status_values_fail_closed() {
 }
 
 #[test]
+fn status_accepts_bounded_semver_build_metadata_and_rejects_oversized_versions() {
+    let resources = resources();
+    let mut status = OperationalStatus {
+        state: OperationalState::Ready,
+        component: "mcp-server".to_owned(),
+        server_version: "1.2.3+build.1234567890".to_owned(),
+    };
+    assert!(resources
+        .read_status(
+            "build-helper://ops/status",
+            &status,
+            &ProtocolVersion::V_2026_07_28,
+        )
+        .is_ok());
+
+    status.server_version = "v".repeat(128);
+    assert!(resources
+        .read_status(
+            "build-helper://ops/status",
+            &status,
+            &ProtocolVersion::V_2026_07_28,
+        )
+        .is_ok());
+
+    let oversized = OperationalStatus {
+        server_version: "v".repeat(129),
+        ..status
+    };
+    assert!(matches!(
+        resources.read_status(
+            "build-helper://ops/status",
+            &oversized,
+            &ProtocolVersion::V_2026_07_28,
+        ),
+        Err(OperationalResourceError::InvalidInput)
+    ));
+}
+
+#[test]
 fn attestation_projection_rejects_non_v2_and_drops_private_fields() {
     let resources = resources();
     let mut raw = json!({

@@ -336,14 +336,21 @@ fn validate_component_version(
     component: &str,
     version: &str,
 ) -> Result<(), OperationalResourceError> {
-    fn valid(value: &str) -> bool {
+    fn valid_component(value: &str) -> bool {
         !value.is_empty()
             && value.len() <= 64
             && value
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     }
-    if valid(component) && valid(version) {
+    fn valid_version(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+')
+            })
+    }
+    if valid_component(component) && valid_version(version) {
         Ok(())
     } else {
         Err(OperationalResourceError::InvalidInput)
