@@ -477,6 +477,19 @@ fn rotate_observer_task_to_back(queue: &mut VecDeque<String>, task_id: &str) {
     queue.push_back(task_id);
 }
 
+fn rotate_observer_principal_to_back(
+    queue: &mut VecDeque<TaskPrincipal>,
+    principal: &TaskPrincipal,
+) {
+    let Some(position) = queue.iter().position(|queued| queued == principal) else {
+        return;
+    };
+    let Some(principal) = queue.remove(position) else {
+        return;
+    };
+    queue.push_back(principal);
+}
+
 impl TaskAuthority {
     /// Creates an empty task authority with explicit task and waiter limits.
     pub fn new(config: TaskAuthorityConfig) -> Self {
@@ -1164,14 +1177,9 @@ async fn observation_loop(
                     state.observer_tasks.remove(&principal);
                     continue;
                 }
-                // Rotate each inspected principal after its bounded scan so a
-                // busy principal cannot monopolize the shared fallback budget.
-                state.observer_principals.push_back(principal.clone());
-
                 // Inspect this bounded principal bucket in full. A clean task
                 // at the front must not hide a due task behind it when the
                 // global read window reopens.
-                let mut selected_task_id = None;
                 for _ in 0..task_turns {
                     let Some(task_id) = state
                         .observer_tasks
@@ -1191,7 +1199,6 @@ async fn observation_loop(
                         });
                         if due && selected.is_none() {
                             selected = Some((task_id.clone(), binding.clone(), generation));
-                            selected_task_id = Some(task_id.clone());
                         }
                         if let Some(deadline) = lease.and_then(|lease| lease.next_probe_at) {
                             earliest =
@@ -1205,17 +1212,23 @@ async fn observation_loop(
                             .push_back(task_id);
                     }
                 }
-                if let Some(selected_task_id) = selected_task_id {
-                    rotate_observer_task_to_back(
-                        state.observer_tasks.entry(principal.clone()).or_default(),
-                        &selected_task_id,
-                    );
-                }
                 if selected.is_some() {
-                    // The selected principal was moved to the back above.
-                    // Return to the outer loop after this full bucket scan so
-                    // the next read starts at the next principal.
+                    // Preserve the selected principal at the front while the
+                    // shared read window is closed. Advance it only after an
+                    // actual RMCP observation completes.
+                    state.observer_principals.push_front(principal);
                     break;
+                }
+                if state
+                    .observer_tasks
+                    .get(&principal)
+                    .is_some_and(|queue| !queue.is_empty())
+                {
+                    // This principal had no due task. Rotate it so another
+                    // principal can use the next shared read slot.
+                    state.observer_principals.push_back(principal);
+                } else {
+                    state.observer_tasks.remove(&principal);
                 }
             }
             (selected, earliest)
@@ -1355,6 +1368,17 @@ async fn observation_loop(
                             lease.ttl.and_then(|ttl| lease.created_at.checked_add(ttl));
                     }
                 }
+                rotate_observer_task_to_back(
+                    state
+                        .observer_tasks
+                        .entry(binding.principal.clone())
+                        .or_default(),
+                    &task_id,
+                );
+                rotate_observer_principal_to_back(
+                    &mut state.observer_principals,
+                    &binding.principal,
+                );
                 drop(state);
                 binding.observation_done.notify_waiters();
             }
@@ -1365,6 +1389,17 @@ async fn observation_loop(
                 };
                 state.bindings.remove(&task_id);
                 state.leases.remove(&task_id);
+                rotate_observer_task_to_back(
+                    state
+                        .observer_tasks
+                        .entry(binding.principal.clone())
+                        .or_default(),
+                    &task_id,
+                );
+                rotate_observer_principal_to_back(
+                    &mut state.observer_principals,
+                    &binding.principal,
+                );
                 drop(state);
                 binding.hint();
             }

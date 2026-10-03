@@ -365,6 +365,104 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
     authority.shutdown();
 }
 
+#[tokio::test]
+async fn recurring_settlement_observation_does_not_starve_another_task_wait() {
+    let authority = Arc::new(TaskAuthority::new(limited_config(4, 8, 1)));
+    let owner = principal("owner-a");
+    let settlement_task = authority
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| {
+                Box::pin(async { std::future::pending::<Result<CallToolResult, TaskExit>>().await })
+            },
+        )
+        .expect("settlement task admitted");
+    let waiting_task = authority
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| {
+                Box::pin(async { std::future::pending::<Result<CallToolResult, TaskExit>>().await })
+            },
+        )
+        .expect("waiting task admitted");
+    tokio::time::sleep(SETTLEMENT_RECHECK + Duration::from_millis(25)).await;
+
+    let settlement_binding = authority
+        .binding_for(&owner, &settlement_task.task_id)
+        .expect("settlement binding");
+    settlement_binding.signal.hint(true);
+    tokio::time::timeout(Duration::from_millis(500), async {
+        while authority.metrics().fallback_reads == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first settlement observation completes");
+    assert!(settlement_binding.signal.is_settlement_pending());
+
+    let first_waiting_authority = authority.clone();
+    let first_waiting_owner = owner.clone();
+    let first_waiting_id = waiting_task.task_id.clone();
+    let first_waiter = tokio::spawn(async move {
+        first_waiting_authority
+            .wait(
+                &first_waiting_owner,
+                &first_waiting_id,
+                None,
+                Duration::from_secs(10),
+                TaskWaitCondition::Terminal,
+            )
+            .await
+    });
+    let second_waiting_authority = authority.clone();
+    let second_waiting_owner = owner.clone();
+    let second_waiting_id = waiting_task.task_id.clone();
+    let second_waiter = tokio::spawn(async move {
+        second_waiting_authority
+            .wait(
+                &second_waiting_owner,
+                &second_waiting_id,
+                None,
+                Duration::from_secs(10),
+                TaskWaitCondition::Terminal,
+            )
+            .await
+    });
+
+    let waiting_binding = authority
+        .binding_for(&owner, &waiting_task.task_id)
+        .expect("waiting task binding");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let requested_generation = waiting_binding.signal.generation();
+            let observed_generation = authority.state.lock().ok().and_then(|state| {
+                state
+                    .leases
+                    .get(&waiting_task.task_id)
+                    .map(|lease| lease.observed_signal_generation)
+            });
+            if requested_generation >= 2
+                && observed_generation.is_some_and(|observed| observed >= requested_generation)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("waiting task generation is acknowledged despite repeated settlement work");
+    assert!(authority.metrics().fallback_reads >= 2);
+
+    first_waiter.abort();
+    second_waiter.abort();
+    let _ = first_waiter.await;
+    let _ = second_waiter.await;
+    assert_eq!(authority.metrics().active_waiters, 0);
+    authority.shutdown();
+}
+
 #[test]
 fn principal_identity_is_exact_and_surrounding_whitespace_is_rejected() {
     let owner = TaskPrincipal::new("owner-a").expect("principal");
