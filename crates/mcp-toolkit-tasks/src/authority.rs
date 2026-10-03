@@ -642,11 +642,14 @@ impl TaskAuthority {
                 // `get_task` is the authoritative absence confirmation. This
                 // materialization never reached binding publication, so its
                 // lease can now be released safely.
-                if let Ok(mut state) = self.state.lock() {
-                    state.leases.remove(&task.task_id);
-                } else {
-                    self.force_close();
-                    return Err(TaskAuthorityError::StateUnavailable);
+                match self.state.lock() {
+                    Ok(mut state) => {
+                        state.leases.remove(&task.task_id);
+                    }
+                    Err(_) => {
+                        self.force_close();
+                        return Err(TaskAuthorityError::StateUnavailable);
+                    }
                 }
                 return Err(TaskAuthorityError::Rmcp(error));
             }
@@ -802,7 +805,11 @@ impl TaskAuthority {
             }
         };
 
-        match tokio::time::timeout(timeout, wait).await {
+        let outcome = {
+            let timeout_future = tokio::time::timeout(timeout, wait);
+            timeout_future.await
+        };
+        match outcome {
             Ok(result) => result.map(Some),
             Err(_) => Ok(None),
         }
@@ -1248,32 +1255,35 @@ async fn observation_loop(
             .ok()
             .and_then(|last| *last)
             .filter(|last| last.elapsed() < SETTLEMENT_RECHECK);
-        let clean_since_last_read = if let Some(state_owner) = state.upgrade() {
-            match state_owner.lock() {
+        let clean_since_last_read = match state.upgrade() {
+            Some(state_owner) => match state_owner.lock() {
                 Ok(state) => state.leases.get(&task_id).is_some_and(|lease| {
                     lease.observed_signal_generation == binding.signal.generation()
                         && !binding.signal.is_settlement_pending()
                 }),
                 Err(_) => false,
-            }
-        } else {
-            false
+            },
+            None => false,
         };
         if let Some(last_read) = recent_read.filter(|_| clean_since_last_read) {
-            if let Some(state_owner) = state.upgrade() {
-                if let Ok(mut state) = state_owner.lock() {
-                    if let Some(lease) = state.leases.get_mut(&task_id) {
-                        lease.next_probe_at = lease.ttl.and_then(|ttl| {
-                            lease
-                                .created_at
-                                .checked_add(ttl)
-                                .zip(last_read.checked_add(SETTLEMENT_RECHECK))
-                                .map(|(deadline, coalesce_deadline)| {
-                                    deadline.max(coalesce_deadline)
-                                })
-                        });
+            match state.upgrade() {
+                Some(state_owner) => match state_owner.lock() {
+                    Ok(mut state) => {
+                        if let Some(lease) = state.leases.get_mut(&task_id) {
+                            lease.next_probe_at = lease.ttl.and_then(|ttl| {
+                                lease
+                                    .created_at
+                                    .checked_add(ttl)
+                                    .zip(last_read.checked_add(SETTLEMENT_RECHECK))
+                                    .map(|(deadline, coalesce_deadline)| {
+                                        deadline.max(coalesce_deadline)
+                                    })
+                            });
+                        }
                     }
-                }
+                    Err(_) => {}
+                },
+                None => {}
             }
             continue;
         }
