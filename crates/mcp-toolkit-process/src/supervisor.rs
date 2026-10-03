@@ -454,7 +454,9 @@ async fn supervise(mut child: Child, context: SupervisorContext) {
             Some(Err(error)) => {
                 record_wait_failure(&mut failures, error, scope);
                 publish_pending(id, scope, &failures, &status);
-                match wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await {
+                let next_action =
+                    wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await;
+                match next_action {
                     NaturalWaitAction::Retry => {}
                     NaturalWaitAction::BeginCleanup => cleanup_requested = true,
                 }
@@ -859,7 +861,7 @@ mod tests {
             io::Error::other("child wait is still pending"),
             SignalScope::ProcessGroup,
         );
-        let (pending_status, _) = watch::channel(ProcessStatus::Running {
+        let (pending_status, _pending_receiver) = watch::channel(ProcessStatus::Running {
             id: ProcessId(8),
             scope: SignalScope::ProcessGroup,
         });
@@ -884,7 +886,7 @@ mod tests {
             SignalScope::ProcessGroup,
             ProcessSignal::Terminate,
         );
-        let (status, _) = watch::channel(ProcessStatus::Running {
+        let (status, _status_receiver) = watch::channel(ProcessStatus::Running {
             id: ProcessId(7),
             scope: SignalScope::ProcessGroup,
         });
