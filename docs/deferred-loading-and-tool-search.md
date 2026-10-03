@@ -105,8 +105,9 @@ closely related shapes:
 The historical `OpenAiMcpToolSearchConfig` remains available for staged source
 compatibility and its `new` constructor is deprecated. Its model defaults and
 the deprecated model constants are historical values, not current support
-guidance. New request construction requires the application to choose its own
-model explicitly.
+guidance. The deprecated `to_documentation_value()` labels its old threshold
+field `historical_minimum_model_for_tool_search`. New request construction
+requires the application to choose its own model explicitly.
 
 `ToolSearchResponse` provides the matching local discovery envelope with
 `openai_allowed_tools` and optional schemas. When a local discovery result

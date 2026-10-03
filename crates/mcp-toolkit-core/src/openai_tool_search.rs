@@ -327,15 +327,18 @@ impl OpenAiMcpToolSearchConfig {
     /// Serialize this config as a documentation or resource payload.
     ///
     /// This richer shape keeps the base request approval behavior unset, adds
-    /// model-support notes, and exposes any reviewed approval override as a
-    /// separate optional example instead of enabling it by default.
+    /// historical model metadata, and exposes any reviewed approval override as
+    /// a separate optional example instead of enabling it by default.
+    #[deprecated(
+        note = "use capability metadata; this payload only labels historical model values"
+    )]
     pub fn to_documentation_value(&self) -> Value {
         let mut payload = match self.request_value_with_approval_mode(false) {
             Value::Object(fields) => fields,
             _ => Map::new(),
         };
         payload.insert(
-            "minimum_model_for_tool_search".to_string(),
+            "historical_minimum_model_for_tool_search".to_string(),
             json!(self.minimum_model_for_tool_search),
         );
         if let Some(approval_override) = &self.optional_trusted_read_only_approval_override {
@@ -521,7 +524,10 @@ mod tests {
 
         let value = config.to_documentation_value();
 
-        assert_eq!(value["minimum_model_for_tool_search"], json!("gpt-5.4"));
+        assert_eq!(
+            value["historical_minimum_model_for_tool_search"],
+            json!("gpt-5.4")
+        );
         assert!(value["tools"][0]["require_approval"].is_null());
         assert_eq!(
             value["optional_trusted_read_only_approval_override"]["require_approval"]["never"]
