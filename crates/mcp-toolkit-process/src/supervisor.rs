@@ -317,6 +317,25 @@ fn resolve_scope(
 const WAIT_ERROR_RETRY_BACKOFF: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NaturalWaitAction {
+    Retry,
+    BeginCleanup,
+}
+
+async fn wait_after_initial_error(
+    cancel: &mut watch::Receiver<bool>,
+    retry_delay: Duration,
+) -> NaturalWaitAction {
+    tokio::select! {
+        changed = cancel.changed() => {
+            let _ = changed;
+            NaturalWaitAction::BeginCleanup
+        }
+        _ = tokio::time::sleep(retry_delay) => NaturalWaitAction::Retry,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GraceAction {
     ObserveUntil(Instant),
     AttemptKill,
@@ -472,6 +491,24 @@ mod tests {
         assert_eq!(window.next_action(deadline), GraceAction::Complete);
     }
 
+    #[tokio::test]
+    async fn initial_wait_failure_observes_later_cancellation_before_retry() {
+        let (cancel, mut receiver) = watch::channel(false);
+        let sender = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            let _ = cancel.send(true);
+        });
+
+        let action = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_after_initial_error(&mut receiver, Duration::from_secs(60)),
+        )
+        .await
+        .expect("cancellation should interrupt the long retry delay");
+        sender.await.expect("cancellation task should finish");
+        assert_eq!(action, NaturalWaitAction::BeginCleanup);
+    }
+
     #[test]
     fn wait_and_signal_failures_have_distinct_types() {
         let wait = ProcessFailure::Wait(wait_failure(
@@ -529,33 +566,40 @@ async fn supervise(
     status: watch::Sender<ProcessStatus>,
 ) {
     let mut failures = Vec::new();
-    let natural_exit = tokio::select! {
-        result = child.wait() => Some(result),
-        changed = cancel.changed() => {
-            let _ = changed;
-            None
-        }
-    };
-    if let Some(result) = natural_exit {
-        match result {
-            Ok(exit) => {
-                let _ = status.send(ProcessStatus::Exited {
-                    id,
-                    scope,
-                    status: exit,
-                    failures,
-                });
-                return;
+    let mut cleanup_requested = false;
+    loop {
+        tokio::select! {
+            result = child.wait() => match result {
+                Ok(exit) => {
+                    let _ = status.send(ProcessStatus::Exited {
+                        id,
+                        scope,
+                        status: exit,
+                        failures,
+                    });
+                    return;
+                }
+                Err(error) => {
+                    record_wait_failure(&mut failures, error, scope);
+                    publish_pending(id, scope, &failures, &status);
+                    match wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await {
+                        NaturalWaitAction::Retry => {}
+                        NaturalWaitAction::BeginCleanup => cleanup_requested = true,
+                    }
+                }
+            },
+            changed = cancel.changed() => {
+                let _ = changed;
+                cleanup_requested = true;
             }
-            Err(error) => {
-                record_wait_failure(&mut failures, error, scope);
-                publish_pending(id, scope, &failures, &status);
-            }
         }
-        reap_until_terminal(&mut child, id, scope, failures, &status).await;
-        return;
+        if cleanup_requested {
+            break;
+        }
     }
 
+    // A wait error does not finish supervision: retain the child and continue
+    // observing cleanup requests until either wait succeeds or cleanup starts.
     let term_attempt = Instant::now();
     if let Some(os_pid) = os_pid {
         record_signal(&mut failures, os_pid, scope, ProcessSignal::Terminate);
