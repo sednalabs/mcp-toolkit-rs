@@ -173,6 +173,8 @@ Reusable patterns:
 - OAuth Protected Resource Metadata and authorization-server metadata.
 - Bearer challenges, session behavior, and host-header guardrails.
 - OpenAI-facing deferred-loading support through `find_tools` and resources.
+- Capability-based tool-search metadata without a toolkit-wide model
+  recommendation; application integrations select their request model.
 - Read-only discovery that hides mutation surfaces.
 - Release provenance tying binary digest, schema snapshot, and toolkit revision.
 - Public repository CodeQL, dependency-governance, and workflow-security checks.
