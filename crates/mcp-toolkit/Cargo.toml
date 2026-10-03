@@ -62,6 +62,13 @@ server = [
   "rmcp/transport-streamable-http-server",
   "rmcp/transport-streamable-http-server-session",
 ]
+operational-resources = [
+  "mcp-toolkit-server",
+  "mcp-toolkit-server/operational-resources",
+  "provenance",
+  "dep:rmcp",
+  "rmcp/server",
+]
 server-stdio = [
   "mcp-toolkit-server",
   "mcp-toolkit-server/stdio",

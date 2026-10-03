@@ -28,10 +28,17 @@
 pub mod auth;
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "operational-resources")]
+pub mod operational_resources;
 #[cfg(feature = "stdio")]
 pub mod stdio;
 #[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
 pub mod tools;
 
-#[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
+#[cfg(any(
+    feature = "stdio",
+    feature = "http",
+    feature = "auth",
+    feature = "operational-resources"
+))]
 pub use rmcp;

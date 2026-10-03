@@ -65,7 +65,8 @@ pub use mcp_toolkit_tasks as tasks;
     feature = "server",
     feature = "server-stdio",
     feature = "server-http",
-    feature = "server-auth"
+    feature = "server-auth",
+    feature = "operational-resources"
 ))]
 pub use mcp_toolkit_server as server;
 
@@ -73,6 +74,7 @@ pub use mcp_toolkit_server as server;
     feature = "server",
     feature = "server-stdio",
     feature = "server-http",
-    feature = "server-auth"
+    feature = "server-auth",
+    feature = "operational-resources"
 ))]
 pub use rmcp;
