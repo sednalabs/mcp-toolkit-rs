@@ -375,6 +375,183 @@ impl GraceWindow {
     }
 }
 
+async fn supervise(
+    mut child: Child,
+    id: ProcessId,
+    os_pid: Option<u32>,
+    scope: SignalScope,
+    grace: Duration,
+    mut cancel: watch::Receiver<bool>,
+    status: watch::Sender<ProcessStatus>,
+) {
+    let mut failures = Vec::new();
+    let mut cleanup_requested = false;
+    loop {
+        tokio::select! {
+            result = child.wait() => match result {
+                Ok(exit) => {
+                    let _ = status.send(ProcessStatus::Exited {
+                        id,
+                        scope,
+                        status: exit,
+                        failures,
+                    });
+                    return;
+                }
+                Err(error) => {
+                    record_wait_failure(&mut failures, error, scope);
+                    publish_pending(id, scope, &failures, &status);
+                    match wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await {
+                        NaturalWaitAction::Retry => {}
+                        NaturalWaitAction::BeginCleanup => cleanup_requested = true,
+                    }
+                }
+            },
+            changed = cancel.changed() => {
+                let _ = changed;
+                cleanup_requested = true;
+            }
+        }
+        if cleanup_requested {
+            break;
+        }
+    }
+
+    // A wait error does not finish supervision: retain the child and continue
+    // observing cleanup requests until either wait succeeds or cleanup starts.
+    let term_attempt = Instant::now();
+    if let Some(os_pid) = os_pid {
+        record_signal(&mut failures, os_pid, scope, ProcessSignal::Terminate);
+    }
+    let mut grace_window = GraceWindow::from_term_attempt(term_attempt, grace);
+    publish_pending(id, scope, &failures, &status);
+    loop {
+        match grace_window.next_action(Instant::now()) {
+            GraceAction::ObserveUntil(deadline) => {
+                tokio::select! {
+                    biased;
+                    _ = sleep_until(deadline) => break,
+                    result = child.wait() => match result {
+                        Ok(exit) => {
+                            let _ = status.send(ProcessStatus::Exited {
+                                id,
+                                scope,
+                                status: exit,
+                                failures,
+                            });
+                            return;
+                        }
+                        Err(error) => {
+                            record_wait_failure(&mut failures, error, scope);
+                            publish_pending(id, scope, &failures, &status);
+                            let delay = grace_window.retry_delay(Instant::now());
+                            if !delay.is_zero() {
+                                tokio::time::sleep(delay).await;
+                            }
+                        }
+                    }
+                }
+            }
+            GraceAction::AttemptKill => break,
+            GraceAction::Complete => break,
+        }
+    }
+
+    if let Some(os_pid) = os_pid {
+        if scope == SignalScope::DirectChild {
+            if let Err(error) = child.start_kill() {
+                failures.push(ProcessFailure::Signal(SignalFailure {
+                    signal: ProcessSignal::Kill,
+                    scope,
+                    error: ProcessGroupError::SyscallFailed {
+                        name: "Child::start_kill",
+                        code: error.raw_os_error().unwrap_or(-1),
+                    },
+                }));
+            }
+        } else {
+            record_signal(&mut failures, os_pid, scope, ProcessSignal::Kill);
+        }
+    }
+    publish_pending(id, scope, &failures, &status);
+    reap_until_terminal(&mut child, id, scope, failures, &status).await;
+}
+
+fn wait_failure(error: io::Error, scope: SignalScope) -> WaitFailure {
+    WaitFailure {
+        scope,
+        kind: error.kind(),
+        code: error.raw_os_error(),
+        message: error.to_string(),
+    }
+}
+
+fn record_wait_failure(failures: &mut Vec<ProcessFailure>, error: io::Error, scope: SignalScope) {
+    failures.retain(|failure| !matches!(failure, ProcessFailure::Wait(_)));
+    failures.push(ProcessFailure::Wait(wait_failure(error, scope)));
+}
+
+async fn reap_until_terminal(
+    child: &mut Child,
+    id: ProcessId,
+    scope: SignalScope,
+    mut failures: Vec<ProcessFailure>,
+    status: &watch::Sender<ProcessStatus>,
+) {
+    loop {
+        match child.wait().await {
+            Ok(exit) => {
+                let _ = status.send(ProcessStatus::Exited {
+                    id,
+                    scope,
+                    status: exit,
+                    failures,
+                });
+                return;
+            }
+            Err(error) => {
+                record_wait_failure(&mut failures, error, scope);
+                publish_pending(id, scope, &failures, status);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+fn record_signal(
+    failures: &mut Vec<ProcessFailure>,
+    os_pid: u32,
+    scope: SignalScope,
+    signal: ProcessSignal,
+) {
+    let result = match scope {
+        SignalScope::ProcessGroup => signal_process_group(os_pid, signal),
+        SignalScope::DirectChild => signal_process(os_pid, signal),
+    };
+    if let Err(error) = result {
+        if !error.is_process_missing() {
+            failures.push(ProcessFailure::Signal(SignalFailure {
+                signal,
+                scope,
+                error,
+            }));
+        }
+    }
+}
+
+fn publish_pending(
+    id: ProcessId,
+    scope: SignalScope,
+    failures: &[ProcessFailure],
+    status: &watch::Sender<ProcessStatus>,
+) {
+    let _ = status.send(ProcessStatus::PendingCleanup {
+        id,
+        scope,
+        failures: failures.to_vec(),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,181 +731,4 @@ mod tests {
             } if matches!(failures.as_slice(), [ProcessFailure::Signal(_)])
         ));
     }
-}
-
-async fn supervise(
-    mut child: Child,
-    id: ProcessId,
-    os_pid: Option<u32>,
-    scope: SignalScope,
-    grace: Duration,
-    mut cancel: watch::Receiver<bool>,
-    status: watch::Sender<ProcessStatus>,
-) {
-    let mut failures = Vec::new();
-    let mut cleanup_requested = false;
-    loop {
-        tokio::select! {
-            result = child.wait() => match result {
-                Ok(exit) => {
-                    let _ = status.send(ProcessStatus::Exited {
-                        id,
-                        scope,
-                        status: exit,
-                        failures,
-                    });
-                    return;
-                }
-                Err(error) => {
-                    record_wait_failure(&mut failures, error, scope);
-                    publish_pending(id, scope, &failures, &status);
-                    match wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await {
-                        NaturalWaitAction::Retry => {}
-                        NaturalWaitAction::BeginCleanup => cleanup_requested = true,
-                    }
-                }
-            },
-            changed = cancel.changed() => {
-                let _ = changed;
-                cleanup_requested = true;
-            }
-        }
-        if cleanup_requested {
-            break;
-        }
-    }
-
-    // A wait error does not finish supervision: retain the child and continue
-    // observing cleanup requests until either wait succeeds or cleanup starts.
-    let term_attempt = Instant::now();
-    if let Some(os_pid) = os_pid {
-        record_signal(&mut failures, os_pid, scope, ProcessSignal::Terminate);
-    }
-    let mut grace_window = GraceWindow::from_term_attempt(term_attempt, grace);
-    publish_pending(id, scope, &failures, &status);
-    loop {
-        match grace_window.next_action(Instant::now()) {
-            GraceAction::ObserveUntil(deadline) => {
-                tokio::select! {
-                    biased;
-                    _ = sleep_until(deadline) => break,
-                    result = child.wait() => match result {
-                        Ok(exit) => {
-                            let _ = status.send(ProcessStatus::Exited {
-                                id,
-                                scope,
-                                status: exit,
-                                failures,
-                            });
-                            return;
-                        }
-                        Err(error) => {
-                            record_wait_failure(&mut failures, error, scope);
-                            publish_pending(id, scope, &failures, &status);
-                            let delay = grace_window.retry_delay(Instant::now());
-                            if !delay.is_zero() {
-                                tokio::time::sleep(delay).await;
-                            }
-                        }
-                    }
-                }
-            }
-            GraceAction::AttemptKill => break,
-            GraceAction::Complete => break,
-        }
-    }
-
-    if let Some(os_pid) = os_pid {
-        if scope == SignalScope::DirectChild {
-            if let Err(error) = child.start_kill() {
-                failures.push(ProcessFailure::Signal(SignalFailure {
-                    signal: ProcessSignal::Kill,
-                    scope,
-                    error: ProcessGroupError::SyscallFailed {
-                        name: "Child::start_kill",
-                        code: error.raw_os_error().unwrap_or(-1),
-                    },
-                }));
-            }
-        } else {
-            record_signal(&mut failures, os_pid, scope, ProcessSignal::Kill);
-        }
-    }
-    publish_pending(id, scope, &failures, &status);
-    reap_until_terminal(&mut child, id, scope, failures, &status).await;
-}
-
-fn wait_failure(error: io::Error, scope: SignalScope) -> WaitFailure {
-    WaitFailure {
-        scope,
-        kind: error.kind(),
-        code: error.raw_os_error(),
-        message: error.to_string(),
-    }
-}
-
-fn record_wait_failure(failures: &mut Vec<ProcessFailure>, error: io::Error, scope: SignalScope) {
-    failures.retain(|failure| !matches!(failure, ProcessFailure::Wait(_)));
-    failures.push(ProcessFailure::Wait(wait_failure(error, scope)));
-}
-
-async fn reap_until_terminal(
-    child: &mut Child,
-    id: ProcessId,
-    scope: SignalScope,
-    mut failures: Vec<ProcessFailure>,
-    status: &watch::Sender<ProcessStatus>,
-) {
-    loop {
-        match child.wait().await {
-            Ok(exit) => {
-                let _ = status.send(ProcessStatus::Exited {
-                    id,
-                    scope,
-                    status: exit,
-                    failures,
-                });
-                return;
-            }
-            Err(error) => {
-                record_wait_failure(&mut failures, error, scope);
-                publish_pending(id, scope, &failures, status);
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
-
-fn record_signal(
-    failures: &mut Vec<ProcessFailure>,
-    os_pid: u32,
-    scope: SignalScope,
-    signal: ProcessSignal,
-) {
-    let result = match scope {
-        SignalScope::ProcessGroup => signal_process_group(os_pid, signal),
-        SignalScope::DirectChild => signal_process(os_pid, signal),
-    };
-    if let Err(error) = result {
-        if !error.is_process_missing() {
-            failures.push(ProcessFailure::Signal(SignalFailure {
-                signal,
-                scope,
-                error,
-            }));
-        }
-    }
-}
-
-fn publish_pending(
-    id: ProcessId,
-    scope: SignalScope,
-    failures: &[ProcessFailure],
-    status: &watch::Sender<ProcessStatus>,
-) {
-    let _ = status.send(ProcessStatus::PendingCleanup {
-        id,
-        scope,
-        failures: failures.to_vec(),
-    });
 }
