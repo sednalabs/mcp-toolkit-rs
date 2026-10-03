@@ -51,9 +51,13 @@ not execute under the RMCP mutex through the Toolkit API.
 
 ## Retention and capacity
 
-Toolkit follows RMCP's retention truth. RMCP 3.4.1 defaults tasks to a five
-minute TTL and retains terminal state for one further TTL observation window.
-`ttl_ms: None` is an explicit unlimited-retention choice.
+Toolkit follows RMCP's retention truth. The documented RMCP 3.4.1 default is a
+five-minute TTL with terminal state retained for one further TTL observation
+window; this is historical version-specific behavior, not a hard-coded period
+for the workspace's current RMCP 3.5.0 pin. `ttl_ms: None` is an explicit
+unlimited-retention choice. Durable recovery must preserve the configured
+version's task-expiry and terminal-retention semantics as separate absolute
+deadlines; see [durable RMCP Tasks](durable-rmcp-tasks.md).
 
 Local binding cleanup uses amortized round-robin liveness probing. It does not
 scan every binding on every spawn because each RMCP `get_task` already performs

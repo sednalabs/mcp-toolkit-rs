@@ -23,7 +23,7 @@ The durable record and the live execution are different things:
 
 | State | Persist across restart | Recovery behavior |
 | --- | --- | --- |
-| Task ID, complete `DetailedTask` snapshot, SDK status/result/error and persisted generation | Yes, after a successful commit | RMCP restores only unexpired records through its own manager. |
+| Task ID, complete `DetailedTask` snapshot, SDK status/result/error and persisted generation | Yes, after a successful commit | RMCP restores terminal records only while their retention deadline remains valid. A nonterminal task past its task-expiry deadline follows the RMCP TTL-failure transition; an unexpired nonterminal task is reconciled as interrupted. |
 | Ownership envelope required by the configured authorization boundary | Yes, atomically with the task record | Missing, unknown, or mismatched ownership fails closed; no global listing or cross-principal fallback. |
 | Absolute task-expiry and terminal-retention deadlines | Yes | Compare with wall-clock UTC on load and before reads/transitions. An active task past its task deadline follows RMCP's TTL-failure transition and receives a persisted terminal-retention deadline; only records whose terminal-retention deadline has passed are evicted. Timers may wake cleanup but are not the source of truth. |
 | Rust future, task executor handle, cooperative cancellation token | No | Never deserialize or recreate them. A recovered nonterminal task is reconciled by RMCP as interrupted; it is not rerun automatically. |
@@ -68,6 +68,14 @@ absolute task expiry, and absolute terminal retention deadline. A store commit
 must atomically compare the expected generation and replace the whole record;
 the resulting generation is returned only after commit. The store must not be
 allowed to reinterpret MCP statuses or produce task results.
+
+The stored fields must preserve the exact TTL and retention semantics of the
+configured RMCP version. The existing [task authority](task-authority.md)
+summary's five-minute default and one further observation window describe RMCP
+3.4.1; they are not a hard-coded duration for the current 3.5.0 pin. The SDK
+hook implementation must confirm the version-specific mapping before setting
+deadlines, while keeping the absolute task-expiry and terminal-retention
+deadlines distinct.
 
 RMCP should expose a builder/configuration hook to install the store and an
 explicit restore result before serving requests. Its internal transition path

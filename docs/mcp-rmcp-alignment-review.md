@@ -280,14 +280,16 @@ bounded waiting, and stale authority-record cleanup. A Toolkit task revision
 is an observed snapshot generation, not a duplicate task event log; it advances
 only after an authoritative RMCP `DetailedTask` read actually changes.
 
-RMCP 3.4.1's native task manager is process-local. A process restart cannot
-honestly resurrect an in-flight Rust future merely because its last task record
-was persisted. Durable task support must first define an RMCP-native
+The current RMCP 3.5.0 task manager remains process-local. A process restart
+cannot honestly resurrect an in-flight Rust future merely because its last
+task record was persisted. Durable task support must first define an RMCP-native
 persistence/restoration boundary and explicit crash semantics. That work is
 tracked in [#191](https://github.com/sednalabs/mcp-toolkit-rs/issues/191).
 Any future implementation must preserve principal ownership, TTL semantics,
 terminal integrity, and duplicate-execution safety without copying RMCP's task
-state machine into Toolkit.
+state machine into Toolkit. See [durable RMCP Tasks](durable-rmcp-tasks.md) for
+the proposed storage hook and recovery contract; it does not claim that
+persistence is implemented.
 
 ## Alignment Inventory
 
