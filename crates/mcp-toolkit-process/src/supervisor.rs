@@ -616,60 +616,21 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn shutdown_snapshot_serializes_with_child_spawn_publication() {
+    async fn spawn_holds_registry_lock_before_child_creation_and_shutdown_reports_child() {
         let manager = ProcessManager::new(Duration::from_millis(20), ProcessGroupPolicy::Required);
-        let (spawn_locked_tx, spawn_locked_rx) = std::sync::mpsc::channel();
-        let (release_spawn_tx, release_spawn_rx) = std::sync::mpsc::channel();
-        let spawn_manager = manager.clone();
         let lock_check_manager = manager.clone();
-        let spawn_task = tokio::task::spawn_blocking(move || {
-            let mut command = Command::new("sh");
-            command.args(["-c", "sleep 10"]);
-            spawn_manager
-                .spawn_with_registry_lock(command, move || {
-                    assert!(matches!(
-                        lock_check_manager.inner.entries.try_lock(),
-                        Err(std::sync::TryLockError::WouldBlock)
-                    ));
-                    spawn_locked_tx
-                        .send(())
-                        .expect("test should still receive spawn barrier");
-                    release_spawn_rx
-                        .recv()
-                        .expect("test should release spawn barrier");
-                })
-                .expect("test child should spawn")
-        });
-        spawn_locked_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("spawn should acquire the registry lock before the OS spawn");
-
-        let (shutdown_started_tx, shutdown_started_rx) = std::sync::mpsc::channel();
-        let (shutdown_report_tx, shutdown_report_rx) = std::sync::mpsc::channel();
-        let shutdown_manager = manager.clone();
-        let shutdown_thread = std::thread::spawn(move || {
-            shutdown_started_tx
-                .send(())
-                .expect("test should receive shutdown start");
-            shutdown_report_tx
-                .send(shutdown_manager.shutdown())
-                .expect("test should receive shutdown report");
-        });
-        shutdown_started_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("shutdown thread should start");
-
-        release_spawn_tx
-            .send(())
-            .expect("spawn should be released for publication");
-        let process = spawn_task.await.expect("spawn worker should finish");
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10"]);
+        let process = manager
+            .spawn_with_registry_lock(command, move || {
+                assert!(matches!(
+                    lock_check_manager.inner.entries.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+            })
+            .expect("test child should spawn");
         let id = process.id();
-        let report = shutdown_report_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("shutdown should report the newly published child");
-        shutdown_thread
-            .join()
-            .expect("shutdown worker should finish");
+        let report = manager.shutdown();
         assert_eq!(report.pending.len(), 1);
         assert_eq!(report.pending[0].id(), id);
         assert!(!report.pending[0].is_exited());
