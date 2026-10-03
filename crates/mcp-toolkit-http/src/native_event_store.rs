@@ -16,10 +16,13 @@ use std::{
 };
 
 use futures::stream;
-use rmcp::transport::{
-    common::server_side_http::{session_id, ServerSseMessage},
-    streamable_http_server::session::{
-        EventStore as RmcpEventStore, EventStoreError as RmcpError, EventStream,
+use rmcp::{
+    model::ServerJsonRpcMessage,
+    transport::{
+        common::server_side_http::{session_id, ServerSseMessage},
+        streamable_http_server::session::{
+            EventStore as RmcpEventStore, EventStoreError as RmcpError, EventStream,
+        },
     },
 };
 
