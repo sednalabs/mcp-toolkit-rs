@@ -31,7 +31,7 @@ use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManager, LocalSessionManagerError, SessionConfig,
 };
 use rmcp::transport::streamable_http_server::session::{
-    ServerSseMessage, SessionId, SessionManager,
+    EventStore as RmcpEventStore, ServerSseMessage, SessionId, SessionManager,
 };
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
@@ -122,7 +122,11 @@ impl std::fmt::Display for EventStoreError {
 
 impl std::error::Error for EventStoreError {}
 
-/// SSE event store with bounded retention.
+/// Legacy session-era SSE recorder with bounded retention.
+///
+/// This store preserves the toolkit's historical event-ID format and wire
+/// behavior. It does not implement RMCP's native `EventStore` hook; use
+/// [`crate::native_event_store::NativeEventStore`] for current-protocol replay.
 ///
 /// # Security
 /// Provides controlled event replay. Stored data is subject to retention
@@ -461,6 +465,7 @@ pub struct BoundedSessionManager {
     allow_resume: bool,
     order: RwLock<VecDeque<SessionId>>,
     lifecycle: StdMutex<SessionLifecycleRuntime>,
+    native_event_store: Option<Arc<dyn RmcpEventStore>>,
 }
 
 /// Errors raised by the bounded session manager.
@@ -560,7 +565,14 @@ impl BoundedSessionManager {
             allow_resume,
             order: RwLock::new(VecDeque::new()),
             lifecycle: StdMutex::new(SessionLifecycleRuntime::new(lifecycle_config)),
+            native_event_store: None,
         }
+    }
+
+    /// Attach the separate RMCP-native replay store.
+    pub fn with_event_store(mut self, event_store: Arc<dyn RmcpEventStore>) -> Self {
+        self.native_event_store = Some(event_store);
+        self
     }
 
     async fn record_session(&self, session_id: &SessionId) -> Option<SessionId> {
@@ -770,6 +782,10 @@ impl SessionManager for BoundedSessionManager {
     type Error = BoundedSessionManagerError;
     type Transport = <LocalSessionManager as SessionManager>::Transport;
 
+    fn event_store(&self) -> Option<Arc<dyn RmcpEventStore>> {
+        self.native_event_store.clone()
+    }
+
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
         let now_s = current_epoch_seconds();
         self.sweep_disconnected_sessions(now_s).await;
@@ -926,13 +942,14 @@ impl Stream for LifecycleTrackedStream {
     }
 }
 
-/// Session manager wrapper that records outbound SSE events for replay.
+/// Session manager wrapper that records legacy outbound SSE events for replay.
 ///
 /// # Errors
 /// Errors propagate from the inner session manager.
 ///
 /// # Security
-/// Recorded events may contain sensitive output; use strict retention limits.
+/// Legacy recorded events may contain sensitive output; use strict retention
+/// limits. RMCP-native replay is forwarded separately from the inner manager.
 ///
 /// # Panics
 /// None.
@@ -990,6 +1007,10 @@ impl RecordingSessionManager {
 impl SessionManager for RecordingSessionManager {
     type Error = BoundedSessionManagerError;
     type Transport = <BoundedSessionManager as SessionManager>::Transport;
+
+    fn event_store(&self) -> Option<Arc<dyn RmcpEventStore>> {
+        self.inner.event_store()
+    }
 
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
         self.inner.create_session().await

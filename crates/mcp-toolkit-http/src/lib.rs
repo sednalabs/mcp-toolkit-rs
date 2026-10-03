@@ -45,5 +45,8 @@ pub mod session;
 #[cfg(feature = "session")]
 pub mod streamable;
 
+#[cfg(feature = "session")]
+pub mod native_event_store;
+
 #[cfg(feature = "session-sqlite")]
 mod session_sqlite;

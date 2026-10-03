@@ -165,6 +165,15 @@ impl LocalMcpHttpRuntimeBuilder {
         self
     }
 
+    /// Sets the optional process-local RMCP-native replay store.
+    pub fn with_event_store(
+        mut self,
+        event_store: std::sync::Arc<mcp_toolkit_http::native_event_store::NativeEventStore>,
+    ) -> Self {
+        self.config.event_store = Some(event_store);
+        self
+    }
+
     /// Replaces the low-level local legacy-session configuration.
     pub fn session_config(
         mut self,
@@ -425,6 +434,15 @@ impl LocalMcpHttpServerBuilder {
     /// Enables or disables resumability for legacy session-era requests.
     pub fn allow_resume(mut self, allow_resume: bool) -> Self {
         self.runtime = self.runtime.allow_resume(allow_resume);
+        self
+    }
+
+    /// Sets the optional process-local RMCP-native replay store.
+    pub fn with_event_store(
+        mut self,
+        event_store: std::sync::Arc<mcp_toolkit_http::native_event_store::NativeEventStore>,
+    ) -> Self {
+        self.runtime = self.runtime.with_event_store(event_store);
         self
     }
 

@@ -46,7 +46,10 @@ use rmcp::transport::{
 use serde_json::json;
 use tokio::time::{Duration, MissedTickBehavior};
 
-use crate::session::{BoundedSessionManager, RecordingSessionManager, SessionLifecycleConfig};
+use crate::{
+    native_event_store::NativeEventStore,
+    session::{BoundedSessionManager, RecordingSessionManager, SessionLifecycleConfig},
+};
 
 const SESSIONLESS_INITIALIZE_BODY_LIMIT: usize = 64 * 1024;
 
@@ -146,6 +149,8 @@ pub struct LocalStreamableHttpServiceConfig {
     pub allow_resume: bool,
     pub session_config: SessionConfig,
     pub server_config: StreamableHttpServerConfig,
+    /// Optional process-local RMCP-native replay store, separate from legacy recording.
+    pub event_store: Option<Arc<NativeEventStore>>,
 }
 
 impl Default for LocalStreamableHttpServiceConfig {
@@ -155,7 +160,16 @@ impl Default for LocalStreamableHttpServiceConfig {
             allow_resume: false,
             session_config: SessionConfig::default(),
             server_config: StreamableHttpServerConfig::default(),
+            event_store: None,
         }
+    }
+}
+
+impl LocalStreamableHttpServiceConfig {
+    /// Configure the separate RMCP-native replay store.
+    pub fn with_event_store(mut self, event_store: Arc<NativeEventStore>) -> Self {
+        self.event_store = Some(event_store);
+        self
     }
 }
 
@@ -190,13 +204,17 @@ where
         session_config.keep_alive = None;
     }
 
-    let session_manager = Arc::new(BoundedSessionManager::new_with_lifecycle(
+    let mut bounded_manager = BoundedSessionManager::new_with_lifecycle(
         LocalSessionManager::default(),
         config.max_sessions,
         config.allow_resume,
         session_config,
         lifecycle_config,
-    ));
+    );
+    if let Some(event_store) = config.event_store {
+        bounded_manager = bounded_manager.with_event_store(event_store);
+    }
+    let session_manager = Arc::new(bounded_manager);
     let recording_session_manager =
         Arc::new(RecordingSessionManager::new(session_manager.clone(), None));
     let sweep_token = config.server_config.cancellation_token.child_token();
@@ -455,7 +473,7 @@ fn session_error(status: StatusCode, message: &str, hint: &str) -> Response<Body
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use super::{
         attach_live_session_context, build_local_streamable_http_service,
@@ -463,6 +481,7 @@ mod tests {
         LocalStreamableHttpServiceConfig, McpSessionRoute, SessionConfig,
         SESSIONLESS_INITIALIZE_BODY_LIMIT,
     };
+    use crate::native_event_store::{NativeEventStore, NativeEventStoreConfig};
     use axum::body::Body;
     use bytes::Bytes;
     use http::{
@@ -552,6 +571,16 @@ mod tests {
             runtime.service.config.allowed_hosts,
             vec!["localhost".to_string(), "127.0.0.1".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn configured_native_store_is_forwarded_to_rmcp_session_manager() {
+        let store = Arc::new(
+            NativeEventStore::new(NativeEventStoreConfig::default()).expect("valid store config"),
+        );
+        let config = LocalStreamableHttpServiceConfig::default().with_event_store(store);
+        let runtime = build_local_streamable_http_service(|| Ok(Calculator::new()), config);
+        assert!(runtime.session_manager.event_store().is_some());
     }
 
     #[tokio::test]
