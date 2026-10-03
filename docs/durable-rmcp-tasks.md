@@ -46,7 +46,7 @@ following names and signatures are conceptual, not an API commitment:
 
 ```rust
 trait TaskStore {
-    async fn load(&self, now: SystemTime) -> Result<Vec<StoredTask>, StoreError>;
+    async fn load(&self) -> Result<Vec<StoredTask>, StoreError>;
     async fn commit(
         &self,
         task_id: TaskId,
@@ -61,6 +61,11 @@ trait TaskStore {
     ) -> Result<(), StoreError>;
 }
 ```
+
+`load` returns stored records without time-based filtering. RMCP needs overdue
+active records to apply TTL failure and expired terminal records to perform
+durable eviction itself; the store supplies records but does not own task
+expiry policy.
 
 `StoredTask` needs the complete SDK-owned serializable task snapshot, ownership
 envelope, monotonically increasing persisted generation, creation time,
@@ -188,10 +193,8 @@ semantics after operation completion when persistence fails, wall-clock/time
 source policy, and whether storage I/O coordination belongs in the manager or
 a separate per-task transition coordinator.
 
-This proposal is prepared for review and handoff only. No RMCP issue, pull
-request, branch, or source file is changed by this repository slice. The
-upstream repository selector, receiving maintainer/owner, and authority to
-publish remain unassigned; `/root` retains this decision and must establish
-scope-specific authority before any external mutation. Repository issue #191
-remains open until the SDK seam exists and executable restart conformance
-passes on an exact candidate.
+This proposal is design only. RMCP 3.5.0 has no public persistence/restoration
+seam of the kind described here, and this repository does not implement durable
+storage or restart recovery. An RMCP SDK contribution implementing the hook and
+executable restart conformance remains future work. This document therefore
+does not claim issue #191 complete.
