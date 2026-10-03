@@ -577,6 +577,7 @@ fn bounded_text(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -621,6 +622,15 @@ mod tests {
             allow_production_bypass: false,
             bypass: None,
             expected_command_manifest_digest: Some(format!("sha256:{}", "a".repeat(64))),
+        }
+    }
+
+    struct TestChild(std::process::Child);
+
+    impl Drop for TestChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
         }
     }
 
@@ -819,19 +829,54 @@ mod tests {
     #[test]
     fn loaded_image_freshness_ignores_replaced_invocation_path() {
         const CHILD_ENV: &str = "MCP_TOOLKIT_LOADED_IMAGE_REPLACEMENT_CHILD";
+        const CHILD_READY: &str = "mcp-toolkit-loaded-image-ready";
 
-        if let Some(directory) = std::env::var_os(CHILD_ENV) {
-            let directory = PathBuf::from(directory);
+        if std::env::var_os(CHILD_ENV).is_some() {
             let expected_loaded_mtime = std::env::var("MCP_TOOLKIT_LOADED_IMAGE_MTIME")
                 .expect("parent supplies loaded-image mtime")
                 .parse::<u64>()
                 .expect("valid loaded-image mtime");
-            fs::write(directory.join("ready"), b"ready").expect("signal child readiness");
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while !directory.join("release").exists() {
-                assert!(Instant::now() < deadline, "parent did not release child");
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            let fixture_dir = tempfile::tempdir().expect("create child-local gate fixture");
+            let gate_path = temp_path(&fixture_dir, "loaded-image-gate");
+            let initial_runtime = runtime_for();
+            let loaded_image_ms = initial_runtime
+                .runtime()
+                .binary
+                .modified_unix_ms
+                .expect("Linux loaded-image metadata");
+            let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
+                .format(&Rfc3339)
+                .expect("format expiry");
+            let artifact = GateArtifactV1::passing(
+                initial_runtime.runtime(),
+                TestGateLevel::Fast,
+                format!("sha256:{}", "a".repeat(64)),
+                expires_at,
+            );
+            write_gate_artifact(&gate_path, &artifact).expect("write current-build gate");
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&gate_path)
+                .expect("open gate for timestamp setup")
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(UNIX_EPOCH + Duration::from_millis(loaded_image_ms - 1_000)),
+                )
+                .expect("set gate older than loaded image");
+
+            std::io::stdout()
+                .write_all(format!("{CHILD_READY}\n").as_bytes())
+                .expect("report child readiness");
+            std::io::stdout().flush().expect("flush child readiness");
+            let mut release = [0_u8; 1];
+            let mut stdin = std::io::stdin();
+            assert!(
+                !stdin.is_terminal(),
+                "child mode requires the parent's release pipe"
+            );
+            stdin
+                .read_exact(&mut release)
+                .expect("wait for parent path replacement");
 
             let runtime = runtime_for();
             assert_eq!(
@@ -839,7 +884,7 @@ mod tests {
                 Some(expected_loaded_mtime),
                 "capture follows the loaded image after its invocation path is replaced"
             );
-            let policy = strict_policy(directory.join("gate.json"));
+            let policy = strict_policy(gate_path);
             let evaluation =
                 evaluate_startup_admission(&policy, &runtime).expect("valid child policy");
             assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
@@ -847,61 +892,64 @@ mod tests {
             return;
         }
 
-        let current_exe = std::env::current_exe().expect("locate test executable");
-        let parent = current_exe.parent().expect("test executable has parent");
-        let directory = tempfile::tempdir_in(parent).expect("create executable-local fixture");
+        let directory = tempfile::tempdir().expect("create isolated executable fixture");
         let invoked_path = directory.path().join("invoked-test-binary");
         let saved_path = directory.path().join("saved-test-binary");
-        fs::hard_link(&current_exe, &invoked_path).expect("create executable hardlink");
-
-        let runtime = runtime_for();
-        let loaded_image_ms = runtime
-            .runtime()
-            .binary
-            .modified_unix_ms
+        fs::copy("/proc/self/exe", &invoked_path).expect("copy current test executable");
+        let loaded_image_ms = fs::metadata(&invoked_path)
+            .expect("read copied executable metadata")
+            .modified()
+            .ok()
+            .and_then(crate::provenance::system_time_to_unix_ms)
             .expect("Linux loaded-image metadata");
-        let gate_path = directory.path().join("gate.json");
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::hours(1))
-            .format(&Rfc3339)
-            .expect("format expiry");
-        let artifact = GateArtifactV1::passing(
-            runtime.runtime(),
-            TestGateLevel::Fast,
-            format!("sha256:{}", "a".repeat(64)),
-            expires_at,
-        );
-        write_gate_artifact(&gate_path, &artifact).expect("write current-build gate");
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&gate_path)
-            .expect("open gate for timestamp setup")
-            .set_times(
-                fs::FileTimes::new()
-                    .set_modified(UNIX_EPOCH + Duration::from_millis(loaded_image_ms - 1_000)),
-            )
-            .expect("set gate between decoy and loaded image");
 
-        let mut child = Command::new(&invoked_path)
-            .arg("--exact")
-            .arg("admission::tests::loaded_image_freshness_ignores_replaced_invocation_path")
-            .arg("--nocapture")
-            .env(CHILD_ENV, directory.path())
-            .env(
-                "MCP_TOOLKIT_LOADED_IMAGE_MTIME",
-                loaded_image_ms.to_string(),
-            )
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("start child through hardlink path");
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !directory.path().join("ready").exists() {
-            assert!(
-                Instant::now() < deadline,
-                "child did not reach capture barrier"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let mut child = TestChild(
+            Command::new(&invoked_path)
+                .arg("--exact")
+                .arg("admission::tests::loaded_image_freshness_ignores_replaced_invocation_path")
+                .arg("--nocapture")
+                .env(CHILD_ENV, "1")
+                .env(
+                    "MCP_TOOLKIT_LOADED_IMAGE_MTIME",
+                    loaded_image_ms.to_string(),
+                )
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("start child through copied test executable"),
+        );
+        let stdout = child.0.stdout.take().expect("capture child stdout");
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let ready_reader = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = ready_tx.send(false);
+                        return;
+                    }
+                    Ok(_) if line.trim_end() == CHILD_READY => {
+                        let _ = ready_tx.send(true);
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        let _ = ready_tx.send(false);
+                        return;
+                    }
+                }
+            }
+        });
+        let ready = ready_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("child did not report readiness within the deadline");
+        assert!(ready, "child exited before the capture barrier");
+        ready_reader
+            .join()
+            .expect("child readiness reader should finish");
 
         fs::rename(&invoked_path, &saved_path).expect("remove invoked pathname");
         fs::write(&invoked_path, b"older-mtime decoy").expect("install path decoy");
@@ -914,9 +962,22 @@ mod tests {
                     .set_modified(UNIX_EPOCH + Duration::from_millis(loaded_image_ms - 2_000)),
             )
             .expect("set decoy older than gate");
-        fs::write(directory.path().join("release"), b"capture").expect("release child");
+        child
+            .0
+            .stdin
+            .as_mut()
+            .expect("child stdin is piped")
+            .write_all(b"1")
+            .expect("release child capture");
+        child
+            .0
+            .stdin
+            .as_mut()
+            .expect("child stdin is piped")
+            .flush()
+            .expect("flush child release");
 
-        let status = child.wait().expect("wait for child capture result");
+        let status = child.0.wait().expect("wait for child capture result");
         assert!(
             status.success(),
             "child rejected or accepted unexpected evidence"
