@@ -273,7 +273,7 @@ async fn waiter_capacity_is_authorized_before_registration_and_released_on_cance
 
 #[tokio::test]
 async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
-    let authority = Arc::new(TaskAuthority::new(limited_config(8, 32, 2)));
+    let authority = Arc::new(TaskAuthority::new(limited_config(8, 32, 1)));
     let owner = principal("owner-a");
     let mut task_ids = Vec::new();
     for _ in 0..4 {
@@ -312,13 +312,27 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
         }
     }
 
+    tokio::time::timeout(Duration::from_millis(500), async {
+        while authority.metrics().fallback_reads == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the first task ID receives a shared-coordinator fallback read");
+    assert_eq!(authority.metrics().fallback_reads, 1);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        authority.metrics().fallback_reads,
+        1,
+        "the authority-wide one-per-second budget covers all queued task IDs"
+    );
     tokio::time::timeout(Duration::from_secs(5), async {
         while authority.metrics().fallback_reads < 4 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("the four task IDs receive shared-coordinator fallback reads");
+    .expect("the shared fair coordinator continues across all four task IDs");
     for waiter in &waiters {
         waiter.abort();
     }
