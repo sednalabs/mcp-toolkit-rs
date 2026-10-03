@@ -354,8 +354,9 @@ pub fn build_attestation_envelope(
             source: provenance.build.source.clone(),
             build_metadata: provenance.build.build_metadata.clone(),
             runtime: AttestationRuntime {
-                pid: Some(provenance.process.pid),
-                executable_path: Some(provenance.process.executable_path.clone()),
+                pid: (provenance.process.pid != 0).then_some(provenance.process.pid),
+                executable_path: (!is_unknown(&provenance.process.executable_path))
+                    .then(|| provenance.process.executable_path.clone()),
                 binary_size_bytes: provenance.binary.file_size_bytes,
                 binary_modified_unix_ms: provenance.binary.modified_unix_ms,
             },
@@ -531,6 +532,22 @@ mod tests {
         let decoded: AttestationEnvelope =
             serde_json::from_str(&serialized).expect("deserialize envelope");
         assert_eq!(decoded, envelope);
+        assert!(envelope.attestation.runtime.pid.is_none());
+        assert!(envelope.attestation.runtime.executable_path.is_none());
+        let json: Value = serde_json::from_str(&serialized).expect("parse envelope JSON");
+        assert!(json["attestation"]["runtime"]["pid"].is_null());
+        assert!(json["attestation"]["runtime"]["executable_path"].is_null());
+
+        let mut empty_path_runtime = runtime.clone();
+        empty_path_runtime.process.pid = 1;
+        empty_path_runtime.process.executable_path.clear();
+        let empty_path_envelope =
+            build_attestation_envelope(&empty_path_runtime, AttestationOptions::default());
+        assert!(empty_path_envelope
+            .attestation
+            .runtime
+            .executable_path
+            .is_none());
     }
 
     #[test]

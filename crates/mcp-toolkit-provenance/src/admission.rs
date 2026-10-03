@@ -248,16 +248,15 @@ pub fn evaluate_startup_admission(
         expired_bypass = true;
     }
 
-    if runtime.build.component.trim().is_empty()
-        || runtime.build.server_version.trim().is_empty()
-        || is_unknown(&runtime.build.source.revision)
-        || is_unknown(&runtime.build.build_identity)
-        || is_unknown(&runtime.build.source_fingerprint)
-    {
+    let unavailable_fields = missing_required_provenance_fields(runtime);
+    if !unavailable_fields.is_empty() {
         return Ok(warning_or_reject(
             policy,
             CODE_PROVENANCE_UNAVAILABLE,
-            "runtime build provenance is incomplete".to_string(),
+            format!(
+                "runtime provenance is incomplete; unavailable required fields: {}",
+                unavailable_fields.join(", ")
+            ),
         ));
     }
 
@@ -499,6 +498,43 @@ fn valid_sha256_reference(value: &str) -> bool {
     })
 }
 
+fn missing_required_provenance_fields(runtime: &RuntimeProvenance) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    for (field, value) in [
+        ("component", runtime.build.component.as_str()),
+        ("server_version", runtime.build.server_version.as_str()),
+        ("revision", runtime.build.source.revision.as_str()),
+        ("reference", runtime.build.source.reference.as_str()),
+        ("build_identity", runtime.build.build_identity.as_str()),
+        (
+            "source_fingerprint",
+            runtime.build.source_fingerprint.as_str(),
+        ),
+        (
+            "rustc_version",
+            runtime.build.build_metadata.rustc_version.as_str(),
+        ),
+        ("executable_path", runtime.process.executable_path.as_str()),
+    ] {
+        if is_unknown(value) {
+            missing.push(field);
+        }
+    }
+    if runtime.build.source.dirty.is_none() {
+        missing.push("dirty");
+    }
+    if runtime.process.pid == 0 {
+        missing.push("pid");
+    }
+    if runtime.binary.file_size_bytes.is_none() {
+        missing.push("binary_size_bytes");
+    }
+    if runtime.binary.modified_unix_ms.is_none() {
+        missing.push("binary_modified_unix_ms");
+    }
+    missing
+}
+
 fn is_unknown(value: &str) -> bool {
     value.trim().is_empty() || value.eq_ignore_ascii_case(UNKNOWN_VALUE)
 }
@@ -573,6 +609,71 @@ mod tests {
             evaluate_startup_admission(&strict_policy(gate_path), &runtime).expect("valid policy");
         assert_eq!(evaluation.outcome, AdmissionOutcome::Rejected);
         assert_eq!(evaluation.reason_code.as_deref(), Some(CODE_MISSING));
+        let _ = fs::remove_file(executable);
+    }
+
+    #[test]
+    fn every_required_provenance_field_blocks_strict_and_warns_in_warn_mode() {
+        let executable = temp_path("exe");
+        fs::write(&executable, "binary").expect("write executable fixture");
+        let complete = runtime_for(&executable);
+        let fields = [
+            "component",
+            "server_version",
+            "revision",
+            "reference",
+            "dirty",
+            "build_identity",
+            "source_fingerprint",
+            "rustc_version",
+            "pid",
+            "executable_path",
+            "binary_size_bytes",
+            "binary_modified_unix_ms",
+        ];
+        for field in fields {
+            let mut runtime = complete.clone();
+            match field {
+                "component" => runtime.build.component = UNKNOWN_VALUE.to_string(),
+                "server_version" => runtime.build.server_version = UNKNOWN_VALUE.to_string(),
+                "revision" => runtime.build.source.revision = UNKNOWN_VALUE.to_string(),
+                "reference" => runtime.build.source.reference = UNKNOWN_VALUE.to_string(),
+                "dirty" => runtime.build.source.dirty = None,
+                "build_identity" => runtime.build.build_identity = UNKNOWN_VALUE.to_string(),
+                "source_fingerprint" => {
+                    runtime.build.source_fingerprint = UNKNOWN_VALUE.to_string()
+                }
+                "rustc_version" => {
+                    runtime.build.build_metadata.rustc_version = UNKNOWN_VALUE.to_string()
+                }
+                "pid" => runtime.process.pid = 0,
+                "executable_path" => runtime.process.executable_path = UNKNOWN_VALUE.to_string(),
+                "binary_size_bytes" => runtime.binary.file_size_bytes = None,
+                "binary_modified_unix_ms" => runtime.binary.modified_unix_ms = None,
+                _ => unreachable!("test field is listed above"),
+            }
+            for (mode, expected) in [
+                (StartupAdmissionMode::Strict, AdmissionOutcome::Rejected),
+                (StartupAdmissionMode::Warn, AdmissionOutcome::Warning),
+            ] {
+                let mut policy = strict_policy(temp_path("gate"));
+                policy.mode = mode;
+                let evaluation =
+                    evaluate_startup_admission(&policy, &runtime).expect("valid policy");
+                assert_eq!(
+                    evaluation.outcome, expected,
+                    "field {field} in {mode:?} mode"
+                );
+                assert_eq!(
+                    evaluation.reason_code.as_deref(),
+                    Some(CODE_PROVENANCE_UNAVAILABLE)
+                );
+                assert!(
+                    evaluation.detail.contains(field),
+                    "field {field} should be identified"
+                );
+            }
+        }
         let _ = fs::remove_file(executable);
     }
 
