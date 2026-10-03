@@ -34,7 +34,7 @@ def report_compiler_versions(consumer: str, cwd: Path, env: dict[str, str]) -> N
             cwd=cwd,
             env=env,
             check=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
             text=True,
         )
         version = result.stdout.strip()
