@@ -2301,6 +2301,7 @@ dependencies = [
 name = "mcp-toolkit-tasks"
 version = "0.1.0"
 dependencies = [
+ "mcp-toolkit-observability",
  "rmcp",
  "serde_json",
  "tokio",

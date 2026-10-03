@@ -31,6 +31,8 @@
 //! RMCP release coordinated by this Toolkit revision.
 
 mod authority;
+pub mod history;
+pub mod lifecycle;
 
 pub use authority::{
     AuthorizedTaskSnapshot, ManagedTaskContext, TaskAuthority, TaskAuthorityError, TaskPrincipal,
