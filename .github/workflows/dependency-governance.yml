@@ -59,6 +59,8 @@ jobs:
               "scripts/dependency_governance_check.sh",
               "scripts/rmcp_macro_runtime_pin_check.py",
               "docs/dependency-governance.md",
+              "docs/auth-token-dependency-posture.md",
+              "docs/design/dpop-verifier-custody.md",
               ".github/workflows/dependency-governance.yml",
           ]
           event_name = os.environ["EVENT_NAME"]
