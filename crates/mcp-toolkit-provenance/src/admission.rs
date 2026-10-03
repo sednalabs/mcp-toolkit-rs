@@ -580,7 +580,7 @@ mod tests {
     use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{Duration, Instant, UNIX_EPOCH};
+    use std::time::{Duration, UNIX_EPOCH};
 
     use time::Duration as TimeDuration;
 
