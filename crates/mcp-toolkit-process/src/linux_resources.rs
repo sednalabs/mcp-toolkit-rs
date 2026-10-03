@@ -311,6 +311,8 @@ fn resolve_cgroup_directory(
     membership: &std::path::Path,
     mountinfo: &[u8],
 ) -> Result<std::path::PathBuf, CgroupDiscoveryError> {
+    use std::path::PathBuf;
+
     if mountinfo.len() > MAX_MOUNTINFO_BYTES
         || mountinfo.split(|byte| *byte == b'\n').count() > MAX_DISCOVERY_LINES
     {
