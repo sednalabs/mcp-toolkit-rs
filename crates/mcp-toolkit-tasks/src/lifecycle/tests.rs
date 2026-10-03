@@ -3,9 +3,18 @@ use crate::ManagedTaskContext;
 use rmcp::task_manager::TaskOptions;
 use tokio::sync::oneshot;
 
+fn test_authority() -> TaskAuthority {
+    let capacity = std::num::NonZeroUsize::new(16).expect("nonzero test capacity");
+    TaskAuthority::new(crate::TaskAuthorityConfig {
+        max_retained_tasks: capacity,
+        max_waiters: capacity,
+        fallback_reads_per_second: capacity,
+    })
+}
+
 #[tokio::test]
 async fn fetches_authorized_snapshots_and_records_each_new_revision() {
-    let authority = TaskAuthority::new();
+    let authority = test_authority();
     let principal = TaskPrincipal::new("owner").expect("principal");
     let (context_tx, context_rx) = oneshot::channel::<ManagedTaskContext>();
     let first_task = authority

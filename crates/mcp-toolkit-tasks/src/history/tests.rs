@@ -1,9 +1,18 @@
 use super::*;
 use rmcp::task_manager::TaskOptions;
 
+fn test_authority() -> TaskAuthority {
+    let capacity = std::num::NonZeroUsize::new(16).expect("nonzero test capacity");
+    TaskAuthority::new(crate::TaskAuthorityConfig {
+        max_retained_tasks: capacity,
+        max_waiters: capacity,
+        fallback_reads_per_second: capacity,
+    })
+}
+
 #[tokio::test]
 async fn records_and_lists_only_after_principal_authorization() {
-    let authority = TaskAuthority::new();
+    let authority = test_authority();
     let owner = TaskPrincipal::new("owner-a").expect("principal");
     let other = TaskPrincipal::new("owner-b").expect("principal");
     let task = authority
@@ -32,7 +41,7 @@ async fn records_and_lists_only_after_principal_authorization() {
 
 #[tokio::test]
 async fn global_capacity_preserves_active_entries_across_principals() {
-    let authority = TaskAuthority::new();
+    let authority = test_authority();
     let first = TaskPrincipal::new("first").expect("principal");
     let second = TaskPrincipal::new("second").expect("principal");
     let first_task = authority
@@ -74,7 +83,7 @@ async fn global_capacity_preserves_active_entries_across_principals() {
 
 #[tokio::test]
 async fn zero_terminal_age_hides_entry_from_get_and_list() {
-    let authority = TaskAuthority::new();
+    let authority = test_authority();
     let principal = TaskPrincipal::new("owner").expect("principal");
     let task = authority
         .spawn_for_principal(principal.clone(), TaskOptions::default(), |_ctx| {
@@ -108,7 +117,7 @@ async fn zero_terminal_age_hides_entry_from_get_and_list() {
 
 #[tokio::test]
 async fn terminal_summary_has_only_authoritative_terminal_timestamp() {
-    let authority = TaskAuthority::new();
+    let authority = test_authority();
     let principal = TaskPrincipal::new("terminal-owner").expect("principal");
     let task = authority
         .spawn_for_principal(principal.clone(), TaskOptions::default(), |_ctx| {
@@ -145,7 +154,7 @@ async fn terminal_summary_has_only_authoritative_terminal_timestamp() {
 
 #[tokio::test]
 async fn terminal_reread_preserves_first_monotonic_age_instant() {
-    let authority = TaskAuthority::new();
+    let authority = test_authority();
     let principal = TaskPrincipal::new("terminal-owner").expect("principal");
     let task = authority
         .spawn_for_principal(principal.clone(), TaskOptions::default(), |_ctx| {
