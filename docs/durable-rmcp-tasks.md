@@ -26,8 +26,8 @@ The durable record and the live execution are different things:
 | Task ID, complete `DetailedTask` snapshot, SDK status/result/error and persisted generation | Yes, after a successful commit | RMCP restores terminal records only while their retention deadline remains valid. A nonterminal task past its task-expiry deadline follows the RMCP TTL-failure transition; an unexpired nonterminal task is reconciled as interrupted. |
 | Ownership envelope required by the configured authorization boundary | Yes, atomically with the task record | Missing, unknown, or mismatched ownership fails closed; no global listing or cross-principal fallback. |
 | Absolute task-expiry and terminal-retention deadlines | Yes | Compare with wall-clock UTC on load and before reads/transitions. An active task past its task deadline follows RMCP's TTL-failure transition and receives a persisted terminal-retention deadline; only records whose terminal-retention deadline has passed are evicted. Timers may wake cleanup but are not the source of truth. |
-| Rust future, task executor handle, cooperative cancellation token | No | Never deserialize or recreate them. A recovered nonterminal task is reconciled by RMCP as interrupted; it is not rerun automatically. |
-| Pending input response sender/channel | No | A restored `input_required` task cannot accept a response through its lost channel. RMCP reconciles it as interrupted unless the SDK defines and proves a different recovery contract. |
+| Rust future, task executor handle, cooperative cancellation token | No | Never deserialize or recreate them. A recovered nonterminal task past its task-expiry deadline follows RMCP's TTL-failure transition; otherwise RMCP reconciles it as interrupted. It is never rerun automatically. |
+| Pending input response sender/channel | No | A restored `input_required` task cannot accept a response through its lost channel. If its task-expiry deadline passed, RMCP applies the TTL-failure transition; otherwise RMCP reconciles it as interrupted. |
 | Cancellation intent | Persist the intent before signalling the in-memory token | Intent is not proof of cancellation or task completion. Recovery does not report `cancelled` solely from the intent. |
 
 Principal identity is not inferred from a task ID. The store record must include
@@ -123,11 +123,11 @@ automatic work replay.
 | Crash point | Durable state after restart | Required behavior |
 | --- | --- | --- |
 | Before create commit | No published task | No task is discoverable. |
-| After create commit, before future spawn/publication | `working` record and owner exist | RMCP reconciles as interrupted; never spawn twice on restore. |
-| While operation future is running | Last committed nonterminal snapshot | RMCP reconciles as interrupted; no future or cancellation token is fabricated. |
-| Input request committed, before response | `input_required` snapshot and owner exist; response channel is gone | Reconcile as interrupted unless an explicitly designed SDK recovery hook proves continuation. |
-| Cancellation intent committed, before token signal | Intent exists, outcome does not | Do not report cancellation as complete; reconcile interruption or expose the SDK-defined pending state. |
-| Token signalled, before cancellation outcome commit | Intent exists; actual future disposition may be unknown | Do not infer terminal cancellation from intent. Reconcile according to SDK interruption policy. |
+| After create commit, before future spawn/publication | `working` record and owner exist | If the task deadline passed, persist TTL failure; otherwise reconcile as interrupted. Never spawn twice on restore. |
+| While operation future is running | Last committed nonterminal snapshot | If the task deadline passed, persist TTL failure; otherwise reconcile as interrupted. No future or cancellation token is fabricated. |
+| Input request committed, before response | `input_required` snapshot and owner exist; response channel is gone | If the task deadline passed, persist TTL failure; otherwise reconcile as interrupted unless an explicit SDK recovery hook proves continuation. |
+| Cancellation intent committed, before token signal | Intent exists, outcome does not | Do not report cancellation as complete. Apply TTL failure if its deadline passed; otherwise reconcile interruption or expose the SDK-defined pending state. |
+| Token signalled, before cancellation outcome commit | Intent exists; actual future disposition may be unknown | Do not infer terminal cancellation from intent. Apply TTL failure if its deadline passed; otherwise reconcile according to SDK interruption policy. |
 | Update commit fails | Previous generation remains authoritative | Do not publish the uncommitted update; return/record the documented persistence error. |
 | Future completes, before terminal commit | Previous nonterminal generation remains authoritative | Do not expose an uncommitted result; retain enough live state to retry commit without re-executing the operation, or close/fail the manager explicitly. |
 | Terminal commit succeeds, before response | Terminal snapshot and generation exist | Restore and return that exact terminal snapshot if still within retention. |
@@ -154,8 +154,11 @@ protocol-facing read path. The suite must cover:
   RMCP TTL failure and retained until its absolute terminal deadline;
 - terminal records whose retention deadline passes during downtime are
   evicted, while repeated restarts do not extend a still-retained deadline;
-- `working` and `input_required` records reconciled as SDK-defined interruption
-  failures, with no resumed future, fabricated result, or duplicate spawn;
+- non-expired `working` and `input_required` records reconciled as SDK-defined
+  interruption failures, with no resumed future, fabricated result, or
+  duplicate spawn;
+- expired `working` and `input_required` records take the TTL-failure path
+  instead of interruption, with their terminal retention deadline committed;
 - cancellation intent before and after token signalling remaining distinct
   from an authoritative cancellation outcome;
 - task ownership restored with the record, cross-principal reads/listing
@@ -176,8 +179,9 @@ conformance and does not complete issue #191.
 The concrete contribution requested from RMCP maintainers is: (1) an SDK-owned
 serializable task record plus ownership envelope and persisted generation;
 (2) a pluggable store hook for atomic conditional commit and restore/eviction;
-(3) manager-owned interruption reconciliation for recovered `working` and
-`input_required` records; and (4) executable crash/restart conformance against
+(3) manager-owned interruption reconciliation for recovered non-expired
+`working` and `input_required` records, with TTL failure taking precedence
+after task expiry; and (4) executable crash/restart conformance against
 the public protocol-facing manager API. The RMCP contribution must decide its
 public trait/error/API shape, serialization compatibility policy, failure
 semantics after operation completion when persistence fails, wall-clock/time
