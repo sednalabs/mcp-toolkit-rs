@@ -621,11 +621,16 @@ mod tests {
         let (spawn_locked_tx, spawn_locked_rx) = std::sync::mpsc::channel();
         let (release_spawn_tx, release_spawn_rx) = std::sync::mpsc::channel();
         let spawn_manager = manager.clone();
+        let lock_check_manager = manager.clone();
         let spawn_task = tokio::task::spawn_blocking(move || {
             let mut command = Command::new("sh");
             command.args(["-c", "sleep 10"]);
             spawn_manager
                 .spawn_with_registry_lock(command, move || {
+                    assert!(matches!(
+                        lock_check_manager.inner.entries.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ));
                     spawn_locked_tx
                         .send(())
                         .expect("test should still receive spawn barrier");
@@ -653,10 +658,6 @@ mod tests {
         shutdown_started_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("shutdown thread should start");
-        assert!(matches!(
-            shutdown_report_rx.recv_timeout(Duration::from_millis(100)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
 
         release_spawn_tx
             .send(())
