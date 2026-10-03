@@ -116,6 +116,23 @@ fn spawn_rejects_runtime_without_time_driver_before_rmcp_materialization() {
     authority.shutdown();
 }
 
+#[test]
+fn public_wait_future_is_send_for_tokio_task_consumers() {
+    fn assert_send<T: Send>(_: T) {}
+
+    let authority = TaskAuthority::new(test_config());
+    let owner = principal("owner-a");
+    let wait = authority.wait(
+        &owner,
+        "task-id",
+        None,
+        Duration::from_secs(1),
+        TaskWaitCondition::Terminal,
+    );
+    assert_send(wait);
+    authority.shutdown();
+}
+
 #[tokio::test]
 async fn retained_capacity_counts_terminal_records_and_unlimited_ttl() {
     let authority = TaskAuthority::new(limited_config(1, 4, 4));
