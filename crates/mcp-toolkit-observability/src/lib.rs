@@ -39,9 +39,9 @@ pub use logging::{
     empty_context, render_logfmt, render_plain, LogFormat, LogFormatter, LogTargets, RoutingWriter,
 };
 pub use metrics_facade::{
-    normalize_label_value, record_request, record_tool_call, OutcomeClass, TransportMode,
-    METRIC_REQUESTS_TOTAL, METRIC_REQUEST_DURATION_SECONDS, METRIC_TOOL_CALLS_TOTAL,
-    METRIC_TOOL_CALL_DURATION_SECONDS,
+    normalize_label_value, record_request, record_task_state, record_tool_call, OutcomeClass,
+    TaskState, TransportMode, METRIC_REQUESTS_TOTAL, METRIC_REQUEST_DURATION_SECONDS,
+    METRIC_TASK_STATES_TOTAL, METRIC_TOOL_CALLS_TOTAL, METRIC_TOOL_CALL_DURATION_SECONDS,
 };
 pub use otel_export::{
     init_otel_from_env, init_otel_runtime, load_otel_config_from_env, OTelConfig, OTelInitError,

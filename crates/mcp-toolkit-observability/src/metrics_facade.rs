@@ -27,6 +27,38 @@ pub const METRIC_TOOL_CALLS_TOTAL: &str = "mcp_tool_calls_total";
 pub const METRIC_TOOL_CALL_DURATION_SECONDS: &str = "mcp_tool_call_duration_seconds";
 pub const METRIC_REQUESTS_TOTAL: &str = "mcp_requests_total";
 pub const METRIC_REQUEST_DURATION_SECONDS: &str = "mcp_request_duration_seconds";
+pub const METRIC_TASK_STATES_TOTAL: &str = "mcp_task_states_total";
+
+/// Closed RMCP task states used by lifecycle observation metrics.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TaskState {
+    Working,
+    InputRequired,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl TaskState {
+    /// Returns the stable low-cardinality label for this state.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::InputRequired => "input_required",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Records one explicitly observed task state using only a closed state label.
+pub fn record_task_state(state: TaskState) {
+    #[cfg(feature = "metrics-facade")]
+    metrics::counter!(METRIC_TASK_STATES_TOTAL, "state" => state.as_str()).increment(1);
+    #[cfg(not(feature = "metrics-facade"))]
+    let _ = state;
+}
 
 #[allow(dead_code)]
 const KNOWN_OPERATIONS: &[&str] = &[
