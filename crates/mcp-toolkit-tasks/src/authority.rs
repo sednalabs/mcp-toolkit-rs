@@ -590,7 +590,7 @@ impl TaskAuthority {
                 LeaseInfo {
                     ttl,
                     created_at,
-                    next_probe_at: ttl.map(|ttl| created_at + ttl),
+                    next_probe_at: ttl.and_then(|ttl| created_at.checked_add(ttl)),
                     observed_signal_generation: 0,
                 },
             );
@@ -882,9 +882,12 @@ impl TaskAuthority {
                             .signal
                             .settlement_pending
                             .store(false, Ordering::Release);
-                        lease.next_probe_at = lease.ttl.map(|ttl| std::time::Instant::now() + ttl);
+                        lease.next_probe_at = lease
+                            .ttl
+                            .and_then(|ttl| std::time::Instant::now().checked_add(ttl));
                     } else if binding.signal.is_settlement_pending() {
-                        lease.next_probe_at = Some(std::time::Instant::now() + SETTLEMENT_RECHECK);
+                        lease.next_probe_at =
+                            std::time::Instant::now().checked_add(SETTLEMENT_RECHECK);
                     }
                 }
                 drop(state);
@@ -1203,8 +1206,11 @@ async fn observation_loop(
             if let Some(state_owner) = state.upgrade() {
                 if let Ok(mut state) = state_owner.lock() {
                     if let Some(lease) = state.leases.get_mut(&task_id) {
-                        lease.next_probe_at = lease.ttl.map(|ttl| {
-                            (lease.created_at + ttl).max(last_read + SETTLEMENT_RECHECK)
+                        lease.next_probe_at = lease.ttl.and_then(|ttl| {
+                            lease
+                                .created_at
+                                .checked_add(ttl)
+                                .map(|deadline| deadline.max(last_read + SETTLEMENT_RECHECK))
                         });
                     }
                 }
@@ -1249,11 +1255,12 @@ async fn observation_loop(
                         lease.observed_signal_generation = signal_generation;
                     }
                     if terminal {
-                        lease.next_probe_at = lease.ttl.map(|ttl| now + ttl);
+                        lease.next_probe_at = lease.ttl.and_then(|ttl| now.checked_add(ttl));
                     } else if binding.signal.is_settlement_pending() {
-                        lease.next_probe_at = Some(now + SETTLEMENT_RECHECK);
+                        lease.next_probe_at = now.checked_add(SETTLEMENT_RECHECK);
                     } else {
-                        lease.next_probe_at = lease.ttl.map(|ttl| lease.created_at + ttl);
+                        lease.next_probe_at =
+                            lease.ttl.and_then(|ttl| lease.created_at.checked_add(ttl));
                     }
                 }
             }
