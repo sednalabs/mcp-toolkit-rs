@@ -8,7 +8,7 @@ use std::{
     fmt, io,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, Weak,
     },
     time::Duration,
 };
@@ -196,7 +196,14 @@ impl ProcessManager {
         let (status_tx, status_rx) = watch::channel(ProcessStatus::Running { id, scope });
         let grace = self.grace;
         let supervisor = tokio::spawn(supervise(
-            child, id, os_pid, scope, grace, cancel_rx, status_tx,
+            Arc::downgrade(&self.inner),
+            child,
+            id,
+            os_pid,
+            scope,
+            grace,
+            cancel_rx,
+            status_tx,
         ));
         let entry = Entry {
             cancel: cancel.clone(),
@@ -207,7 +214,11 @@ impl ProcessManager {
             Ok(entries) => entries,
             Err(poisoned) => poisoned.into_inner(),
         };
-        entries.insert(id, entry);
+        // The child may exit before the spawned supervisor's first poll.
+        // Skip registry retention if its terminal status has already arrived.
+        if !entry.status.borrow().is_exited() {
+            entries.insert(id, entry);
+        }
         Ok(RunningProcess {
             id,
             cancel,
@@ -237,7 +248,11 @@ impl ProcessManager {
         ShutdownReport { pending }
     }
 
-    /// Returns the latest known status for a registered child.
+    /// Returns the latest known status while a child remains registered.
+    ///
+    /// Returns `None` after a successful wait/reap removes the child from the
+    /// manager registry. A retained [`RunningProcess`] handle continues to
+    /// expose its terminal status through its watch receiver.
     pub fn status(&self, id: ProcessId) -> Option<ProcessStatus> {
         self.inner
             .entries
@@ -315,6 +330,12 @@ fn resolve_scope(
 }
 
 const WAIT_ERROR_RETRY_BACKOFF: Duration = Duration::from_millis(10);
+const POST_KILL_WAIT_RETRY_INITIAL: Duration = Duration::from_millis(100);
+const POST_KILL_WAIT_RETRY_MAX: Duration = Duration::from_secs(1);
+
+fn next_post_kill_wait_retry_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(POST_KILL_WAIT_RETRY_MAX)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NaturalWaitAction {
@@ -376,6 +397,7 @@ impl GraceWindow {
 }
 
 async fn supervise(
+    manager_inner: Weak<Inner>,
     mut child: Child,
     id: ProcessId,
     os_pid: Option<u32>,
@@ -396,6 +418,7 @@ async fn supervise(
                         status: exit,
                         failures,
                     });
+                    retire_completed(&manager_inner, id);
                     return;
                 }
                 Err(error) => {
@@ -439,6 +462,7 @@ async fn supervise(
                                 status: exit,
                                 failures,
                             });
+                            retire_completed(&manager_inner, id);
                             return;
                         }
                         Err(error) => {
@@ -474,7 +498,24 @@ async fn supervise(
         }
     }
     publish_pending(id, scope, &failures, &status);
-    reap_until_terminal(&mut child, id, scope, failures, &status).await;
+    reap_until_terminal(&manager_inner, &mut child, id, scope, failures, &status).await;
+}
+
+/// Removes a child from the manager registry only after `Child::wait` succeeds.
+fn retire_completed(manager_inner: &Weak<Inner>, id: ProcessId) {
+    let Some(inner) = manager_inner.upgrade() else {
+        return;
+    };
+    let mut entries = match inner.entries.lock() {
+        Ok(entries) => entries,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let completed = entries
+        .get(&id)
+        .is_some_and(|entry| entry.status.borrow().is_exited());
+    if completed {
+        entries.remove(&id);
+    }
 }
 
 fn wait_failure(error: io::Error, scope: SignalScope) -> WaitFailure {
@@ -492,12 +533,14 @@ fn record_wait_failure(failures: &mut Vec<ProcessFailure>, error: io::Error, sco
 }
 
 async fn reap_until_terminal(
+    manager_inner: &Weak<Inner>,
     child: &mut Child,
     id: ProcessId,
     scope: SignalScope,
     mut failures: Vec<ProcessFailure>,
     status: &watch::Sender<ProcessStatus>,
 ) {
+    let mut retry_delay = POST_KILL_WAIT_RETRY_INITIAL;
     loop {
         match child.wait().await {
             Ok(exit) => {
@@ -507,12 +550,14 @@ async fn reap_until_terminal(
                     status: exit,
                     failures,
                 });
+                retire_completed(manager_inner, id);
                 return;
             }
             Err(error) => {
                 record_wait_failure(&mut failures, error, scope);
                 publish_pending(id, scope, &failures, status);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = next_post_kill_wait_retry_delay(retry_delay);
             }
         }
     }
@@ -571,7 +616,16 @@ mod tests {
             .await
             .expect("supervisor should remain alive");
         assert!(matches!(observed, ProcessStatus::Exited { id: exited, .. } if exited == id));
-        assert!(manager.status(id).is_some_and(|status| status.is_exited()));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while manager.status(id).is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("manager should retire a successfully reaped child");
+        assert!(
+            matches!(observer.status(), ProcessStatus::Exited { id: exited, .. } if exited == id)
+        );
     }
 
     #[cfg(unix)]
@@ -584,13 +638,16 @@ mod tests {
         let id = process.id();
         let report = manager.shutdown();
         assert_eq!(report.pending.len(), 1);
+        assert!(!report.pending[0].is_exited());
         drop(process);
 
-        let mut status = manager.status(id).expect("registry should retain child");
-        while !status.is_exited() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            status = manager.status(id).expect("registry should retain child");
-        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while manager.status(id).is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("manager should retire only after successful reaping");
     }
 
     #[cfg(unix)]
@@ -668,6 +725,22 @@ mod tests {
         assert_eq!(window.next_action(deadline), GraceAction::Complete);
     }
 
+    #[test]
+    fn post_kill_wait_retry_backoff_is_capped() {
+        let mut delay = POST_KILL_WAIT_RETRY_INITIAL;
+        for expected in [
+            Duration::from_millis(100),
+            Duration::from_millis(200),
+            Duration::from_millis(400),
+            Duration::from_millis(800),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        ] {
+            assert_eq!(delay, expected);
+            delay = next_post_kill_wait_retry_delay(delay);
+        }
+    }
+
     #[tokio::test]
     async fn initial_wait_failure_observes_later_cancellation_before_retry() {
         let (cancel, mut receiver) = watch::channel(false);
@@ -705,10 +778,41 @@ mod tests {
             io::Error::other("latest synthetic wait failure"),
             SignalScope::ProcessGroup,
         );
+        for index in 0..100 {
+            record_wait_failure(
+                &mut retained,
+                io::Error::other(format!("repeated wait failure {index}")),
+                SignalScope::ProcessGroup,
+            );
+        }
         assert!(matches!(
             retained.as_slice(),
             [ProcessFailure::Wait(WaitFailure { message, .. })]
-                if message == "latest synthetic wait failure"
+                if message == "repeated wait failure 99"
+        ));
+
+        let mut wait_failures = Vec::new();
+        record_wait_failure(
+            &mut wait_failures,
+            io::Error::other("child wait is still pending"),
+            SignalScope::ProcessGroup,
+        );
+        let (pending_status, _) = watch::channel(ProcessStatus::Running {
+            id: ProcessId(8),
+            scope: SignalScope::ProcessGroup,
+        });
+        publish_pending(
+            ProcessId(8),
+            SignalScope::ProcessGroup,
+            &wait_failures,
+            &pending_status,
+        );
+        assert!(matches!(
+            pending_status.borrow().clone(),
+            ProcessStatus::PendingCleanup {
+                failures: [ProcessFailure::Wait(_)],
+                ..
+            }
         ));
 
         let mut failures = Vec::new();
