@@ -549,9 +549,9 @@ mod tests {
         assert!(matches!(
             status.borrow().clone(),
             ProcessStatus::PendingCleanup {
-                failures: [ProcessFailure::Signal(_)],
+                failures,
                 ..
-            }
+            } if matches!(failures.as_slice(), [ProcessFailure::Signal(_)])
         ));
     }
 }
