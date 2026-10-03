@@ -81,9 +81,12 @@ caller-configured rolling read budget covers all task IDs. The SDK's internal
 ## Wait and observation scaling
 
 `TaskAuthority::wait` authorizes the principal before registering a waiter.
-Waiters for a task share its initial read and cached state changes. One observer
-services hints, task settlement obligations, and TTL deadlines; individual
-waiter cancellation releases only that waiter's admission slot. A dropped
+Waiters for a task share its initial read and cached state changes. Initial
+reads are scheduled through the shared fair observer and consume the same
+aggregate fallback-read budget as later readbacks. The wait timeout includes
+any delay before its initial observation. One observer services hints, task
+settlement obligations, and TTL deadlines; individual waiter cancellation
+releases only that waiter's admission slot. A dropped
 operation future creates a settlement obligation that is retried until RMCP
 shows terminal state, the record is absent, or the authority closes. The
 observer never holds a strong `TaskAuthority` clone, so it cannot prevent

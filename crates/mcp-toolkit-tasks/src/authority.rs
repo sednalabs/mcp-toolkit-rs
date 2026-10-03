@@ -141,6 +141,7 @@ struct TaskBinding {
     signal: TaskSignal,
     read_gate: AsyncMutex<()>,
     last_read_at: Mutex<Option<std::time::Instant>>,
+    observation_done: Notify,
 }
 
 impl TaskBinding {
@@ -151,6 +152,7 @@ impl TaskBinding {
             signal,
             read_gate: AsyncMutex::new(()),
             last_read_at: Mutex::new(None),
+            observation_done: Notify::new(),
         }
     }
 
@@ -183,6 +185,7 @@ impl TaskBinding {
 
     fn hint(&self) {
         self.signal.hint(false);
+        self.observation_done.notify_waiters();
     }
 }
 
@@ -204,13 +207,17 @@ impl TaskSignal {
         }
     }
 
-    fn hint(&self, _settlement: bool) {
+    fn hint(&self, _settlement: bool) -> u64 {
         if _settlement {
             self.settlement_pending.store(true, Ordering::Release);
         }
-        self.generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         self.waiters.notify_waiters();
         self.observer.notify_one();
+        generation
     }
 
     fn generation(&self) -> u64 {
@@ -777,14 +784,12 @@ impl TaskAuthority {
     ) -> Result<Option<AuthorizedTaskSnapshot>, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
         let _waiter = self.register_waiter()?;
-        let initial = self.observe_wait_initial(&binding, task_id).await?;
-        let baseline = after_revision.unwrap_or(initial.revision);
-
-        if Self::wait_condition_ready(condition, baseline, &initial) {
-            return Ok(Some(initial));
-        }
-
         let wait = async {
+            let initial = self.observe_wait_initial(&binding, task_id).await?;
+            let baseline = after_revision.unwrap_or(initial.revision);
+            if Self::wait_condition_ready(condition, baseline, &initial) {
+                return Ok(initial);
+            }
             loop {
                 let notified = binding.signal.waiters.notified();
                 let snapshot = binding.snapshot()?;
@@ -798,11 +803,10 @@ impl TaskAuthority {
             }
         };
 
-        let outcome = tokio::time::timeout(timeout, wait).await;
-        if let Ok(result) = outcome {
-            return result.map(Some);
+        match tokio::time::timeout(timeout, wait).await {
+            Ok(result) => result.map(Some),
+            Err(_) => Ok(None),
         }
-        Ok(None)
     }
 
     /// Returns the number of currently non-terminal RMCP tasks.
@@ -905,6 +909,7 @@ impl TaskAuthority {
                     }
                 }
                 drop(state);
+                binding.observation_done.notify_waiters();
                 Ok(snapshot)
             }
             Err(error) => {
@@ -983,37 +988,54 @@ impl TaskAuthority {
         binding: &TaskBinding,
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
-        let _guard = binding.read_gate.lock().await;
-        if binding
+        let clean_cached_read = binding
             .last_read_at
             .lock()
             .map_err(|_| TaskAuthorityError::StateUnavailable)?
             .is_some_and(|last| last.elapsed() < SETTLEMENT_RECHECK)
-        {
+            && self
+                .state
+                .lock()
+                .map_err(|_| TaskAuthorityError::StateUnavailable)?
+                .leases
+                .get(task_id)
+                .is_some_and(|lease| {
+                    lease.observed_signal_generation == binding.signal.generation()
+                        && !binding.signal.is_settlement_pending()
+                });
+        if clean_cached_read {
             self.metrics.coalesced_reads.fetch_add(1, Ordering::Relaxed);
             return binding.snapshot();
         }
-        let started = std::time::Instant::now();
-        let signal_generation = binding.signal.generation();
-        let task = self.manager.get_task(task_id);
-        self.metrics.observation_latency_micros.fetch_add(
-            started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
-            Ordering::Relaxed,
-        );
-        *binding
-            .last_read_at
-            .lock()
-            .map_err(|_| TaskAuthorityError::StateUnavailable)? = Some(std::time::Instant::now());
-        match task {
-            Ok(task) => self.observe_or_close(binding, task_id, task, signal_generation),
-            Err(_) => {
-                self.remove_binding(task_id);
-                if self.is_closed()? {
+
+        // Initial waiter observations use the same fair coordinator and global
+        // fallback budget as later readbacks. Multiple waiters on this task
+        // advance one generation and can be satisfied by a shared read.
+        let target_generation = binding.signal.hint(false);
+        self.observer_notify.notify_one();
+        loop {
+            let notified = binding.observation_done.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let state = self.lock_state()?;
+            let Some(lease) = state.leases.get(task_id) else {
+                drop(state);
+                return if self.is_closed()? {
                     Err(TaskAuthorityError::Closed)
                 } else {
                     Err(TaskAuthorityError::TaskNotFound)
-                }
+                };
+            };
+            let observed = lease.observed_signal_generation;
+            drop(state);
+            if observed >= target_generation {
+                return binding.snapshot();
             }
+            if self.is_closed()? {
+                return Err(TaskAuthorityError::Closed);
+            }
+            notified.await;
         }
     }
 
@@ -1286,6 +1308,8 @@ async fn observation_loop(
                             lease.ttl.and_then(|ttl| lease.created_at.checked_add(ttl));
                     }
                 }
+                drop(state);
+                binding.observation_done.notify_waiters();
             }
             Err(_) => {
                 let Ok(mut state) = state_owner.lock() else {

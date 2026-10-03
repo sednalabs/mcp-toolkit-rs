@@ -238,13 +238,20 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
     let mut task_ids = Vec::new();
     for _ in 0..4 {
         let task = authority
-            .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(80), |_ctx| {
-                Box::pin(async { std::future::pending::<Result<CallToolResult, TaskExit>>().await })
-            })
+            .spawn_for_principal(
+                owner.clone(),
+                TaskOptions::new().with_ttl_ms(None),
+                |_ctx| {
+                    Box::pin(async {
+                        std::future::pending::<Result<CallToolResult, TaskExit>>().await
+                    })
+                },
+            )
             .expect("task admitted");
         task_ids.push(task.task_id);
     }
 
+    tokio::time::sleep(SETTLEMENT_RECHECK + Duration::from_millis(25)).await;
     let mut waiters = Vec::new();
     for task_id in &task_ids {
         for _ in 0..3 {
@@ -257,7 +264,7 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
                         &owner,
                         &task_id,
                         None,
-                        Duration::from_secs(6),
+                        Duration::from_secs(2),
                         TaskWaitCondition::Terminal,
                     )
                     .await
@@ -267,12 +274,14 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
 
     for waiter in waiters {
         let result = waiter.await.expect("waiter task joins");
-        assert!(result.expect("wait succeeds").is_some());
+        assert!(result.expect("wait succeeds").is_none());
     }
     let metrics = authority.metrics();
     assert_eq!(metrics.active_waiters, 0);
-    assert!(metrics.coalesced_reads >= 4);
-    assert!(metrics.fallback_reads <= 16);
+    assert!(metrics.coalesced_reads >= 1);
+    assert!(metrics.fallback_reads >= 4);
+    assert!(metrics.fallback_reads <= 8);
+    authority.shutdown();
 }
 
 #[test]
