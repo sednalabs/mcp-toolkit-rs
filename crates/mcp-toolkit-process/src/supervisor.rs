@@ -14,7 +14,7 @@ use std::{
 };
 
 use tokio::{
-    process::{Child, Command},
+    process::{Child, ChildStderr, ChildStdout, Command},
     sync::watch,
     task::JoinHandle,
     time::timeout,
@@ -61,6 +61,22 @@ pub struct SignalFailure {
     pub error: ProcessGroupError,
 }
 
+/// Records a `Child::wait` failure separately from signal delivery failures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaitFailure {
+    pub scope: SignalScope,
+    pub kind: io::ErrorKind,
+    pub code: Option<i32>,
+    pub message: String,
+}
+
+/// Identifies whether cleanup failed during signal delivery or child waiting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProcessFailure {
+    Signal(SignalFailure),
+    Wait(WaitFailure),
+}
+
 /// Describes the observed lifecycle state of a supervised child.
 #[derive(Clone, Debug)]
 pub enum ProcessStatus {
@@ -71,13 +87,13 @@ pub enum ProcessStatus {
     PendingCleanup {
         id: ProcessId,
         scope: SignalScope,
-        failures: Vec<SignalFailure>,
+        failures: Vec<ProcessFailure>,
     },
     Exited {
         id: ProcessId,
         scope: SignalScope,
         status: std::process::ExitStatus,
-        failures: Vec<SignalFailure>,
+        failures: Vec<ProcessFailure>,
     },
 }
 
@@ -100,7 +116,10 @@ impl ProcessStatus {
 /// Reports failures that prevent a process from being spawned.
 #[derive(Debug)]
 pub enum ProcessManagerError {
+    /// Compile-time group setup is unsupported or rejected before spawning.
     GroupSetup(ProcessGroupError),
+    /// Preserves the OS spawn error, including Unix pre-exec process-group
+    /// setup denial. The command is never retried without its configured group.
     Spawn(io::Error),
     RuntimeUnavailable,
 }
@@ -154,9 +173,9 @@ impl ProcessManager {
     /// Spawns and supervises a command while retaining its child in the manager.
     ///
     /// # Errors
-    /// Returns a group setup error when required setup is unavailable, or a
-    /// spawn error when the operating system refuses to create the child, or
-    /// `RuntimeUnavailable` when called outside a Tokio runtime.
+    /// Returns `GroupSetup` for unsupported or rejected setup before spawn,
+    /// `Spawn` when the OS refuses to create the configured child (including
+    /// Unix pre-exec group denial), or `RuntimeUnavailable` outside Tokio.
     ///
     /// # Security
     /// The caller supplies the command, arguments and environment and remains
@@ -164,17 +183,13 @@ impl ProcessManager {
     pub fn spawn(&self, mut command: Command) -> Result<RunningProcess, ProcessManagerError> {
         tokio::runtime::Handle::try_current()
             .map_err(|_| ProcessManagerError::RuntimeUnavailable)?;
-        let scope = match configure_child_process_group(command.as_std_mut()) {
-            Ok(()) => SignalScope::ProcessGroup,
-            Err(error)
-                if self.policy == ProcessGroupPolicy::AllowDirectChildFallback
-                    && matches!(error, ProcessGroupError::UnsupportedPlatform) =>
-            {
-                SignalScope::DirectChild
-            }
-            Err(error) => return Err(ProcessManagerError::GroupSetup(error)),
-        };
-        let child = command.spawn().map_err(ProcessManagerError::Spawn)?;
+        let scope = resolve_scope(
+            self.policy,
+            configure_child_process_group(command.as_std_mut()),
+        )?;
+        let mut child = command.spawn().map_err(ProcessManagerError::Spawn)?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
         let id = ProcessId(self.inner.next_id.fetch_add(1, Ordering::Relaxed));
         let os_pid = child.id();
         let (cancel, cancel_rx) = watch::channel(false);
@@ -197,6 +212,8 @@ impl ProcessManager {
             id,
             cancel,
             status: status_rx,
+            stdout,
+            stderr,
         })
     }
 
@@ -236,6 +253,12 @@ pub struct RunningProcess {
     id: ProcessId,
     cancel: watch::Sender<bool>,
     status: watch::Receiver<ProcessStatus>,
+    /// Caller-owned stdout reader when the command configured piped stdout.
+    /// Drain it concurrently while retaining this handle to avoid pipe blockage.
+    pub stdout: Option<ChildStdout>,
+    /// Caller-owned stderr reader when the command configured piped stderr.
+    /// Drain it concurrently while retaining this handle to avoid pipe blockage.
+    pub stderr: Option<ChildStderr>,
 }
 
 impl RunningProcess {
@@ -276,10 +299,27 @@ pub struct ShutdownReport {
     pub pending: Vec<ProcessStatus>,
 }
 
+fn resolve_scope(
+    policy: ProcessGroupPolicy,
+    setup: Result<(), ProcessGroupError>,
+) -> Result<SignalScope, ProcessManagerError> {
+    match setup {
+        Ok(()) => Ok(SignalScope::ProcessGroup),
+        Err(ProcessGroupError::UnsupportedPlatform)
+            if policy == ProcessGroupPolicy::AllowDirectChildFallback =>
+        {
+            Ok(SignalScope::DirectChild)
+        }
+        Err(error) => Err(ProcessManagerError::GroupSetup(error)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn manager_observes_and_retains_natural_exit() {
         let manager = ProcessManager::new(Duration::from_millis(20), ProcessGroupPolicy::Required);
@@ -314,6 +354,108 @@ mod tests {
             status = manager.status(id).expect("registry should retain child");
         }
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn piped_streams_can_be_drained_concurrently_while_handle_is_retained() {
+        let manager = ProcessManager::new(Duration::from_millis(20), ProcessGroupPolicy::Required);
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2",
+        ]);
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        let mut process = manager.spawn(command).expect("test process should spawn");
+        let mut stdout = process.stdout.take().expect("stdout should be piped");
+        let mut stderr = process.stderr.take().expect("stderr should be piped");
+        let stdout_read = async move {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).await.map(|_| bytes.len())
+        };
+        let stderr_read = async move {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes).await.map(|_| bytes.len())
+        };
+        let (stdout_len, stderr_len) = tokio::join!(stdout_read, stderr_read);
+        assert_eq!(stdout_len.expect("stdout read should finish"), 131072);
+        assert_eq!(stderr_len.expect("stderr read should finish"), 131072);
+        while !process.status().is_exited() {
+            assert!(process.changed().await.is_some());
+        }
+    }
+
+    #[test]
+    fn direct_child_fallback_is_only_for_unsupported_platforms() {
+        assert!(matches!(
+            resolve_scope(
+                ProcessGroupPolicy::AllowDirectChildFallback,
+                Err(ProcessGroupError::UnsupportedPlatform),
+            ),
+            Ok(SignalScope::DirectChild)
+        ));
+        assert!(matches!(
+            resolve_scope(
+                ProcessGroupPolicy::AllowDirectChildFallback,
+                Err(ProcessGroupError::SyscallFailed {
+                    name: "setpgid",
+                    code: libc::EPERM,
+                }),
+            ),
+            Err(ProcessManagerError::GroupSetup(
+                ProcessGroupError::SyscallFailed {
+                    code: libc::EPERM,
+                    ..
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn wait_and_signal_failures_have_distinct_types() {
+        let wait = ProcessFailure::Wait(wait_failure(
+            io::Error::other("synthetic wait failure"),
+            SignalScope::ProcessGroup,
+        ));
+        assert!(matches!(wait, ProcessFailure::Wait(WaitFailure { .. })));
+
+        let mut retained = Vec::new();
+        record_wait_failure(
+            &mut retained,
+            io::Error::other("first synthetic wait failure"),
+            SignalScope::ProcessGroup,
+        );
+        record_wait_failure(
+            &mut retained,
+            io::Error::other("latest synthetic wait failure"),
+            SignalScope::ProcessGroup,
+        );
+        assert!(matches!(
+            retained.as_slice(),
+            [ProcessFailure::Wait(WaitFailure { message, .. })]
+                if message == "latest synthetic wait failure"
+        ));
+
+        let mut failures = Vec::new();
+        record_signal(
+            &mut failures,
+            0,
+            SignalScope::ProcessGroup,
+            ProcessSignal::Terminate,
+        );
+        let (status, _) = watch::channel(ProcessStatus::Running {
+            id: ProcessId(7),
+            scope: SignalScope::ProcessGroup,
+        });
+        publish_pending(ProcessId(7), SignalScope::ProcessGroup, &failures, &status);
+        assert!(matches!(
+            status.borrow().clone(),
+            ProcessStatus::PendingCleanup {
+                failures: [ProcessFailure::Signal(_)],
+                ..
+            }
+        ));
+    }
 }
 
 async fn supervise(
@@ -345,7 +487,7 @@ async fn supervise(
                 return;
             }
             Err(error) => {
-                failures.push(wait_failure(error, scope));
+                record_wait_failure(&mut failures, error, scope);
                 publish_pending(id, scope, &failures, &status);
             }
         }
@@ -367,21 +509,21 @@ async fn supervise(
             });
             return;
         }
-        Ok(Err(error)) => failures.push(wait_failure(error, scope)),
+        Ok(Err(error)) => record_wait_failure(&mut failures, error, scope),
         Err(_) => {}
     }
 
     if let Some(os_pid) = os_pid {
         if scope == SignalScope::DirectChild {
             if let Err(error) = child.start_kill() {
-                failures.push(SignalFailure {
+                failures.push(ProcessFailure::Signal(SignalFailure {
                     signal: ProcessSignal::Kill,
                     scope,
                     error: ProcessGroupError::SyscallFailed {
                         name: "Child::start_kill",
                         code: error.raw_os_error().unwrap_or(-1),
                     },
-                });
+                }));
             }
         } else {
             record_signal(&mut failures, os_pid, scope, ProcessSignal::Kill);
@@ -391,22 +533,25 @@ async fn supervise(
     reap_until_terminal(&mut child, id, scope, failures, &status).await;
 }
 
-fn wait_failure(error: io::Error, scope: SignalScope) -> SignalFailure {
-    SignalFailure {
-        signal: ProcessSignal::Kill,
+fn wait_failure(error: io::Error, scope: SignalScope) -> WaitFailure {
+    WaitFailure {
         scope,
-        error: ProcessGroupError::SyscallFailed {
-            name: "Child::wait",
-            code: error.raw_os_error().unwrap_or(-1),
-        },
+        kind: error.kind(),
+        code: error.raw_os_error(),
+        message: error.to_string(),
     }
+}
+
+fn record_wait_failure(failures: &mut Vec<ProcessFailure>, error: io::Error, scope: SignalScope) {
+    failures.retain(|failure| !matches!(failure, ProcessFailure::Wait(_)));
+    failures.push(ProcessFailure::Wait(wait_failure(error, scope)));
 }
 
 async fn reap_until_terminal(
     child: &mut Child,
     id: ProcessId,
     scope: SignalScope,
-    mut failures: Vec<SignalFailure>,
+    mut failures: Vec<ProcessFailure>,
     status: &watch::Sender<ProcessStatus>,
 ) {
     loop {
@@ -421,7 +566,7 @@ async fn reap_until_terminal(
                 return;
             }
             Err(error) => {
-                failures.push(wait_failure(error, scope));
+                record_wait_failure(&mut failures, error, scope);
                 publish_pending(id, scope, &failures, status);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -430,7 +575,7 @@ async fn reap_until_terminal(
 }
 
 fn record_signal(
-    failures: &mut Vec<SignalFailure>,
+    failures: &mut Vec<ProcessFailure>,
     os_pid: u32,
     scope: SignalScope,
     signal: ProcessSignal,
@@ -441,11 +586,11 @@ fn record_signal(
     };
     if let Err(error) = result {
         if !error.is_process_missing() {
-            failures.push(SignalFailure {
+            failures.push(ProcessFailure::Signal(SignalFailure {
                 signal,
                 scope,
                 error,
-            });
+            }));
         }
     }
 }
@@ -453,7 +598,7 @@ fn record_signal(
 fn publish_pending(
     id: ProcessId,
     scope: SignalScope,
-    failures: &[SignalFailure],
+    failures: &[ProcessFailure],
     status: &watch::Sender<ProcessStatus>,
 ) {
     let _ = status.send(ProcessStatus::PendingCleanup {
