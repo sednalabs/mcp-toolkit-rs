@@ -53,6 +53,47 @@ fn binding_count(authority: &TaskAuthority) -> usize {
         .len()
 }
 
+#[test]
+fn synchronous_observation_does_not_consume_a_hint_that_arrived_during_read() {
+    let authority = TaskAuthority::new(test_config());
+    let owner = principal("owner-a");
+    let task = authority
+        .spawn_for_principal(
+            owner.clone(),
+            TaskOptions::new().with_ttl_ms(None),
+            |_ctx| Box::pin(std::future::pending::<Result<CallToolResult, TaskExit>>()),
+        )
+        .expect("task admitted");
+    let binding = authority
+        .binding_for(&owner, &task.task_id)
+        .expect("binding");
+    let generation_before_read = binding.signal.generation();
+
+    // Model a task transition/drop hint between the RMCP read and cache update.
+    binding.hint();
+    let snapshot = authority
+        .manager
+        .get_task(&task.task_id)
+        .expect("RMCP task remains present");
+    authority
+        .observe_or_close(&binding, &task.task_id, snapshot, generation_before_read)
+        .expect("snapshot observed");
+
+    let state = authority.state.lock().expect("authority state");
+    assert_eq!(
+        state
+            .leases
+            .get(&task.task_id)
+            .expect("retained lease")
+            .observed_signal_generation,
+        generation_before_read
+    );
+    assert_ne!(binding.signal.generation(), generation_before_read);
+    assert!(binding.signal.is_settlement_pending());
+    drop(state);
+    authority.shutdown();
+}
+
 #[tokio::test]
 async fn retained_capacity_counts_terminal_records_and_unlimited_ttl() {
     let authority = TaskAuthority::new(limited_config(1, 4, 4));

@@ -694,9 +694,10 @@ impl TaskAuthority {
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         let binding = self.binding_for(principal, task_id)?;
+        let signal_generation = binding.signal.generation();
         let task = self.manager.get_task(task_id);
         if let Ok(task) = task {
-            return self.observe_or_close(&binding, task_id, task);
+            return self.observe_or_close(&binding, task_id, task, signal_generation);
         }
         self.remove_binding(task_id);
         if self.is_closed()? {
@@ -846,9 +847,10 @@ impl TaskAuthority {
         binding: &TaskBinding,
         task_id: &str,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
+        let signal_generation = binding.signal.generation();
         let task = self.manager.get_task(task_id);
         if let Ok(task) = task {
-            return self.observe_or_close(binding, task_id, task);
+            return self.observe_or_close(binding, task_id, task, signal_generation);
         }
         self.remove_binding(task_id);
         if self.is_closed()? {
@@ -862,6 +864,7 @@ impl TaskAuthority {
         binding: &TaskBinding,
         task_id: &str,
         task: DetailedTask,
+        signal_generation: u64,
     ) -> Result<AuthorizedTaskSnapshot, TaskAuthorityError> {
         match binding.observe(task) {
             Ok(snapshot) => {
@@ -876,7 +879,7 @@ impl TaskAuthority {
                     }
                 };
                 if let Some(lease) = state.leases.get_mut(task_id) {
-                    lease.observed_signal_generation = binding.signal.generation();
+                    lease.observed_signal_generation = signal_generation;
                     if snapshot.task.status().is_terminal() {
                         binding
                             .signal
@@ -980,6 +983,7 @@ impl TaskAuthority {
             return binding.snapshot();
         }
         let started = std::time::Instant::now();
+        let signal_generation = binding.signal.generation();
         let task = self.manager.get_task(task_id);
         self.metrics.observation_latency_micros.fetch_add(
             started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
@@ -990,7 +994,7 @@ impl TaskAuthority {
             .lock()
             .map_err(|_| TaskAuthorityError::StateUnavailable)? = Some(std::time::Instant::now());
         match task {
-            Ok(task) => self.observe_or_close(binding, task_id, task),
+            Ok(task) => self.observe_or_close(binding, task_id, task, signal_generation),
             Err(_) => {
                 self.remove_binding(task_id);
                 if self.is_closed()? {
@@ -1055,6 +1059,16 @@ async fn observation_loop(
     loop {
         let notified = observer_notify.notified();
         let next_probe = {
+            let Some(lifecycle_owner) = lifecycle.upgrade() else {
+                return;
+            };
+            let Ok(closed) = lifecycle_owner.closed.lock() else {
+                manager.shutdown();
+                return;
+            };
+            if *closed {
+                return;
+            }
             let Some(state_owner) = state.upgrade() else {
                 return;
             };
@@ -1062,13 +1076,8 @@ async fn observation_loop(
                 manager.shutdown();
                 return;
             };
-            if lifecycle
-                .upgrade()
-                .and_then(|owner| owner.closed.lock().ok().map(|closed| *closed))
-                .unwrap_or(true)
-            {
-                return;
-            }
+            drop(closed);
+            drop(lifecycle_owner);
 
             let now = std::time::Instant::now();
             let mut earliest = state
@@ -1210,7 +1219,10 @@ async fn observation_loop(
                             lease
                                 .created_at
                                 .checked_add(ttl)
-                                .map(|deadline| deadline.max(last_read + SETTLEMENT_RECHECK))
+                                .zip(last_read.checked_add(SETTLEMENT_RECHECK))
+                                .map(|(deadline, coalesce_deadline)| {
+                                    deadline.max(coalesce_deadline)
+                                })
                         });
                     }
                 }
