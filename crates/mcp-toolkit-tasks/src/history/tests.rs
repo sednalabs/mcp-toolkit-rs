@@ -81,6 +81,17 @@ async fn zero_terminal_age_hides_entry_from_get_and_list() {
             Box::pin(async { Ok(rmcp::model::CallToolResult::success(vec![])) })
         })
         .expect("task");
+    authority
+        .wait(
+            &principal,
+            &task.task_id,
+            None,
+            Duration::from_secs(2),
+            crate::TaskWaitCondition::Terminal,
+        )
+        .await
+        .expect("terminal wait")
+        .expect("terminal snapshot");
     let history = OperationHistory::new(HistoryLimits {
         max_entries: 1,
         max_terminal_age: Duration::ZERO,
@@ -105,7 +116,15 @@ async fn terminal_summary_has_only_authoritative_terminal_timestamp() {
         })
         .expect("task");
     let snapshot = authority
-        .get_task_for_principal(&principal, &task.task_id)
+        .wait(
+            &principal,
+            &task.task_id,
+            None,
+            Duration::from_secs(2),
+            crate::TaskWaitCondition::Terminal,
+        )
+        .await
+        .expect("terminal wait")
         .expect("terminal snapshot");
     assert!(snapshot.task.status().is_terminal());
     let history = OperationHistory::new(HistoryLimits {
@@ -133,6 +152,17 @@ async fn terminal_reread_preserves_first_monotonic_age_instant() {
             Box::pin(async { Ok(rmcp::model::CallToolResult::success(vec![])) })
         })
         .expect("task");
+    authority
+        .wait(
+            &principal,
+            &task.task_id,
+            None,
+            Duration::from_secs(2),
+            crate::TaskWaitCondition::Terminal,
+        )
+        .await
+        .expect("terminal wait")
+        .expect("terminal snapshot");
     let history = OperationHistory::new(HistoryLimits {
         max_entries: 1,
         max_terminal_age: Duration::from_secs(3600),
