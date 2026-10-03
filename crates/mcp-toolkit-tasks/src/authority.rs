@@ -467,6 +467,16 @@ struct AtomicMetrics {
     rejected_waits: AtomicU64,
 }
 
+fn rotate_observer_task_to_back(queue: &mut VecDeque<String>, task_id: &str) {
+    let Some(position) = queue.iter().position(|queued| queued == task_id) else {
+        return;
+    };
+    let Some(task_id) = queue.remove(position) else {
+        return;
+    };
+    queue.push_back(task_id);
+}
+
 impl TaskAuthority {
     /// Creates an empty task authority with explicit task and waiter limits.
     pub fn new(config: TaskAuthorityConfig) -> Self {
@@ -1146,51 +1156,66 @@ async fn observation_loop(
                 let Some(principal) = state.observer_principals.pop_front() else {
                     break;
                 };
-                let Some(task_id) = state
-                    .observer_tasks
-                    .get_mut(&principal)
-                    .and_then(VecDeque::pop_front)
-                else {
-                    state.observer_tasks.remove(&principal);
-                    continue;
-                };
-                let queue_has_more = state
+                let task_turns = state
                     .observer_tasks
                     .get(&principal)
-                    .is_some_and(|queue| !queue.is_empty());
-                if queue_has_more {
-                    state.observer_principals.push_back(principal.clone());
+                    .map_or(0, VecDeque::len);
+                if task_turns == 0 {
+                    state.observer_tasks.remove(&principal);
+                    continue;
                 }
+                // Rotate each inspected principal after its bounded scan so a
+                // busy principal cannot monopolize the shared fallback budget.
+                state.observer_principals.push_back(principal.clone());
 
-                let binding = state.bindings.get(&task_id).cloned();
-                if let Some(binding) = binding {
-                    let generation = binding.signal.generation();
-                    let lease = state.leases.get(&task_id);
-                    let due = lease.is_some_and(|lease| {
-                        generation != lease.observed_signal_generation
-                            || lease.next_probe_at.is_some_and(|deadline| deadline <= now)
-                            || (binding.signal.is_settlement_pending()
-                                && lease.next_probe_at.is_none_or(|deadline| deadline <= now))
-                    });
-                    if due && selected.is_none() {
-                        selected = Some((task_id.clone(), binding.clone(), generation));
-                    }
-                    if let Some(deadline) = lease.and_then(|lease| lease.next_probe_at) {
-                        earliest = Some(earliest.map_or(deadline, |current| current.min(deadline)));
-                    }
+                // Inspect this bounded principal bucket in full. A clean task
+                // at the front must not hide a due task behind it when the
+                // global read window reopens.
+                let mut selected_task_id = None;
+                for _ in 0..task_turns {
+                    let Some(task_id) = state
+                        .observer_tasks
+                        .get_mut(&principal)
+                        .and_then(VecDeque::pop_front)
+                    else {
+                        break;
+                    };
+                    if let Some(binding) = state.bindings.get(&task_id).cloned() {
+                        let generation = binding.signal.generation();
+                        let lease = state.leases.get(&task_id);
+                        let due = lease.is_some_and(|lease| {
+                            generation != lease.observed_signal_generation
+                                || lease.next_probe_at.is_some_and(|deadline| deadline <= now)
+                                || (binding.signal.is_settlement_pending()
+                                    && lease.next_probe_at.is_none_or(|deadline| deadline <= now))
+                        });
+                        if due && selected.is_none() {
+                            selected = Some((task_id.clone(), binding.clone(), generation));
+                            selected_task_id = Some(task_id.clone());
+                        }
+                        if let Some(deadline) = lease.and_then(|lease| lease.next_probe_at) {
+                            earliest =
+                                Some(earliest.map_or(deadline, |current| current.min(deadline)));
+                        }
 
-                    let bucket_was_empty = state
-                        .observer_tasks
-                        .get(&principal)
-                        .is_none_or(VecDeque::is_empty);
-                    state
-                        .observer_tasks
-                        .entry(principal.clone())
-                        .or_default()
-                        .push_back(task_id.clone());
-                    if bucket_was_empty && !state.observer_principals.contains(&principal) {
-                        state.observer_principals.push_back(principal);
+                        state
+                            .observer_tasks
+                            .entry(principal.clone())
+                            .or_default()
+                            .push_back(task_id);
                     }
+                }
+                if let Some(selected_task_id) = selected_task_id {
+                    rotate_observer_task_to_back(
+                        state.observer_tasks.entry(principal.clone()).or_default(),
+                        &selected_task_id,
+                    );
+                }
+                if selected.is_some() {
+                    // The selected principal was moved to the back above.
+                    // Return to the outer loop after this full bucket scan so
+                    // the next read starts at the next principal.
+                    break;
                 }
             }
             (selected, earliest)

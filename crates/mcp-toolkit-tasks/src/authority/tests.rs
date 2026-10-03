@@ -326,13 +326,32 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
         1,
         "the authority-wide one-per-second budget covers all queued task IDs"
     );
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while authority.metrics().fallback_reads < 4 {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !task_ids.iter().all(|task_id| {
+            let Ok(binding) = authority.binding_for(&owner, task_id) else {
+                return false;
+            };
+            let requested_generation = binding.signal.generation();
+            if requested_generation < 3 {
+                return false;
+            }
+            authority
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| {
+                    state
+                        .leases
+                        .get(task_id)
+                        .map(|lease| lease.observed_signal_generation)
+                })
+                .is_some_and(|observed| observed >= requested_generation)
+        }) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("the shared fair coordinator continues across all four task IDs");
+    .expect("the shared fair coordinator acknowledges each task ID's requested generation");
     for waiter in &waiters {
         waiter.abort();
     }
