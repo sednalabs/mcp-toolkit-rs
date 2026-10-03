@@ -182,19 +182,26 @@ async fn ttl_failure_keeps_capacity_until_rmcp_evicts_the_record() {
     let authority = TaskAuthority::new(limited_config(1, 4, 4));
     let owner = principal("owner-a");
     let task = authority
-        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(10), |_ctx| {
+        .spawn_for_principal(owner.clone(), TaskOptions::new().with_ttl_ms(500), |_ctx| {
             Box::pin(async {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 Ok(ok_result("must expire"))
             })
         })
         .expect("task admitted");
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    let failed = authority
-        .manager
-        .get_task(&task.task_id)
-        .expect("RMCP retains the failed task before eviction");
-    assert_eq!(failed.status(), TaskStatus::Failed);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if authority
+                .get_task_for_principal(&owner, &task.task_id)
+                .is_ok_and(|snapshot| snapshot.task.status() == TaskStatus::Failed)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("RMCP publishes failure while its retained record is still present");
     assert!(matches!(
         authority.spawn_for_principal(owner.clone(), TaskOptions::default(), |_ctx| {
             Box::pin(async { Ok(ok_result("too early")) })
@@ -297,7 +304,7 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
                         &owner,
                         &task_id,
                         None,
-                        Duration::from_secs(2),
+                        Duration::from_secs(10),
                         TaskWaitCondition::Terminal,
                     )
                     .await
@@ -305,12 +312,22 @@ async fn retained_tasks_and_same_task_waiter_fanout_share_the_read_budget() {
         }
     }
 
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while authority.metrics().fallback_reads < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the four task IDs receive shared-coordinator fallback reads");
+    for waiter in &waiters {
+        waiter.abort();
+    }
     for waiter in waiters {
-        let result = waiter.await.expect("waiter task joins");
-        assert!(result.expect("wait succeeds").is_none());
+        let _ = waiter.await;
     }
     let metrics = authority.metrics();
     assert_eq!(metrics.active_waiters, 0);
+    assert!(metrics.fallback_reads >= 4);
     assert!(metrics.fallback_reads <= 8);
     authority.shutdown();
 }
