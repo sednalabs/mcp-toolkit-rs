@@ -2080,6 +2080,7 @@ dependencies = [
  "mcp-toolkit-policy-ffi",
  "mcp-toolkit-policy-runtime",
  "mcp-toolkit-process",
+ "mcp-toolkit-provenance",
  "mcp-toolkit-scratchpad",
  "mcp-toolkit-server",
  "mcp-toolkit-tasks",
@@ -2259,6 +2260,17 @@ name = "mcp-toolkit-process"
 version = "0.1.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "mcp-toolkit-provenance"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
 ]
 
 [[package]]
