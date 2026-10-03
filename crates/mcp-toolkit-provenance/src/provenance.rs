@@ -331,7 +331,6 @@ pub fn capture_current_runtime_provenance(
 
 #[cfg(target_os = "linux")]
 fn capture_loaded_image() -> Option<LoadedImageEvidence> {
-    use std::ffi::CStr;
     use std::os::fd::{AsRawFd, FromRawFd};
 
     const PROC_SUPER_MAGIC: libc::c_long = 0x9fa0;
@@ -356,7 +355,7 @@ fn capture_loaded_image() -> Option<LoadedImageEvidence> {
         return None;
     }
 
-    let exe_name = CStr::from_bytes_with_nul(b"exe\0").ok()?;
+    let exe_name = c"exe";
     // SAFETY: proc_self remains open; exe_name is a NUL-terminated constant;
     // flags request a read-only close-on-exec descriptor. The fd is converted
     // to File exactly once below, including the ownership transfer.
