@@ -150,21 +150,18 @@ impl OperationHistory {
         principal: &TaskPrincipal,
         operation_id: &str,
     ) -> Result<Option<OperationSummary>, HistoryError> {
-        let mut partitions = self
+        let partitions = self
             .partitions
             .lock()
             .map_err(|_| HistoryError::StateUnavailable)?;
-        prune_expired(
-            &mut partitions,
-            Instant::now(),
-            self.limits.max_terminal_age,
-        );
+        let now = Instant::now();
         Ok(partitions
             .get(principal.as_str())
             .and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| item.summary.operation_id == operation_id)
+                items.iter().find(|item| {
+                    item.summary.operation_id == operation_id
+                        && is_visible(item, now, self.limits.max_terminal_age)
+                })
             })
             .map(|item| item.summary.clone()))
     }
@@ -175,21 +172,18 @@ impl OperationHistory {
         principal: &TaskPrincipal,
         limit: usize,
     ) -> Result<Vec<OperationSummary>, HistoryError> {
-        let mut partitions = self
+        let partitions = self
             .partitions
             .lock()
             .map_err(|_| HistoryError::StateUnavailable)?;
-        prune_expired(
-            &mut partitions,
-            Instant::now(),
-            self.limits.max_terminal_age,
-        );
+        let now = Instant::now();
         Ok(partitions
             .get(principal.as_str())
             .map(|items| {
                 items
                     .iter()
                     .rev()
+                    .filter(|item| is_visible(item, now, self.limits.max_terminal_age))
                     .take(limit)
                     .map(|item| item.summary.clone())
                     .collect()
@@ -231,10 +225,11 @@ impl OperationHistory {
                 .iter()
                 .flat_map(|(partition, items)| {
                     items.iter().enumerate().filter_map(move |(index, item)| {
-                        item.terminal_at.map(|at| (at, partition.clone(), index))
+                        item.terminal_at.map(|at| (at, partition, index))
                     })
                 })
-                .min_by_key(|(at, _, _)| *at);
+                .min_by_key(|(at, _, _)| *at)
+                .map(|(at, partition, index)| (at, partition.clone(), index));
             if let Some((_, partition, index)) = oldest {
                 let Some(items) = partitions.get_mut(&partition) else {
                     return Err(HistoryError::StateUnavailable);
@@ -255,16 +250,18 @@ impl OperationHistory {
     }
 }
 
+fn is_visible(item: &Stored, now: Instant, max_terminal_age: Duration) -> bool {
+    item.terminal_at
+        .is_none_or(|at| now.saturating_duration_since(at) < max_terminal_age)
+}
+
 fn prune_expired(
     partitions: &mut HashMap<String, Vec<Stored>>,
     now: Instant,
     max_terminal_age: Duration,
 ) {
     for items in partitions.values_mut() {
-        items.retain(|item| {
-            item.terminal_at
-                .is_none_or(|at| now.saturating_duration_since(at) < max_terminal_age)
-        });
+        items.retain(|item| is_visible(item, now, max_terminal_age));
     }
     partitions.retain(|_, items| !items.is_empty());
 }
