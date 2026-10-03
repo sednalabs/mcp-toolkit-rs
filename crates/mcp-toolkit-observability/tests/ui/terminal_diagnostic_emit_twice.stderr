@@ -9,7 +9,7 @@ error[E0382]: use of moved value: `diagnostic`
 15 |     diagnostic.emit();
    |     ^^^^^^^^^^ value used here after move
    |
-note: `ToolCallTerminalDiagnostic::emit` takes ownership of the receiver `self`, which moves `diagnostic`
+note: `mcp_toolkit_observability::ToolCallTerminalDiagnostic::emit` takes ownership of the receiver `self`, which moves `diagnostic`
   --> src/tool_call_diagnostic.rs
    |
    |     pub fn emit(self) {
