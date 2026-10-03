@@ -92,5 +92,5 @@ silently fork or weaken verification.
 - [OSV query API](https://api.osv.dev/v1/query) was queried for the exact crate
   and version on 2026-10-03; hosted repository checks remain authoritative for
   landing.
-- The Toolkit integration contract remains in
-  `docs/design/dpop-atomic-authentication-boundary.md`.
+- The Toolkit integration contract remains in the [atomic DPoP authentication
+  boundary](dpop-atomic-authentication-boundary.md).
