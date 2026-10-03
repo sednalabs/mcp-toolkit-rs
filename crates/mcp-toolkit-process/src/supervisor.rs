@@ -211,14 +211,16 @@ impl ProcessManager {
         let (status_tx, status_rx) = watch::channel(ProcessStatus::Running { id, scope });
         let grace = self.grace;
         let supervisor = tokio::spawn(supervise(
-            Arc::downgrade(&self.inner),
             child,
-            id,
-            os_pid,
-            scope,
-            grace,
-            cancel_rx,
-            status_tx,
+            SupervisorContext {
+                manager_inner: Arc::downgrade(&self.inner),
+                id,
+                os_pid,
+                scope,
+                grace,
+                cancel: cancel_rx,
+                status: status_tx,
+            },
         ));
         let entry = Entry {
             cancel: cancel.clone(),
@@ -408,44 +410,56 @@ impl GraceWindow {
     }
 }
 
-async fn supervise(
+struct SupervisorContext {
     manager_inner: Weak<Inner>,
-    mut child: Child,
     id: ProcessId,
     os_pid: Option<u32>,
     scope: SignalScope,
     grace: Duration,
-    mut cancel: watch::Receiver<bool>,
+    cancel: watch::Receiver<bool>,
     status: watch::Sender<ProcessStatus>,
-) {
+}
+
+async fn supervise(mut child: Child, context: SupervisorContext) {
+    let SupervisorContext {
+        manager_inner,
+        id,
+        os_pid,
+        scope,
+        grace,
+        mut cancel,
+        status,
+    } = context;
     let mut failures = Vec::new();
     let mut cleanup_requested = false;
     loop {
-        tokio::select! {
-            result = child.wait() => match result {
-                Ok(exit) => {
-                    let _ = status.send(ProcessStatus::Exited {
-                        id,
-                        scope,
-                        status: exit,
-                        failures,
-                    });
-                    retire_completed(&manager_inner, id);
-                    return;
-                }
-                Err(error) => {
-                    record_wait_failure(&mut failures, error, scope);
-                    publish_pending(id, scope, &failures, &status);
-                    match wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await {
-                        NaturalWaitAction::Retry => {}
-                        NaturalWaitAction::BeginCleanup => cleanup_requested = true,
-                    }
-                }
-            },
+        let observation = tokio::select! {
+            result = child.wait() => Some(result),
             changed = cancel.changed() => {
                 let _ = changed;
-                cleanup_requested = true;
+                None
+            },
+        };
+        match observation {
+            Some(Ok(exit)) => {
+                let _ = status.send(ProcessStatus::Exited {
+                    id,
+                    scope,
+                    status: exit,
+                    failures,
+                });
+                retire_completed(&manager_inner, id);
+                return;
             }
+            Some(Err(error)) => {
+                record_wait_failure(&mut failures, error, scope);
+                publish_pending(id, scope, &failures, &status);
+                match wait_after_initial_error(&mut cancel, WAIT_ERROR_RETRY_BACKOFF).await {
+                    NaturalWaitAction::Retry => {}
+                    NaturalWaitAction::BeginCleanup => cleanup_requested = true,
+                }
+            }
+            None => cleanup_requested = true,
         }
         if cleanup_requested {
             break;
@@ -463,27 +477,29 @@ async fn supervise(
     loop {
         match grace_window.next_action(Instant::now()) {
             GraceAction::ObserveUntil(deadline) => {
-                tokio::select! {
+                let observation = tokio::select! {
                     biased;
-                    _ = sleep_until(deadline) => break,
-                    result = child.wait() => match result {
-                        Ok(exit) => {
-                            let _ = status.send(ProcessStatus::Exited {
-                                id,
-                                scope,
-                                status: exit,
-                                failures,
-                            });
-                            retire_completed(&manager_inner, id);
-                            return;
-                        }
-                        Err(error) => {
-                            record_wait_failure(&mut failures, error, scope);
-                            publish_pending(id, scope, &failures, &status);
-                            let delay = grace_window.retry_delay(Instant::now());
-                            if !delay.is_zero() {
-                                tokio::time::sleep(delay).await;
-                            }
+                    _ = sleep_until(deadline) => None,
+                    result = child.wait() => Some(result),
+                };
+                match observation {
+                    None => break,
+                    Some(Ok(exit)) => {
+                        let _ = status.send(ProcessStatus::Exited {
+                            id,
+                            scope,
+                            status: exit,
+                            failures,
+                        });
+                        retire_completed(&manager_inner, id);
+                        return;
+                    }
+                    Some(Err(error)) => {
+                        record_wait_failure(&mut failures, error, scope);
+                        publish_pending(id, scope, &failures, &status);
+                        let delay = grace_window.retry_delay(Instant::now());
+                        if !delay.is_zero() {
+                            tokio::time::sleep(delay).await;
                         }
                     }
                 }
@@ -856,9 +872,9 @@ mod tests {
         assert!(matches!(
             pending_status.borrow().clone(),
             ProcessStatus::PendingCleanup {
-                failures: [ProcessFailure::Wait(_)],
+                failures,
                 ..
-            }
+            } if matches!(failures.as_slice(), [ProcessFailure::Wait(_)])
         ));
 
         let mut failures = Vec::new();
