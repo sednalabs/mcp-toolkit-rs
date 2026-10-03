@@ -20,6 +20,7 @@ path = "src/lib.rs"
 [features]
 session = [
   "dep:axum",
+  "dep:async-trait",
   "dep:futures",
   "dep:http-body-util",
   "dep:rmcp",
@@ -36,6 +37,7 @@ session-sqlite = [
 
 [dependencies]
 axum = { version = "0.8.8", optional = true }
+async-trait = { version = "0.1.91", optional = true }
 http = "1.3.1"
 http-body-util = { version = "0.1.3", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }

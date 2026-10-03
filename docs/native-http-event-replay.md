@@ -7,8 +7,7 @@ replay is process-local and is lost when the process exits.
 
 The in-memory store assigns each event an opaque ID using RMCP's
 `server_side_http::session_id` generator and checks generated IDs against
-retained anchors. The
-ID is a bearer replay capability: a holder can request later events from its
+retained anchors. The ID is a bearer replay capability: a holder can request later events from its
 issuing stream. It is not bound to an authenticated principal. Existing route
 authentication and Host/Origin checks must run before RMCP handles replay.
 Unknown, malformed, expired, and evicted anchors produce an empty finite replay

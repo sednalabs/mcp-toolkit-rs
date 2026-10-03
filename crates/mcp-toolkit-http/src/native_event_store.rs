@@ -10,21 +10,18 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    io::Write,
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
-use futures::{stream, Stream};
-use rmcp::{
-    model::ServerJsonRpcMessage,
-    transport::{
-        common::server_side_http::{session_id, ServerSseMessage},
-        streamable_http_server::session::{
-            EventStore as RmcpEventStore, EventStoreError as RmcpError, EventStream,
-        },
+use futures::stream;
+use rmcp::transport::{
+    common::server_side_http::{session_id, ServerSseMessage},
+    streamable_http_server::session::{
+        EventStore as RmcpEventStore, EventStoreError as RmcpError, EventStream,
     },
 };
-use tokio::sync::Mutex;
 
 /// Positive limits for the process-local native replay store.
 #[derive(Debug, Clone)]
@@ -61,7 +58,13 @@ impl NativeEventStoreConfig {
             || self.max_event_id_bytes == 0
             || self.max_payload_bytes == 0
             || self.max_total_payload_bytes == 0
-            || self.max_payload_bytes > self.max_total_payload_bytes
+        {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "native event store limits must be positive",
+            )));
+        }
+        if self.max_payload_bytes > self.max_total_payload_bytes
             || self.max_streams > 100_000
             || self.max_events_per_stream > 100_000
             || self.max_stream_id_bytes > 4_096
@@ -71,7 +74,7 @@ impl NativeEventStoreConfig {
         {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "native event store limits must be positive",
+                "native event store limits exceed their maximum values",
             )));
         }
         Ok(())
@@ -90,6 +93,7 @@ struct State {
     streams: HashMap<String, StreamEvents>,
     stream_order: VecDeque<String>,
     anchors: HashMap<String, Anchor>,
+    total_payload_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -116,7 +120,7 @@ impl NativeEventStore {
     /// Create a new bounded native event store.
     ///
     /// # Errors
-    /// Returns an error when any configured retention or byte limit is zero.
+    /// Returns an error when a configured limit is invalid or exceeds its cap.
     pub fn new(config: NativeEventStoreConfig) -> Result<Self, RmcpError> {
         config.validate()?;
         Ok(Self {
@@ -137,20 +141,46 @@ impl NativeEventStore {
             retry_seconds: event.retry.map(|value| value.as_secs()),
             retry_nanos: event.retry.map(|value| value.subsec_nanos()),
         };
-        serde_json::to_vec(&encoded)
-            .map(|bytes| bytes.len())
-            .map_err(|error| Box::new(error) as RmcpError)
+        struct ByteCounter(usize);
+        impl Write for ByteCounter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 = self
+                    .0
+                    .checked_add(bytes.len())
+                    .ok_or_else(|| std::io::Error::other("payload byte count overflow"))?;
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut counter = ByteCounter(0);
+        serde_json::to_writer(&mut counter, &encoded)
+            .map_err(|error| Box::new(error) as RmcpError)?;
+        Ok(counter.0)
     }
 
-    fn expire(state: &mut State, ttl: Duration) {
+    fn lock(&self) -> Result<MutexGuard<'_, State>, RmcpError> {
+        self.state.lock().map_err(|_| {
+            Box::new(std::io::Error::other("native event store lock poisoned")) as RmcpError
+        })
+    }
+
+    fn expire(state: &mut State, ttl: Duration) -> Result<(), RmcpError> {
         let now = Instant::now();
-        for stream in state.streams.values_mut() {
-            while stream
-                .events
-                .front()
-                .is_some_and(|event| now.saturating_duration_since(event.created) >= ttl)
-            {
-                stream.events.pop_front();
+        let stream_ids: Vec<_> = state.streams.keys().cloned().collect();
+        for stream_id in stream_ids {
+            loop {
+                let should_expire = state
+                    .streams
+                    .get(&stream_id)
+                    .and_then(|stream| stream.events.front())
+                    .is_some_and(|event| now.saturating_duration_since(event.created) >= ttl);
+                if !should_expire {
+                    break;
+                }
+                Self::remove_oldest_in_stream(state, &stream_id)?;
             }
         }
         let expired_streams: Vec<_> = state
@@ -160,66 +190,84 @@ impl NativeEventStore {
             .map(|(id, _)| id.clone())
             .collect();
         for stream_id in expired_streams {
-            state.streams.remove(&stream_id);
-            state.stream_order.retain(|id| id != &stream_id);
-            state
-                .anchors
-                .retain(|_, anchor| anchor.stream_id != stream_id);
+            Self::remove_stream(state, &stream_id)?;
         }
         state
             .anchors
             .retain(|_, anchor| now.saturating_duration_since(anchor.created) < ttl);
+        Ok(())
     }
 
-    fn remove_oldest_event(state: &mut State) -> bool {
+    fn remove_stream(state: &mut State, stream_id: &str) -> Result<(), RmcpError> {
+        if let Some(stream) = state.streams.remove(stream_id) {
+            let bytes = stream
+                .events
+                .iter()
+                .try_fold(0usize, |total, event| {
+                    total.checked_add(event.payload_bytes)
+                })
+                .ok_or_else(|| {
+                    Box::new(std::io::Error::other(
+                        "native event byte accounting overflow",
+                    )) as RmcpError
+                })?;
+            state.total_payload_bytes =
+                state
+                    .total_payload_bytes
+                    .checked_sub(bytes)
+                    .ok_or_else(|| {
+                        Box::new(std::io::Error::other(
+                            "native event byte accounting underflow",
+                        )) as RmcpError
+                    })?;
+        }
+        state.stream_order.retain(|id| id != stream_id);
+        state
+            .anchors
+            .retain(|_, anchor| anchor.stream_id != stream_id);
+        Ok(())
+    }
+
+    fn remove_oldest_in_stream(state: &mut State, stream_id: &str) -> Result<bool, RmcpError> {
+        let mut removed = None;
+        let mut remove_stream = false;
+        if let Some(stream) = state.streams.get_mut(stream_id) {
+            removed = stream.events.pop_front();
+            remove_stream = stream.events.is_empty();
+        }
+        let Some(event) = removed else {
+            return Ok(false);
+        };
+        state.total_payload_bytes = state
+            .total_payload_bytes
+            .checked_sub(event.payload_bytes)
+            .ok_or_else(|| {
+                Box::new(std::io::Error::other(
+                    "native event byte accounting underflow",
+                )) as RmcpError
+            })?;
+        state.anchors.remove(&event.id);
+        if remove_stream {
+            Self::remove_stream(state, stream_id)?;
+        }
+        Ok(true)
+    }
+
+    fn remove_oldest_event(state: &mut State) -> Result<bool, RmcpError> {
         let oldest_stream = state
             .streams
             .iter()
-            .filter_map(|(id, stream)| {
-                stream
-                    .events
-                    .front()
-                    .map(|event| (id.clone(), event.created))
-            })
+            .filter_map(|(id, stream)| stream.events.front().map(|event| (id, event.created)))
             .min_by_key(|(_, created)| *created)
-            .map(|(id, _)| id);
+            .map(|(id, _)| id.clone());
         let Some(stream_id) = oldest_stream else {
-            return false;
+            return Ok(false);
         };
-        let mut remove_stream = false;
-        let mut removed_id = None;
-        if let Some(stream) = state.streams.get_mut(&stream_id) {
-            if let Some(event) = stream.events.pop_front() {
-                removed_id = Some(event.id);
-            }
-            remove_stream = stream.events.is_empty();
-        }
-        if let Some(id) = removed_id {
-            state.anchors.remove(&id);
-        }
-        if remove_stream {
-            state.streams.remove(&stream_id);
-            state.stream_order.retain(|id| id != &stream_id);
-        }
-        true
-    }
-
-    fn retained_payload_bytes(state: &State) -> Result<usize, RmcpError> {
-        state
-            .streams
-            .values()
-            .flat_map(|stream| stream.events.iter())
-            .try_fold(0usize, |total, event| {
-                total.checked_add(event.payload_bytes)
-            })
-            .ok_or_else(|| {
-                Box::new(std::io::Error::other(
-                    "native event byte accounting overflow",
-                )) as RmcpError
-            })
+        Self::remove_oldest_in_stream(state, &stream_id)
     }
 }
 
+#[async_trait::async_trait]
 impl RmcpEventStore for NativeEventStore {
     async fn store_event(
         &self,
@@ -247,8 +295,8 @@ impl RmcpEventStore for NativeEventStore {
             )));
         }
         let now = Instant::now();
-        let mut state = self.state.lock().await;
-        Self::expire(&mut state, self.config.ttl);
+        let mut state = self.lock()?;
+        Self::expire(&mut state, self.config.ttl)?;
         if state.anchors.contains_key(&id) {
             return Err(Box::new(std::io::Error::other(
                 "generated event ID collision",
@@ -257,10 +305,7 @@ impl RmcpEventStore for NativeEventStore {
         if !state.streams.contains_key(stream_id) {
             while state.streams.len() >= self.config.max_streams {
                 if let Some(evicted) = state.stream_order.pop_front() {
-                    state.streams.remove(&evicted);
-                    state
-                        .anchors
-                        .retain(|_, anchor| anchor.stream_id != evicted);
+                    Self::remove_stream(&mut state, &evicted)?;
                 } else {
                     break;
                 }
@@ -282,16 +327,25 @@ impl RmcpEventStore for NativeEventStore {
             stream.touched = now;
             while stream.events.len() >= self.config.max_events_per_stream {
                 if let Some(evicted) = stream.events.pop_front() {
-                    evicted_ids.push(evicted.id);
+                    evicted_ids.push((evicted.id, evicted.payload_bytes));
                 }
             }
         }
-        for evicted_id in evicted_ids {
+        for (evicted_id, bytes) in evicted_ids {
+            state.total_payload_bytes =
+                state
+                    .total_payload_bytes
+                    .checked_sub(bytes)
+                    .ok_or_else(|| {
+                        Box::new(std::io::Error::other(
+                            "native event byte accounting underflow",
+                        )) as RmcpError
+                    })?;
             state.anchors.remove(&evicted_id);
         }
         let available_bytes = self.config.max_total_payload_bytes - payload_bytes;
-        while Self::retained_payload_bytes(&state)? > available_bytes {
-            if !Self::remove_oldest_event(&mut state) {
+        while state.total_payload_bytes > available_bytes {
+            if !Self::remove_oldest_event(&mut state)? {
                 return Err(Box::new(std::io::Error::other(
                     "native event store byte limit cannot be satisfied",
                 )));
@@ -326,6 +380,14 @@ impl RmcpEventStore for NativeEventStore {
                 created: now,
             },
         );
+        state.total_payload_bytes = state
+            .total_payload_bytes
+            .checked_add(payload_bytes)
+            .ok_or_else(|| {
+                Box::new(std::io::Error::other(
+                    "native event byte accounting overflow",
+                )) as RmcpError
+            })?;
         Ok(id)
     }
 
@@ -333,8 +395,8 @@ impl RmcpEventStore for NativeEventStore {
         if last_event_id.is_empty() || last_event_id.len() > self.config.max_event_id_bytes {
             return Ok(Box::pin(stream::empty()) as EventStream);
         }
-        let mut state = self.state.lock().await;
-        Self::expire(&mut state, self.config.ttl);
+        let mut state = self.lock()?;
+        Self::expire(&mut state, self.config.ttl)?;
         let Some(anchor) = state.anchors.get(last_event_id).cloned() else {
             return Ok(Box::pin(stream::empty()) as EventStream);
         };
