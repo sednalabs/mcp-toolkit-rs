@@ -94,3 +94,70 @@ async fn zero_terminal_age_hides_entry_from_get_and_list() {
         .is_none());
     assert!(history.list(&principal, 10).expect("list").is_empty());
 }
+
+#[tokio::test]
+async fn terminal_summary_has_only_authoritative_terminal_timestamp() {
+    let authority = TaskAuthority::new();
+    let principal = TaskPrincipal::new("terminal-owner").expect("principal");
+    let task = authority
+        .spawn_for_principal(principal.clone(), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(rmcp::model::CallToolResult::success(vec![])) })
+        })
+        .expect("task");
+    let snapshot = authority
+        .get_task_for_principal(&principal, &task.task_id)
+        .expect("terminal snapshot");
+    assert!(snapshot.task.status().is_terminal());
+    let history = OperationHistory::new(HistoryLimits {
+        max_entries: 1,
+        max_terminal_age: Duration::from_secs(3600),
+    });
+
+    let summary = history
+        .record(&authority, &principal, &task.task_id)
+        .expect("record");
+
+    assert_eq!(summary.started_at, None);
+    assert_eq!(
+        summary.finished_at.as_deref(),
+        Some(snapshot.task.task.last_updated_at.as_str())
+    );
+}
+
+#[tokio::test]
+async fn terminal_reread_preserves_first_monotonic_age_instant() {
+    let authority = TaskAuthority::new();
+    let principal = TaskPrincipal::new("terminal-owner").expect("principal");
+    let task = authority
+        .spawn_for_principal(principal.clone(), TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(rmcp::model::CallToolResult::success(vec![])) })
+        })
+        .expect("task");
+    let history = OperationHistory::new(HistoryLimits {
+        max_entries: 1,
+        max_terminal_age: Duration::from_secs(3600),
+    });
+    history
+        .record(&authority, &principal, &task.task_id)
+        .expect("first record");
+    let first_terminal_at = Instant::now() - Duration::from_secs(30);
+    {
+        let mut partitions = history.partitions.lock().expect("history lock");
+        let item = partitions
+            .get_mut(principal.as_str())
+            .and_then(|items| items.first_mut())
+            .expect("stored terminal summary");
+        item.terminal_at = Some(first_terminal_at);
+    }
+
+    history
+        .record(&authority, &principal, &task.task_id)
+        .expect("terminal reread");
+
+    let partitions = history.partitions.lock().expect("history lock");
+    let item = partitions
+        .get(principal.as_str())
+        .and_then(|items| items.first())
+        .expect("retained terminal summary");
+    assert_eq!(item.terminal_at, Some(first_terminal_at));
+}

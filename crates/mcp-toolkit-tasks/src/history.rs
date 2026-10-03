@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use crate::{TaskAuthority, TaskAuthorityError, TaskPrincipal};
 
@@ -43,8 +43,12 @@ pub struct OperationSummary {
     pub state: OperationState,
     /// RMCP creation timestamp.
     pub created_at: String,
+    /// Execution start timestamp, unavailable from the RMCP task model.
+    pub started_at: Option<String>,
     /// Timestamp of the last authoritative update.
     pub last_updated_at: String,
+    /// Terminal status update timestamp; this does not measure execution duration.
+    pub finished_at: Option<String>,
     /// Authority observation revision.
     pub revision: u64,
 }
@@ -76,7 +80,7 @@ impl From<TaskAuthorityError> for HistoryError {
 #[derive(Debug, Clone)]
 struct Stored {
     summary: OperationSummary,
-    terminal_at: Option<SystemTime>,
+    terminal_at: Option<Instant>,
 }
 
 /// In-memory bounded history. This is not restart persistence. Build Helper's
@@ -118,7 +122,9 @@ impl OperationHistory {
             kind: OperationKind::Task,
             state,
             created_at: task.task.created_at,
-            last_updated_at: task.task.last_updated_at,
+            started_at: None,
+            last_updated_at: task.task.last_updated_at.clone(),
+            finished_at: state.terminal().then_some(task.task.last_updated_at),
             revision: snapshot.revision,
         };
         if summary.operation_id.is_empty()
@@ -150,7 +156,7 @@ impl OperationHistory {
             .map_err(|_| HistoryError::StateUnavailable)?;
         prune_expired(
             &mut partitions,
-            SystemTime::now(),
+            Instant::now(),
             self.limits.max_terminal_age,
         );
         Ok(partitions
@@ -175,7 +181,7 @@ impl OperationHistory {
             .map_err(|_| HistoryError::StateUnavailable)?;
         prune_expired(
             &mut partitions,
-            SystemTime::now(),
+            Instant::now(),
             self.limits.max_terminal_age,
         );
         Ok(partitions
@@ -196,7 +202,7 @@ impl OperationHistory {
             .partitions
             .lock()
             .map_err(|_| HistoryError::StateUnavailable)?;
-        let now = SystemTime::now();
+        let now = Instant::now();
         prune_expired(&mut partitions, now, self.limits.max_terminal_age);
 
         let existing = partitions.get(&proof.partition).and_then(|items| {
@@ -209,7 +215,11 @@ impl OperationHistory {
                 return Err(HistoryError::StateUnavailable);
             };
             let mut item = items.remove(index);
-            item.terminal_at = proof.summary.state.terminal().then_some(now);
+            item.terminal_at = if proof.summary.state.terminal() {
+                item.terminal_at.or(Some(now))
+            } else {
+                None
+            };
             item.summary = proof.summary;
             items.push(item);
             return Ok(());
@@ -247,13 +257,13 @@ impl OperationHistory {
 
 fn prune_expired(
     partitions: &mut HashMap<String, Vec<Stored>>,
-    now: SystemTime,
+    now: Instant,
     max_terminal_age: Duration,
 ) {
     for items in partitions.values_mut() {
         items.retain(|item| {
             item.terminal_at
-                .is_none_or(|at| now.duration_since(at).unwrap_or_default() < max_terminal_age)
+                .is_none_or(|at| now.saturating_duration_since(at) < max_terminal_age)
         });
     }
     partitions.retain(|_, items| !items.is_empty());
