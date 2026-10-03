@@ -89,8 +89,8 @@ and `defer_loading` are OpenAI host/API mechanisms layered over the catalogue
 the host has collected. They cannot recover tools omitted because an MCP client
 stopped after page one.
 
-`mcp-toolkit-core::openai_tool_search` provides generic builders for two
-closely related shapes:
+`mcp-toolkit-core::openai_tool_search` provides related request, capability,
+and metadata helpers:
 
 - `OpenAiMcpToolSearchRequest::new(model, mcp_tool).to_request_value()`
   - use when you need an API-postable Responses request fragment with `model`

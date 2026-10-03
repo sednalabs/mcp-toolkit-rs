@@ -89,12 +89,16 @@ impl OpenAiToolSearchCapabilities {
         if let (Some(compatibility), Value::Object(fields)) =
             (&self.model_compatibility, &mut value)
         {
-            fields.insert(
-                "minimum_model".to_string(),
-                json!(compatibility.minimum_model),
-            );
+            if !compatibility.minimum_model.is_empty() {
+                fields.insert(
+                    "minimum_model".to_string(),
+                    json!(compatibility.minimum_model),
+                );
+            }
             if let Some(recommended_model) = &compatibility.recommended_model {
-                fields.insert("recommended_model".to_string(), json!(recommended_model));
+                if !recommended_model.is_empty() {
+                    fields.insert("recommended_model".to_string(), json!(recommended_model));
+                }
             }
         }
         value
@@ -507,6 +511,12 @@ mod tests {
             .to_value();
         assert_eq!(compatible["minimum_model"], json!("app-minimum"));
         assert_eq!(compatible["recommended_model"], json!("app-recommended"));
+
+        let blank_compatibility = OpenAiToolSearchCapabilities::default()
+            .with_model_compatibility("", Some(""))
+            .to_value();
+        assert!(blank_compatibility.get("minimum_model").is_none());
+        assert!(blank_compatibility.get("recommended_model").is_none());
     }
 
     #[test]
