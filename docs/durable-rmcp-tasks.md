@@ -25,7 +25,7 @@ The durable record and the live execution are different things:
 | --- | --- | --- |
 | Task ID, complete `DetailedTask` snapshot, SDK status/result/error and persisted generation | Yes, after a successful commit | RMCP restores only unexpired records through its own manager. |
 | Ownership envelope required by the configured authorization boundary | Yes, atomically with the task record | Missing, unknown, or mismatched ownership fails closed; no global listing or cross-principal fallback. |
-| Absolute expiry and terminal-retention deadlines | Yes | Compare with wall-clock UTC on load and before reads/transitions; expired records are durably evicted before reported absent. Timers may wake cleanup but are not the source of truth. |
+| Absolute task-expiry and terminal-retention deadlines | Yes | Compare with wall-clock UTC on load and before reads/transitions. An active task past its task deadline follows RMCP's TTL-failure transition and receives a persisted terminal-retention deadline; only records whose terminal-retention deadline has passed are evicted. Timers may wake cleanup but are not the source of truth. |
 | Rust future, task executor handle, cooperative cancellation token | No | Never deserialize or recreate them. A recovered nonterminal task is reconciled by RMCP as interrupted; it is not rerun automatically. |
 | Pending input response sender/channel | No | A restored `input_required` task cannot accept a response through its lost channel. RMCP reconciles it as interrupted unless the SDK defines and proves a different recovery contract. |
 | Cancellation intent | Persist the intent before signalling the in-memory token | Intent is not proof of cancellation or task completion. Recovery does not report `cancelled` solely from the intent. |
@@ -95,16 +95,22 @@ protocol state machine.
 
 ## Restart and crash contract
 
-Restoration first loads records, validates their shape and ownership metadata,
-and compares persisted absolute deadlines with wall-clock time. It then
-restores still-retained terminal records and durably evicts expired records.
-Only after this pass may the manager serve task reads. The handling of
-interrupted nonterminal records is SDK-owned and explicit: mark them failed
-with an interruption error using a durable transition, or fail manager restore
-closed if that reconciliation cannot be committed. It must not invent a result
-or report a successful cancellation. An application resumption callback is a
-separate contract that needs explicit idempotency and ownership semantics; it
-is not implied by persistence and must not automatically replay work.
+Restoration first loads records and validates their shape and ownership
+metadata, then compares persisted absolute deadlines with wall-clock time.
+RMCP applies its ordinary TTL-failure transition to an active task whose task
+deadline passed during downtime. It commits that terminal failure and its
+absolute terminal-retention deadline before serving reads. A non-expired
+`working` or `input_required` task is instead failed as interrupted because its
+execution future or input channel cannot be restored. Both are SDK-owned
+terminal transitions; neither invents an operation result or reports
+cancellation as successful. If reconciliation cannot be committed, manager
+restore fails closed. Already-terminal records are restored exactly only until
+their persisted terminal-retention deadline; once that deadline passes,
+RMCP durably evicts them. The retention deadline is fixed when the terminal
+transition commits and must not slide forward on another process restart.
+An application resumption callback is a separate contract requiring explicit
+idempotency and ownership semantics; persistence does not imply or trigger
+automatic work replay.
 
 | Crash point | Durable state after restart | Required behavior |
 | --- | --- | --- |
@@ -117,7 +123,9 @@ is not implied by persistence and must not automatically replay work.
 | Update commit fails | Previous generation remains authoritative | Do not publish the uncommitted update; return/record the documented persistence error. |
 | Future completes, before terminal commit | Previous nonterminal generation remains authoritative | Do not expose an uncommitted result; retain enough live state to retry commit without re-executing the operation, or close/fail the manager explicitly. |
 | Terminal commit succeeds, before response | Terminal snapshot and generation exist | Restore and return that exact terminal snapshot if still within retention. |
-| Expiry/retention deadline passes during downtime | Record is expired by absolute deadline | Evict durably before reporting absence; a restarted timer must not extend its lifetime. |
+| Active task's TTL deadline passes during downtime | Active task and owner remain durable; no process-local future exists | Persist RMCP's TTL-failure terminal state and its retention deadline before serving reads; do not treat task expiry as immediate eviction. |
+| Terminal-retention deadline passes during downtime | Terminal record is past its absolute retention deadline | Durably evict before reporting absence; a restarted timer must not extend its lifetime. |
+| Interrupted task is reconciled, then the process restarts again | Failure snapshot and fixed terminal-retention deadline are durable | Return that exact failure until the stored deadline, then evict; do not reset the deadline at restart. |
 | Store returns a record with absent/unknown owner or inconsistent generation | Provenance is incomplete | Fail closed; do not make the task enumerable or readable under another owner. |
 
 Cancellation intent and cancellation outcome are separate durable facts. A
@@ -134,8 +142,10 @@ protocol-facing read path. The suite must cover:
 
 - terminal success, failure, and cancellation records restored exactly until
   their absolute retention deadline;
-- expired running and terminal records evicted across downtime without TTL
-  extension;
+- a running task whose TTL passes during downtime is durably recorded as the
+  RMCP TTL failure and retained until its absolute terminal deadline;
+- terminal records whose retention deadline passes during downtime are
+  evicted, while repeated restarts do not extend a still-retained deadline;
 - `working` and `input_required` records reconciled as SDK-defined interruption
   failures, with no resumed future, fabricated result, or duplicate spawn;
 - cancellation intent before and after token signalling remaining distinct
