@@ -5388,16 +5388,58 @@ mod tests {
             value["openai_deferred_loading"]["tool_search"]["type"],
             json!("tool_search")
         );
-        assert_eq!(
-            value["openai_deferred_loading"]["recommended_model"],
-            json!("gpt-5.5")
-        );
+        assert!(value["openai_deferred_loading"]
+            .get("minimum_model")
+            .is_none());
+        assert!(value["openai_deferred_loading"]
+            .get("recommended_model")
+            .is_none());
         assert_eq!(value["schemas"]["cache.list"]["name"], json!("cache.list"));
 
         let compact = response.to_compact_value();
         assert!(compact.get("schemas").is_none());
         assert!(compact.get("openai_deferred_loading").is_none());
         assert_eq!(compact["openai_allowed_tools"], json!(["cache.list"]));
+    }
+
+    #[test]
+    fn openai_inventory_metadata_is_neutral_by_default_and_model_compatibility_is_explicit() {
+        let inventory = ToolInventory::from_capabilities([ToolCapability::new("cache.list")
+            .with_read_only(true)
+            .with_discovery(ToolDiscoveryMetadata::new("List cache entries", ["cache"]))])
+        .expect("inventory");
+        let results = inventory.search(
+            &ToolSearchFilter::default(),
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        let response =
+            ToolSearchResponse::find_tools(None, None, None, results).into_openai_response();
+        let neutral = response.to_value();
+        assert!(neutral["openai_deferred_loading"]
+            .get("minimum_model")
+            .is_none());
+        assert!(neutral["openai_deferred_loading"]
+            .get("recommended_model")
+            .is_none());
+        let compact = response.to_compact_value();
+        assert!(compact.get("openai_deferred_loading").is_none());
+
+        let explicit = ToolSearchResponse::find_tools(None, None, None, Vec::new())
+            .into_openai_response()
+            .with_openai_metadata(
+                super::OpenAiDeferredLoadingMetadata::default()
+                    .with_model_compatibility("application-minimum", Some("application-target")),
+            )
+            .to_value();
+        assert_eq!(
+            explicit["openai_deferred_loading"]["minimum_model"],
+            json!("application-minimum")
+        );
+        assert_eq!(
+            explicit["openai_deferred_loading"]["recommended_model"],
+            json!("application-target")
+        );
     }
 
     #[test]

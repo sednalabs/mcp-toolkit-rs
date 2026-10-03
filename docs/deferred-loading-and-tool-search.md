@@ -89,16 +89,26 @@ and `defer_loading` are OpenAI host/API mechanisms layered over the catalogue
 the host has collected. They cannot recover tools omitted because an MCP client
 stopped after page one.
 
-`mcp-toolkit-core::openai_tool_search` provides generic builders for two
-closely related shapes:
+`mcp-toolkit-core::openai_tool_search` provides related request, capability,
+and metadata helpers:
 
-- `OpenAiMcpToolSearchConfig::to_request_value()`
+- `OpenAiMcpToolSearchRequest::new(model, mcp_tool).to_request_value()`
   - use when you need an API-postable Responses request fragment with `model`
     and the deferred MCP plus `tool_search` tools array
-- `OpenAiMcpToolSearchConfig::to_documentation_value()`
-  - use when you need a richer resource or docs payload that also carries model
-    support guidance, optional reviewed approval examples, or notes for
-    operators
+- `OpenAiToolSearchCapabilities::default().to_value()`
+  - use when describing the required capabilities without setting a model
+    threshold or recommendation
+- `OpenAiDeferredLoadingMetadata::with_model_compatibility(...)`
+  - use only when an application deliberately maintains model-specific
+    compatibility guidance; this metadata is omitted by default
+
+The historical `OpenAiMcpToolSearchConfig` remains available for staged source
+compatibility and its `new` constructor is deprecated. Its model defaults and
+the deprecated model constants are historical values, not current support
+guidance. The deprecated `to_documentation_value()` preserves its legacy
+`minimum_model_for_tool_search` field and adds
+`model_compatibility_status: historical` to qualify that value. New request
+construction requires the application to choose its own model explicitly.
 
 `ToolSearchResponse` provides the matching local discovery envelope with
 `openai_allowed_tools` and optional schemas. When a local discovery result
@@ -174,14 +184,16 @@ projection bounds companion names and extra result records before cloning them,
 retains inventory and extra-result prefixes while shrinking, reports source and
 returned counts for every extension, and enforces the same 32 KiB budget.
 
-The default OpenAI MCP config leaves `require_approval` unset. If a trusted
+The default OpenAI MCP request leaves `require_approval` unset. If a trusted
 workflow wants to reduce approval friction for read-only tools, supply an
 explicit reviewed read-only override with service-owned tool names. The toolkit
 request helper writes that override into the MCP tool's
-`require_approval.never` filter with the reviewed `tool_names` list. The
-documentation helper keeps that override separate so docs or resources can show
-the safer default config first. Keep mutating tools behind approval unless
-another workflow-level review gate applies.
+`require_approval.never` filter with the reviewed `tool_names` list. Keep
+mutating tools behind approval unless another workflow-level review gate
+applies. Full inventory metadata describes required capabilities by default;
+model-specific compatibility metadata appears only when an application opts in
+and owns keeping those model names current. Compact search output omits hosted
+metadata entirely.
 
 ## When to choose each helper
 
