@@ -107,16 +107,12 @@ pub fn select_operation_logs<'a>(
     let record_limit = query.max_records.min(candidates.len());
     let mut selected_reversed = Vec::with_capacity(record_limit);
     let mut remaining_bytes = query.max_payload_bytes;
-    let mut omitted_records = candidates.len().saturating_sub(record_limit);
-    let mut omitted_payload_bytes = candidates[..candidates.len() - record_limit]
-        .iter()
-        .fold(0usize, |total, record| {
-            total.saturating_add(record.payload.len())
-        });
+    let mut omitted_records = 0usize;
+    let mut omitted_payload_bytes = 0usize;
 
-    for record in candidates.iter().rev().take(record_limit) {
+    for record in candidates.iter().rev() {
         let payload_bytes = record.payload.len();
-        if payload_bytes <= remaining_bytes {
+        if selected_reversed.len() < record_limit && payload_bytes <= remaining_bytes {
             remaining_bytes -= payload_bytes;
             selected_reversed.push(*record);
         } else {
@@ -209,6 +205,7 @@ mod tests {
         let result = select_operation_logs(
             &rows,
             OperationLogQuery {
+                max_records: 2,
                 max_payload_bytes: 6,
                 latest_source_offset: Some(3),
                 ..query(Some(3))
