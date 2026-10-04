@@ -28,6 +28,7 @@
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io)
 
 pub mod capability;
+pub mod duration_estimate;
 pub mod guarded_action;
 pub mod mcp_apps;
 pub mod notifications;
