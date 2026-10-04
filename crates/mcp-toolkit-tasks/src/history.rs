@@ -53,6 +53,31 @@ pub struct OperationSummary {
     pub revision: u64,
 }
 
+/// A typed summary of an application-owned task.
+///
+/// This value describes state supplied by an application task manager. Its
+/// identifier and revision are not RMCP task identity or `TaskAuthority`
+/// observation revision, and the value grants no authority to access a task.
+/// Applications should leave `started_at` absent until they have evidence that
+/// execution actually began.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationTaskSummary {
+    /// Opaque identifier assigned by the application that owns the task.
+    pub application_task_id: String,
+    /// Application-reported state in the shared, closed operation vocabulary.
+    pub state: OperationState,
+    /// Application-recorded creation timestamp, represented as RFC 3339 text.
+    pub created_at: String,
+    /// Actual application execution-start timestamp, if known.
+    pub started_at: Option<String>,
+    /// Application-recorded timestamp for the latest summary update.
+    pub last_updated_at: String,
+    /// Application-recorded terminal-state timestamp, if terminal.
+    pub finished_at: Option<String>,
+    /// Positive application-owned summary revision; unrelated to RMCP revisions.
+    pub application_revision: u64,
+}
+
 /// Count and terminal-age limits for retained summaries.
 #[derive(Debug, Clone, Copy)]
 pub struct HistoryLimits {

@@ -1,6 +1,25 @@
 use super::*;
 use rmcp::task_manager::TaskOptions;
 
+#[test]
+fn application_summary_keeps_application_identity_and_revision_explicit() {
+    let summary = ApplicationTaskSummary {
+        application_task_id: "app-task-17".to_owned(),
+        state: OperationState::Working,
+        created_at: "2026-10-04T05:00:00Z".to_owned(),
+        started_at: None,
+        last_updated_at: "2026-10-04T05:00:00Z".to_owned(),
+        finished_at: None,
+        application_revision: 1,
+    };
+
+    assert_eq!(summary.application_task_id, "app-task-17");
+    assert_eq!(summary.application_revision, 1);
+    assert_eq!(summary.state, OperationState::Working);
+    assert!(summary.started_at.is_none());
+    assert!(summary.finished_at.is_none());
+}
+
 fn test_authority() -> TaskAuthority {
     let capacity = std::num::NonZeroUsize::new(16).expect("nonzero test capacity");
     TaskAuthority::new(crate::TaskAuthorityConfig {
