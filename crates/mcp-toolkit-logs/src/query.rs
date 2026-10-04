@@ -108,7 +108,11 @@ pub fn select_operation_logs<'a>(
     let mut selected_reversed = Vec::with_capacity(record_limit);
     let mut remaining_bytes = query.max_payload_bytes;
     let mut omitted_records = candidates.len().saturating_sub(record_limit);
-    let mut omitted_payload_bytes = 0usize;
+    let mut omitted_payload_bytes = candidates[..candidates.len() - record_limit]
+        .iter()
+        .fold(0usize, |total, record| {
+            total.saturating_add(record.payload.len())
+        });
 
     for record in candidates.iter().rev().take(record_limit) {
         let payload_bytes = record.payload.len();
@@ -251,7 +255,21 @@ mod tests {
         assert!(result.entries.is_empty());
         assert_eq!(result.latest_source_offset, Some(2));
         assert_eq!(result.omitted_records, 2);
+        assert_eq!(result.omitted_payload_bytes, 2);
         assert!(result.response_truncated);
+
+        let bounded_count = select_operation_logs(
+            &rows,
+            OperationLogQuery {
+                max_records: 1,
+                latest_source_offset: Some(2),
+                ..query(Some(2))
+            },
+        )
+        .expect("valid ordered rows");
+        assert_eq!(bounded_count.entries.iter().map(|row| row.offset).collect::<Vec<_>>(), [2]);
+        assert_eq!(bounded_count.omitted_records, 1);
+        assert_eq!(bounded_count.omitted_payload_bytes, 1);
 
         let no_tail = select_operation_logs(
             &rows,
