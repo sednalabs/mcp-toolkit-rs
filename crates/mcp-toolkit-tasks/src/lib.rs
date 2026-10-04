@@ -40,5 +40,6 @@ pub use authority::{
     AuthorizedTaskSnapshot, ManagedTaskContext, TaskAuthority, TaskAuthorityConfig,
     TaskAuthorityError, TaskAuthorityMetrics, TaskPrincipal, TaskWaitCondition,
 };
+pub use history::ApplicationTaskSummary;
 /// Exact RMCP SDK coordinated with this Toolkit Tasks crate.
 pub use rmcp;
