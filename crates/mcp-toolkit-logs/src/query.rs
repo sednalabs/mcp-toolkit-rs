@@ -175,7 +175,11 @@ mod tests {
         .expect("valid ordered rows");
 
         assert_eq!(
-            result.entries.iter().map(|row| row.offset).collect::<Vec<_>>(),
+            result
+                .entries
+                .iter()
+                .map(|row| row.offset)
+                .collect::<Vec<_>>(),
             [0, 1, 2]
         );
     }
@@ -205,14 +209,21 @@ mod tests {
         let result = select_operation_logs(
             &rows,
             OperationLogQuery {
-                max_payload_bytes: 4,
+                max_payload_bytes: 6,
                 latest_source_offset: Some(3),
                 ..query(Some(3))
             },
         )
         .expect("valid ordered rows");
 
-        assert_eq!(result.entries.iter().map(|row| row.offset).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|row| row.offset)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
         assert_eq!(result.omitted_records, 1);
         assert_eq!(result.omitted_payload_bytes, 4);
         assert!(result.response_truncated);
@@ -267,7 +278,14 @@ mod tests {
             },
         )
         .expect("valid ordered rows");
-        assert_eq!(bounded_count.entries.iter().map(|row| row.offset).collect::<Vec<_>>(), [2]);
+        assert_eq!(
+            bounded_count
+                .entries
+                .iter()
+                .map(|row| row.offset)
+                .collect::<Vec<_>>(),
+            [2]
+        );
         assert_eq!(bounded_count.omitted_records, 1);
         assert_eq!(bounded_count.omitted_payload_bytes, 1);
 
