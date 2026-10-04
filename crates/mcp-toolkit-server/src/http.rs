@@ -1014,8 +1014,11 @@ fn session_stats_json(stats: SessionStats) -> serde_json::Value {
 
 /// Reports whether an HTTP header map declares the current MCP protocol era.
 ///
-/// This recognizes a parseable `MCP-Protocol-Version` at or above
-/// `2026-07-28`, matching the server's existing route classification.
+/// This applies RMCP's protocol-version representation and ordering to
+/// `MCP-Protocol-Version`, matching the server's existing route classification.
+/// RMCP can accept opaque version strings, and its ordering can classify an
+/// unsupported string as current; this function does not validate version
+/// syntax or support.
 ///
 /// # Security
 /// This is a routing hint only. It does not validate a protocol exchange,
@@ -1041,7 +1044,7 @@ fn session_stats_json(stats: SessionStats) -> serde_json::Value {
 /// assert!(!declares_current_protocol(&headers));
 ///
 /// headers.insert("MCP-Protocol-Version", HeaderValue::from_static("not-a-version"));
-/// assert!(!declares_current_protocol(&headers));
+/// assert!(declares_current_protocol(&headers)); // Opaque strings are not validated.
 ///
 /// headers.insert(
 ///     "MCP-Protocol-Version",
@@ -1059,9 +1062,11 @@ pub fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
 
 /// Reports whether a JSON-RPC payload declares the current MCP protocol era.
 ///
-/// This recognizes a parseable string at
-/// `params._meta.io.modelcontextprotocol/protocolVersion` at or above
-/// `2026-07-28`, matching the server's existing route classification.
+/// This applies RMCP's protocol-version representation and ordering to the
+/// string at `params._meta.io.modelcontextprotocol/protocolVersion`, matching
+/// the server's existing route classification. RMCP can accept opaque version
+/// strings, and its ordering can classify an unsupported string as current;
+/// this function does not validate version syntax or support.
 ///
 /// # Security
 /// This is a routing hint only. It does not validate a protocol exchange,
@@ -1083,7 +1088,7 @@ pub fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
 /// let legacy = json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}});
 /// assert!(!payload_declares_current_protocol(&legacy));
 /// assert!(!payload_declares_current_protocol(&json!({"method":"tools/list"})));
-/// assert!(!payload_declares_current_protocol(&json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"not-a-version"}}})));
+/// assert!(payload_declares_current_protocol(&json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"not-a-version"}}}))); // Opaque strings are not validated.
 /// assert!(!payload_declares_current_protocol(&json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":false}}})));
 /// ```
 pub fn payload_declares_current_protocol(payload: &serde_json::Value) -> bool {
