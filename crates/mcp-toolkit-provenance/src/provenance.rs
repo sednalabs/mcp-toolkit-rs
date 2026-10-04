@@ -659,7 +659,7 @@ mod tests {
             LoadedImageEvidence {
                 _file: file,
                 file_size_bytes,
-                modified_unix_ms: system_time_to_unix_ms(modified.clone()),
+                modified_unix_ms: system_time_to_unix_ms(modified),
                 modified,
             }
         });
@@ -700,23 +700,23 @@ mod tests {
     #[test]
     fn stamp_freshness_compares_full_precision_loaded_time() {
         let loaded = UNIX_EPOCH + Duration::from_millis(10) + Duration::from_nanos(800_000);
-        let captured = captured_with_loaded_modified(Some(loaded.clone()));
+        let captured = captured_with_loaded_modified(Some(loaded));
 
         assert_eq!(
-            evaluate_stamp_freshness(&captured, StampTimestamp::Known(loaded.clone())),
+            evaluate_stamp_freshness(&captured, StampTimestamp::Known(loaded)),
             StampFreshness::Fresh
         );
         assert_eq!(
             evaluate_stamp_freshness(
                 &captured,
-                StampTimestamp::Known(loaded.clone() - Duration::from_nanos(1))
+                StampTimestamp::Known(loaded - Duration::from_nanos(1))
             ),
             StampFreshness::Stale
         );
         assert_eq!(
             evaluate_stamp_freshness(
                 &captured,
-                StampTimestamp::Known(loaded.clone() + Duration::from_nanos(1))
+                StampTimestamp::Known(loaded + Duration::from_nanos(1))
             ),
             StampFreshness::Fresh
         );
@@ -750,7 +750,7 @@ mod tests {
         let pre_epoch = UNIX_EPOCH
             .checked_sub(Duration::from_nanos(1))
             .expect("one nanosecond before Unix epoch");
-        let captured = captured_with_loaded_modified(Some(pre_epoch.clone()));
+        let captured = captured_with_loaded_modified(Some(pre_epoch));
         let evidence = captured.loaded_image.as_ref().expect("loaded evidence");
 
         assert_eq!(evidence.modified, pre_epoch);
