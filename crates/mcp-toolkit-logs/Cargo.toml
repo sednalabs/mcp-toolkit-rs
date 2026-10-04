@@ -1,0 +1,12 @@
+[package]
+name = "mcp-toolkit-logs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Storage-independent bounded queries over caller-owned operation logs."
+repository = "https://github.com/sednalabs/mcp-toolkit-rs"
+publish = false
+
+[lib]
+path = "src/lib.rs"

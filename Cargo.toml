@@ -6,6 +6,7 @@ members = [
   "crates/mcp-toolkit-auth",
   "crates/mcp-toolkit-docs",
   "crates/mcp-toolkit-http",
+  "crates/mcp-toolkit-logs",
   "crates/mcp-toolkit-observability",
   "crates/mcp-toolkit-policy-core",
   "crates/mcp-toolkit-policy-conformance",
