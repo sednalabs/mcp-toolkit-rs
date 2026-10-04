@@ -13,6 +13,6 @@
 mod query;
 
 pub use query::{
-    select_operation_logs, OperationLogQuery, OperationLogQueryError,
-    OperationLogQueryResult, OperationLogRecordRef,
+    select_operation_logs, OperationLogQuery, OperationLogQueryError, OperationLogQueryResult,
+    OperationLogRecordRef,
 };
