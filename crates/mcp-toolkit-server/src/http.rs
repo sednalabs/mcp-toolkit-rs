@@ -1012,7 +1012,44 @@ fn session_stats_json(stats: SessionStats) -> serde_json::Value {
     })
 }
 
-fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
+/// Reports whether an HTTP header map declares the current MCP protocol era.
+///
+/// This recognizes a parseable `MCP-Protocol-Version` at or above
+/// `2026-07-28`, matching the server's existing route classification.
+///
+/// # Security
+/// This is a routing hint only. It does not validate a protocol exchange,
+/// establish stateless lifecycle behavior, authenticate a request, or grant
+/// session or actor authority. Callers must retain their normal authorization
+/// and session checks. In particular, SDK `initialize` behavior may still use
+/// the legacy handshake even when a request carries this header.
+///
+/// # Examples
+///
+/// ```
+/// use http::{HeaderMap, HeaderValue};
+/// use mcp_toolkit_server::http::declares_current_protocol;
+///
+/// let mut headers = HeaderMap::new();
+/// headers.insert("MCP-Protocol-Version", HeaderValue::from_static("2026-07-28"));
+/// assert!(declares_current_protocol(&headers));
+///
+/// headers.insert("MCP-Protocol-Version", HeaderValue::from_static("2025-11-25"));
+/// assert!(!declares_current_protocol(&headers));
+///
+/// headers.remove("MCP-Protocol-Version");
+/// assert!(!declares_current_protocol(&headers));
+///
+/// headers.insert("MCP-Protocol-Version", HeaderValue::from_static("not-a-version"));
+/// assert!(!declares_current_protocol(&headers));
+///
+/// headers.insert(
+///     "MCP-Protocol-Version",
+///     HeaderValue::from_bytes(&[0xff]).unwrap(),
+/// );
+/// assert!(!declares_current_protocol(&headers));
+/// ```
+pub fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
     headers
         .get(HEADER_MCP_PROTOCOL_VERSION)
         .and_then(|value| value.to_str().ok())
@@ -1020,7 +1057,36 @@ fn declares_current_protocol(headers: &http::HeaderMap) -> bool {
         .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
 }
 
-fn payload_declares_current_protocol(payload: &serde_json::Value) -> bool {
+/// Reports whether a JSON-RPC payload declares the current MCP protocol era.
+///
+/// This recognizes a parseable string at
+/// `params._meta.io.modelcontextprotocol/protocolVersion` at or above
+/// `2026-07-28`, matching the server's existing route classification.
+///
+/// # Security
+/// This is a routing hint only. It does not validate a protocol exchange,
+/// establish stateless lifecycle behavior, authenticate a request, or grant
+/// session or actor authority. Callers must retain their normal authorization
+/// and session checks. In particular, delegate protocol validation to RMCP;
+/// SDK `initialize` behavior may still use the legacy handshake when a payload
+/// carries this value.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_toolkit_server::http::payload_declares_current_protocol;
+/// use serde_json::json;
+///
+/// let current = json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}});
+/// assert!(payload_declares_current_protocol(&current));
+///
+/// let legacy = json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}});
+/// assert!(!payload_declares_current_protocol(&legacy));
+/// assert!(!payload_declares_current_protocol(&json!({"method":"tools/list"})));
+/// assert!(!payload_declares_current_protocol(&json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"not-a-version"}}})));
+/// assert!(!payload_declares_current_protocol(&json!({"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":false}}})));
+/// ```
+pub fn payload_declares_current_protocol(payload: &serde_json::Value) -> bool {
     payload
         .get("params")
         .and_then(|params| params.get("_meta"))

@@ -22,3 +22,17 @@ No row above asserts that hosted checks have passed. Toolkit acceptance requires
 hosted evidence bound to its repository, exact head SHA, workflow/run identity,
 and lockfile. Downstream adoption is separate and additionally binds the
 consumer revision; toolkit validation alone does not prove it.
+
+## Public current-protocol route hints
+
+`mcp_toolkit_server::http::declares_current_protocol` and
+`payload_declares_current_protocol` expose the server's existing HTTP-header
+and JSON-body route declarations for downstream composition. They recognize a
+parseable current-era version but do not validate the protocol exchange or
+prove stateless lifecycle behavior. They grant no authentication, session, or
+actor authority. Delegate protocol validation and request semantics to RMCP.
+
+The SDK's `initialize` handling remains on its legacy handshake path even when
+one of these hints recognizes a current-era declaration. Downstream callers
+must retain their session and actor checks for `initialize`; a current-era hint
+must not be used to bypass those checks or any normal authorization decision.
