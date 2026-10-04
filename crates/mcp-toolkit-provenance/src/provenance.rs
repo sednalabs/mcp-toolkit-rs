@@ -104,7 +104,7 @@ pub struct CapturedRuntimeProvenance {
 }
 
 /// Supplies the stamp's timestamp without asserting that it could be measured.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StampTimestamp {
     /// The caller successfully measured the stamp file's modification time.
     Known(SystemTime),
@@ -421,7 +421,7 @@ fn capture_loaded_image() -> Option<LoadedImageEvidence> {
     let file = unsafe { File::from_raw_fd(exe_fd) };
     let metadata = file.metadata().ok()?;
     let modified = metadata.modified().ok()?;
-    let modified_unix_ms = system_time_to_unix_ms(modified.clone());
+    let modified_unix_ms = system_time_to_unix_ms(modified);
 
     Some(LoadedImageEvidence {
         _file: file,
