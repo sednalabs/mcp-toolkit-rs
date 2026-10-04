@@ -22,6 +22,7 @@ pub use provenance::{
     AttestationOptions, AttestationPayload, AttestationRuntime, AttestationStatus,
     BinaryProvenance, BuildMetadata, BuildProvenance, BuildProvenanceInput,
     CapturedRuntimeProvenance, ProcessProvenance, RuntimeProvenance, SourceProvenance,
+    StampFreshness, StampTimestamp, evaluate_stamp_freshness,
     UnavailableField, ATTESTATION_SCHEMA_VERSION, UNKNOWN_VALUE,
 };
 
