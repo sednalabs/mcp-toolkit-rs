@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -103,6 +103,53 @@ pub struct CapturedRuntimeProvenance {
     loaded_image: Option<LoadedImageEvidence>,
 }
 
+/// Supplies the stamp's timestamp without asserting that it could be measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampTimestamp {
+    /// The caller successfully measured the stamp file's modification time.
+    Known(SystemTime),
+    /// The stamp file's modification time could not be measured.
+    Unknown,
+}
+
+/// Reports the relationship between a stamp and the captured loaded image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampFreshness {
+    /// The stamp is at least as recent as the loaded image.
+    Fresh,
+    /// The stamp is older than the loaded image.
+    Stale,
+    /// The stamp modification time is unavailable.
+    UnknownStamp,
+    /// The loaded image's modification time is unavailable.
+    UnavailableLoadedImage,
+}
+
+/// Compares a caller-measured stamp time with evidence from the captured loaded image.
+///
+/// A timestamp at the same instant as the loaded image is fresh. This function
+/// compares full-precision `SystemTime` values and does not consult report data.
+///
+/// # Errors
+/// This function is infallible; measurement failures are returned as variants.
+pub fn evaluate_stamp_freshness(
+    captured: &CapturedRuntimeProvenance,
+    stamp: StampTimestamp,
+) -> StampFreshness {
+    let StampTimestamp::Known(stamp_modified) = stamp else {
+        return StampFreshness::UnknownStamp;
+    };
+    let Some(loaded_image) = captured.loaded_image.as_ref() else {
+        return StampFreshness::UnavailableLoadedImage;
+    };
+
+    if stamp_modified >= loaded_image.modified {
+        StampFreshness::Fresh
+    } else {
+        StampFreshness::Stale
+    }
+}
+
 impl CapturedRuntimeProvenance {
     /// Returns the reportable provenance without exposing its loaded-image proof.
     pub fn runtime(&self) -> &RuntimeProvenance {
@@ -112,7 +159,7 @@ impl CapturedRuntimeProvenance {
     pub(crate) fn loaded_image_modified_unix_ms(&self) -> Option<u64> {
         self.loaded_image
             .as_ref()
-            .map(|evidence| evidence.modified_unix_ms)
+            .and_then(|evidence| evidence.modified_unix_ms)
     }
 
     #[cfg(test)]
@@ -130,7 +177,8 @@ struct LoadedImageEvidence {
     // Retaining this handle ties the measured metadata to the opened loaded image.
     _file: File,
     file_size_bytes: u64,
-    modified_unix_ms: u64,
+    modified: SystemTime,
+    modified_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -312,7 +360,7 @@ pub fn capture_current_runtime_provenance(
         },
         |evidence| BinaryProvenance {
             file_size_bytes: Some(evidence.file_size_bytes),
-            modified_unix_ms: Some(evidence.modified_unix_ms),
+            modified_unix_ms: evidence.modified_unix_ms,
         },
     );
 
@@ -372,11 +420,13 @@ fn capture_loaded_image() -> Option<LoadedImageEvidence> {
     // SAFETY: openat returned a new owned descriptor, transferred to File.
     let file = unsafe { File::from_raw_fd(exe_fd) };
     let metadata = file.metadata().ok()?;
-    let modified_unix_ms = metadata.modified().ok().and_then(system_time_to_unix_ms)?;
+    let modified = metadata.modified().ok()?;
+    let modified_unix_ms = system_time_to_unix_ms(modified);
 
     Some(LoadedImageEvidence {
         _file: file,
         file_size_bytes: metadata.len(),
+        modified,
         modified_unix_ms,
     })
 }
@@ -581,6 +631,7 @@ fn now_rfc3339() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn input(dirty: Option<bool>) -> BuildProvenanceInput<'static> {
         BuildProvenanceInput {
@@ -597,6 +648,44 @@ mod tests {
         }
     }
 
+    fn captured_with_loaded_modified(modified: Option<SystemTime>) -> CapturedRuntimeProvenance {
+        let loaded_image = modified.map(|modified| {
+            let executable_path = std::env::current_exe().expect("current executable path");
+            let file = File::open(executable_path).expect("open current executable");
+            let file_size_bytes = file
+                .metadata()
+                .expect("metadata for current executable")
+                .len();
+            LoadedImageEvidence {
+                _file: file,
+                file_size_bytes,
+                modified_unix_ms: system_time_to_unix_ms(modified),
+                modified,
+            }
+        });
+        let binary = loaded_image.as_ref().map_or(
+            BinaryProvenance {
+                file_size_bytes: None,
+                modified_unix_ms: None,
+            },
+            |evidence| BinaryProvenance {
+                file_size_bytes: Some(evidence.file_size_bytes),
+                modified_unix_ms: evidence.modified_unix_ms,
+            },
+        );
+        CapturedRuntimeProvenance {
+            runtime: RuntimeProvenance {
+                build: BuildProvenance::from_input(input(Some(false))),
+                process: ProcessProvenance {
+                    pid: std::process::id(),
+                    executable_path: "test-only synthetic timestamp".to_string(),
+                },
+                binary,
+            },
+            loaded_image,
+        }
+    }
+
     #[test]
     fn canonical_identity_marks_dirty_builds() {
         let clean = BuildProvenance::from_input(input(Some(false)));
@@ -606,6 +695,71 @@ mod tests {
         let dirty = BuildProvenance::from_input(input(Some(true)));
         assert_eq!(dirty.build_identity, "example-mcp@1.2.3+abc123-dirty");
         assert_eq!(dirty.source_fingerprint, "git:abc123:dirty");
+    }
+
+    #[test]
+    fn stamp_freshness_compares_full_precision_loaded_time() {
+        let loaded = UNIX_EPOCH + Duration::from_millis(10) + Duration::from_nanos(800_000);
+        let captured = captured_with_loaded_modified(Some(loaded));
+
+        assert_eq!(
+            evaluate_stamp_freshness(&captured, StampTimestamp::Known(loaded)),
+            StampFreshness::Fresh
+        );
+        assert_eq!(
+            evaluate_stamp_freshness(
+                &captured,
+                StampTimestamp::Known(loaded - Duration::from_nanos(1))
+            ),
+            StampFreshness::Stale
+        );
+        assert_eq!(
+            evaluate_stamp_freshness(
+                &captured,
+                StampTimestamp::Known(loaded + Duration::from_nanos(1))
+            ),
+            StampFreshness::Fresh
+        );
+        assert_eq!(
+            captured.runtime.binary.modified_unix_ms,
+            Some(10),
+            "the adjacent times intentionally share the same report millisecond"
+        );
+    }
+
+    #[test]
+    fn stamp_freshness_reports_unknown_and_unavailable_evidence() {
+        let captured = captured_with_loaded_modified(Some(UNIX_EPOCH));
+        assert_eq!(
+            evaluate_stamp_freshness(&captured, StampTimestamp::Unknown),
+            StampFreshness::UnknownStamp
+        );
+
+        let unavailable = captured_with_loaded_modified(None);
+        assert_eq!(
+            evaluate_stamp_freshness(
+                &unavailable,
+                StampTimestamp::Known(UNIX_EPOCH + Duration::from_secs(1))
+            ),
+            StampFreshness::UnavailableLoadedImage
+        );
+    }
+
+    #[test]
+    fn loaded_image_evidence_survives_unreportable_pre_epoch_time() {
+        let pre_epoch = UNIX_EPOCH
+            .checked_sub(Duration::from_nanos(1))
+            .expect("one nanosecond before Unix epoch");
+        let captured = captured_with_loaded_modified(Some(pre_epoch));
+        let evidence = captured.loaded_image.as_ref().expect("loaded evidence");
+
+        assert_eq!(evidence.modified, pre_epoch);
+        assert_eq!(evidence.modified_unix_ms, None);
+        assert_eq!(captured.runtime.binary.modified_unix_ms, None);
+        assert_eq!(
+            evaluate_stamp_freshness(&captured, StampTimestamp::Known(pre_epoch)),
+            StampFreshness::Fresh
+        );
     }
 
     #[test]
@@ -732,7 +886,7 @@ mod tests {
             );
             assert_eq!(
                 captured.runtime.binary.modified_unix_ms,
-                Some(evidence.modified_unix_ms)
+                evidence.modified_unix_ms
             );
         }
 
