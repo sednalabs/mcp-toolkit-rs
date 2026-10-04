@@ -652,7 +652,10 @@ mod tests {
         let loaded_image = modified.map(|modified| {
             let executable_path = std::env::current_exe().expect("current executable path");
             let file = File::open(executable_path).expect("open current executable");
-            let file_size_bytes = file.metadata().expect("metadata for current executable").len();
+            let file_size_bytes = file
+                .metadata()
+                .expect("metadata for current executable")
+                .len();
             LoadedImageEvidence {
                 _file: file,
                 file_size_bytes,
