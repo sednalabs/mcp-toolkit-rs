@@ -85,7 +85,7 @@ jobs:
 
       - name: Install coverage tool
         # taiki-e/install-action v2
-        uses: taiki-e/install-action@0758d235715de2f3551eacc980d9ae8fce9342c3
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
         with:
           tool: cargo-llvm-cov
 
@@ -127,7 +127,7 @@ jobs:
         # from its availability; when explicitly enabled, upload failures
         # remain fatal to this lane.
         if: ${{ vars.CODE_QUALITY_UPLOAD_ENABLED == 'true' }}
-        uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34
+        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52
         with:
           file: ${{ matrix.target.coverage_file }}
           language: Rust
