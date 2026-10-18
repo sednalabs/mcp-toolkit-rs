@@ -88,6 +88,12 @@ commit its lockfile, and treat that lockfile as the record of the toolkit SHA.
 The toolkit currently has no crates.io package or docs.rs publication to rely
 on.
 
+The current RMCP source override is local to this workspace. A consumer that
+needs the same correction must declare its own root-level Cargo override; the
+toolkit dependency does not pass a `[patch.crates-io]` table to downstream
+workspaces. See the [current MCP baseline](docs/current-mcp-baseline.md) for the
+exact revision and scope.
+
 ## Scope and status
 
 Keep provider clients, domain tools, deployment policy, and deployment-specific
