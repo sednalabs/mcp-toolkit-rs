@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::doctor::{inspect_project, DoctorShape};
-use serde_yaml_ng::{Mapping as YamlMapping, Value as YamlValue};
+use noyalib_serde_yaml::{Mapping as YamlMapping, Value as YamlValue};
 use toml_edit::{DocumentMut, Item, TableLike};
 
 const REQUIRED_PUBLIC_FILES: &[(&str, &str)] = &[
@@ -448,7 +448,7 @@ fn readme_guidance_check(root: &Path) -> ReleasePreflightCheck {
 }
 
 fn yaml_get<'a>(mapping: &'a YamlMapping, key: &str) -> Option<&'a YamlValue> {
-    mapping.get(YamlValue::String(key.to_string()))
+    mapping.get(key)
 }
 
 fn yaml_mapping<'a>(value: &'a YamlValue, context: &str) -> Result<&'a YamlMapping, String> {
@@ -1064,7 +1064,7 @@ fn validate_privileged_steps(
 }
 
 fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, String> {
-    let document: YamlValue = serde_yaml_ng::from_str(workflow)
+    let document: YamlValue = noyalib_serde_yaml::from_str(workflow)
         .map_err(|error| format!("invalid workflow YAML: {error}"))?;
     let root = yaml_mapping(&document, "workflow")?;
     let triggers = yaml_get(root, "on")
@@ -1075,10 +1075,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
         violations.push("workflow must be triggered only by trusted push events".to_string());
     } else if let Some(push) = yaml_get(triggers, "push") {
         let push = yaml_mapping(push, "workflow.on.push")?;
-        let mut push_keys = push
-            .keys()
-            .filter_map(YamlValue::as_str)
-            .collect::<Vec<_>>();
+        let mut push_keys = push.keys().map(String::as_str).collect::<Vec<_>>();
         push_keys.sort_unstable();
         if push.len() != 2
             || push_keys != ["branches", "tags"]
@@ -1097,10 +1094,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
     let jobs = yaml_get(root, "jobs")
         .ok_or_else(|| "workflow.jobs is required".to_string())
         .and_then(|value| yaml_mapping(value, "workflow.jobs"))?;
-    let mut job_names = jobs
-        .keys()
-        .filter_map(YamlValue::as_str)
-        .collect::<Vec<_>>();
+    let mut job_names = jobs.keys().map(String::as_str).collect::<Vec<_>>();
     job_names.sort_unstable();
     if jobs.len() != 3
         || job_names
@@ -1307,10 +1301,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
 
     let mut all_uses = Vec::new();
     for (name, value) in jobs {
-        let Some(name) = name.as_str() else {
-            violations.push("workflow job identifiers must be strings".to_string());
-            continue;
-        };
+        let name = name.as_str();
         let job = yaml_mapping(value, &format!("workflow.jobs.{name}"))?;
         if name == "attest-native-linux" {
             continue;
@@ -1378,7 +1369,7 @@ fn validate_native_release_workflow(workflow: &str) -> Result<Vec<String>, Strin
 }
 
 fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<String>, String> {
-    let document: YamlValue = serde_yaml_ng::from_str(workflow)
+    let document: YamlValue = noyalib_serde_yaml::from_str(workflow)
         .map_err(|error| format!("invalid template attestation workflow YAML: {error}"))?;
     let root = yaml_mapping(&document, "template attestation workflow")?;
     let triggers = yaml_get(root, "on")
@@ -1392,10 +1383,7 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
         );
     } else if let Some(push) = yaml_get(triggers, "push") {
         let push = yaml_mapping(push, "template attestation workflow.on.push")?;
-        let mut push_keys = push
-            .keys()
-            .filter_map(YamlValue::as_str)
-            .collect::<Vec<_>>();
+        let mut push_keys = push.keys().map(String::as_str).collect::<Vec<_>>();
         push_keys.sort_unstable();
         if push.len() != 2
             || push_keys != ["branches", "tags"]
@@ -1416,10 +1404,7 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
     let jobs = yaml_get(root, "jobs")
         .ok_or_else(|| "template attestation workflow.jobs is required".to_string())
         .and_then(|value| yaml_mapping(value, "template attestation workflow.jobs"))?;
-    let mut job_names = jobs
-        .keys()
-        .filter_map(YamlValue::as_str)
-        .collect::<Vec<_>>();
+    let mut job_names = jobs.keys().map(String::as_str).collect::<Vec<_>>();
     job_names.sort_unstable();
     if jobs.len() != 2 || job_names != ["attest-native-linux-template", "prove-native-template"] {
         violations.push(
@@ -1434,15 +1419,9 @@ fn validate_native_template_attestation_workflow(workflow: &str) -> Result<Vec<S
         .ok_or_else(|| "attest-native-linux-template job is required".to_string())
         .and_then(|value| yaml_mapping(value, "attest-native-linux-template"))?;
 
-    let mut prove_keys = prove
-        .keys()
-        .filter_map(YamlValue::as_str)
-        .collect::<Vec<_>>();
+    let mut prove_keys = prove.keys().map(String::as_str).collect::<Vec<_>>();
     prove_keys.sort_unstable();
-    let mut attest_keys = attest
-        .keys()
-        .filter_map(YamlValue::as_str)
-        .collect::<Vec<_>>();
+    let mut attest_keys = attest.keys().map(String::as_str).collect::<Vec<_>>();
     attest_keys.sort_unstable();
     if prove.len() != 2 || prove_keys != ["permissions", "uses"] {
         violations.push(
