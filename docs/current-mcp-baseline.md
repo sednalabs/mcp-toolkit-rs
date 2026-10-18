@@ -2,11 +2,14 @@
 
 Baseline date: 2026-10-03
 
-The migration candidate pins `rmcp` and `rmcp-macros` to `3.5.0`. The release
-is non-yanked on the registry and has MSRV 1.88. RMCP 3.5.0 retains that
-own compiler requirement; the Toolkit deliberately raises its own compatibility
-floor to Rust 1.99 with this baseline upgrade. This records the Toolkit source
-contract, not hosted validation, landing, or a crates.io release promise.
+The workspace patches `rmcp` and `rmcp-macros` to maintained SDK revision
+`82c9353cbc6098d177981f4355a6b645bab17506` for the current-protocol disconnect
+fix. The toolkit workspace can therefore validate and consume that exact source
+revision. Cargo patch tables are root-workspace-local: a consumer of toolkit
+crates does not inherit this override. Consumers that need the correction must
+add their own root-level override until a compatible RMCP release is available.
+This is a source-build contract, not a hosted-validation, landing, or
+crates.io-release promise.
 
 ## Gap matrix
 

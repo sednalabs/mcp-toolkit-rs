@@ -3264,8 +3264,7 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fae7019994ae0fe4ada40b732f798f3ff26f0f04facb1477f1bf37eb4f18a2d3"
+source = "git+https://github.com/sednalabs/rust-sdk?rev=82c9353cbc6098d177981f4355a6b645bab17506#82c9353cbc6098d177981f4355a6b645bab17506"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3296,8 +3295,7 @@ dependencies = [
 [[package]]
 name = "rmcp-macros"
 version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7e66877136e969d5a2d561ee5841b17717a0619aebd64abb47a2a2f46e34683"
+source = "git+https://github.com/sednalabs/rust-sdk?rev=82c9353cbc6098d177981f4355a6b645bab17506#82c9353cbc6098d177981f4355a6b645bab17506"
 dependencies = [
  "darling",
  "proc-macro2",

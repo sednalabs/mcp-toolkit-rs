@@ -25,3 +25,10 @@ members = [
 
 [workspace.package]
 rust-version = "1.99"
+
+# Cargo patch tables apply only to the workspace that declares them. They do not
+# flow through this toolkit as a dependency; consumers needing this SDK correction
+# must add their own root-level override until a compatible RMCP release exists.
+[patch.crates-io]
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "82c9353cbc6098d177981f4355a6b645bab17506" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "82c9353cbc6098d177981f4355a6b645bab17506" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
