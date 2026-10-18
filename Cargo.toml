@@ -25,3 +25,7 @@ members = [
 
 [workspace.package]
 rust-version = "1.99"
+
+[patch.crates-io]
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "82c9353cbc6098d177981f4355a6b645bab17506" }
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "82c9353cbc6098d177981f4355a6b645bab17506" }
