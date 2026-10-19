@@ -30,5 +30,5 @@ rust-version = "1.99"
 # flow through this toolkit as a dependency; consumers needing this SDK correction
 # must add their own root-level override until a compatible RMCP release exists.
 [patch.crates-io]
-rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "82c9353cbc6098d177981f4355a6b645bab17506" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
-rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "82c9353cbc6098d177981f4355a6b645bab17506" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "1d2e6ffdaccc7711552154dd2c9d7af4913a8f1e" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "1d2e6ffdaccc7711552154dd2c9d7af4913a8f1e" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
