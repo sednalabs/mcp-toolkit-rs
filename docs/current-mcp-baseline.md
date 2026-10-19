@@ -1,15 +1,32 @@
 # Current MCP Baseline
 
-Baseline date: 2026-10-03
+Baseline date: 2026-10-19
+
+The workspace pins `rmcp` and `rmcp-macros` to `3.5.1`, the latest published
+stable SDK release checked on this date. Its upstream source is
+[`rmcp-v3.5.1`](https://github.com/modelcontextprotocol/rust-sdk/releases/tag/rmcp-v3.5.1),
+commit `79437f291b2c44053d00dcd5db969fd0cca7c887`. The protocol baseline remains
+[`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning);
+an SDK patch release does not change the protocol date.
 
 The workspace patches `rmcp` and `rmcp-macros` to maintained SDK revision
-`82c9353cbc6098d177981f4355a6b645bab17506` for the current-protocol disconnect
-fix. The toolkit workspace can therefore validate and consume that exact source
+`1d2e6ffdaccc7711552154dd2c9d7af4913a8f1e` for the existing `Origin`/schema-cache and
+current-protocol disconnect corrections. Both corrections are retained on top
+of the complete `3.5.1` release; neither has an equivalent in that release.
+The toolkit workspace can therefore validate and consume that exact source
 revision. Cargo patch tables are root-workspace-local: a consumer of toolkit
 crates does not inherit this override. Consumers that need the correction must
 add their own root-level override until a compatible RMCP release is available.
 This is a source-build contract, not a hosted-validation, landing, or
 crates.io-release promise.
+
+The `3.5.1` changes preserve discovery as a lifecycle-neutral bootstrap probe,
+return handler-generated invalid-parameter errors in-band, and supply missing
+cache hints for current-protocol peers. The maintained stdio templates test
+`server/discover` followed by current metadata-bearing requests and, separately,
+by legacy `initialize`/`notifications/initialized` requests. The current path
+asserts `resultType`, `ttlMs`, and `cacheScope`; the legacy path asserts that
+the current result discriminator is not added to legacy tool results.
 
 ## Gap matrix
 
