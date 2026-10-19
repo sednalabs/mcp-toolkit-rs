@@ -33,6 +33,11 @@ initialize/initialized lifecycle retained for compatibility, while
 `2026-07-28` is the current stateless request lifecycle. These are protocol
 dates, not SDK release numbers.
 
+Successor baseline note (2026-10-19): the current pins are `3.5.1`, with the
+maintained HTTP corrections preserved alongside the complete upstream patch release.
+See `current-mcp-baseline.md` for source identity and current/legacy validation
+scope. Earlier release numbers below remain historical review evidence.
+
 Primary references:
 
 - MCP specification entry point: <https://modelcontextprotocol.io/specification>
