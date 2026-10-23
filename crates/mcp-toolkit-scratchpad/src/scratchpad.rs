@@ -1938,6 +1938,7 @@ fn duck_value_to_json(value: DuckValue) -> Value {
         DuckValue::Int(raw) => json!(raw),
         DuckValue::BigInt(raw) => json!(raw),
         DuckValue::HugeInt(raw) => Value::String(raw.to_string()),
+        DuckValue::UHugeInt(raw) => Value::String(raw.to_string()),
         DuckValue::UTinyInt(raw) => json!(raw),
         DuckValue::USmallInt(raw) => json!(raw),
         DuckValue::UInt(raw) => json!(raw),
@@ -2235,6 +2236,14 @@ mod tests {
     fn test_config(name: &str) -> ScratchpadSessionConfig {
         ScratchpadSessionConfig::new(Duration::from_secs(60), 4, 3, 100, 128)
             .with_root_dir(test_root_dir(name))
+    }
+
+    #[test]
+    fn uhugeint_projection_uses_exact_decimal_text() {
+        assert_eq!(
+            duck_value_to_json(DuckValue::UHugeInt(u128::MAX)),
+            Value::String(u128::MAX.to_string())
+        );
     }
 
     #[test]
