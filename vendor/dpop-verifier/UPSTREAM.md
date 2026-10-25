@@ -25,7 +25,8 @@ The inherited port moves `p256` from 0.13 to 0.14 and adapts P-256 key parsing,
 SEC1 point access, and signature-trait imports to that dependency's API. It uses
 fixed valid P-256 test keys. Production proof parsing, signature verification,
 claims, nonce policy, thumbprints, and replay admission otherwise retain the
-upstream implementation; this is not a new protocol or cryptographic design.
+upstream implementation except for the bounded malformed-field checks listed
+below; this is not a new protocol or cryptographic design.
 
 MCP Toolkit additionally:
 
@@ -44,6 +45,11 @@ MCP Toolkit additionally:
   valid header/claims encoding; removes their unsafe string mutation and loop.
 - Makes temporary result lifetimes explicit in the compatibility wrapper and
   nonce key-rotation loop so Rust 2024 drop-order lints pass without suppression.
+- Rejects impossible encoded lengths before decoding fixed-size HMAC nonces,
+  SHA-256 access-token hashes and P-256/Ed25519 key components. Valid accepted
+  inputs are unchanged; impossible `ath` lengths now return `AthMalformed`
+  rather than potentially `AthMismatch`. These are field-allocation bounds,
+  not a claim of an overall compact-proof or HTTP request-size limit.
 - Applies Rust formatting. No audit, scanner, or security-policy exceptions are
   supplied by this directory.
 

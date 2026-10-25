@@ -429,6 +429,11 @@ impl DpopVerifier {
 
         // Decode provided ath (must be base64url no-pad)
         let ath_b64 = claims.ath.as_ref().ok_or(DpopError::MissingAth)?;
+        // A SHA-256 digest is exactly 43 base64url-no-pad characters. Bound the
+        // decoder allocation; impossible lengths are malformed, not mismatches.
+        if ath_b64.len() != 43 {
+            return Err(DpopError::AthMalformed);
+        }
         let actual_hash = B64
             .decode(ath_b64.as_bytes())
             .map_err(|_| DpopError::AthMalformed)?;
@@ -897,6 +902,62 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DpopError::BadJwk(_)));
+    }
+
+    #[test]
+    fn ath_length_guard_preserves_valid_binding_and_rejects_oversized_input() {
+        let verifier = DpopVerifier::new();
+        let token = "synthetic-access-token";
+        let mut claims = DpopClaims {
+            jti: "synthetic-jti".into(),
+            iat: 0,
+            htm: "GET".into(),
+            htu: "https://example.test/mcp".into(),
+            nonce: None,
+            ath: Some(B64.encode(Sha256::digest(token.as_bytes()))),
+        };
+        assert!(verifier
+            .validate_access_token_binding(&claims, token)
+            .is_ok());
+        assert!(matches!(
+            verifier.validate_access_token_binding(&claims, "different-token"),
+            Err(DpopError::AthMismatch)
+        ));
+        for length in [0, 42, 44, 131_072] {
+            claims.ath = Some("A".repeat(length));
+            assert!(matches!(
+                verifier.validate_access_token_binding(&claims, token),
+                Err(DpopError::AthMalformed)
+            ));
+        }
+        for character in ['*', '='] {
+            claims.ath = Some(format!("{}{}", "A".repeat(42), character));
+            assert!(matches!(
+                verifier.validate_access_token_binding(&claims, token),
+                Err(DpopError::AthMalformed)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_ath_is_rejected_before_replay_admission() {
+        let (key, x, y) = gen_es256_key();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let header = serde_json::json!({"typ":"dpop+jwt","alg":"ES256","jwk":{"kty":"EC","crv":"P-256","x":x,"y":y}});
+        let claims = serde_json::json!({"jti":"oversized-ath","iat":now,"htm":"GET","htu":"https://example.test/mcp","ath":"A".repeat(131_072)});
+        let proof = make_jws(&key, header, claims);
+        let mut store = MemoryStore::default();
+        let result = DpopVerifier::new()
+            .verify(
+                &mut store,
+                &proof,
+                "https://example.test/mcp",
+                "GET",
+                Some("synthetic-token"),
+            )
+            .await;
+        assert!(matches!(result, Err(DpopError::AthMalformed)));
+        assert!(store.0.is_empty());
     }
 
     #[tokio::test]

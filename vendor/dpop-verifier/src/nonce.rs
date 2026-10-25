@@ -67,6 +67,7 @@ const NONCE_VERSION: u8 = 1;
 const NONCE_RANDOM_LENGTH: usize = 16;
 const NONCE_MAC_LENGTH: usize = 16; // truncated
 const NONCE_TOTAL_LENGTH: usize = 1 + 8 + 16 + 16; // version + timestamp + random + mac
+const NONCE_ENCODED_LENGTH: usize = (NONCE_TOTAL_LENGTH * 4).div_ceil(3);
 const NONCE_FUTURE_SKEW_SECS: i64 = 5;
 
 /// Optional binding context (only fields you want to bind).
@@ -151,6 +152,10 @@ pub fn verify_nonce<S>(
 where
     S: IntoSecretBox,
 {
+    // Reject impossible fixed-format inputs before allocating decoded storage.
+    if nonce_b64.len() != NONCE_ENCODED_LENGTH {
+        return Err(DpopError::NonceMismatch);
+    }
     let secret_box = secret.into_secret_box();
     let nonce_bytes = B64
         .decode(nonce_b64.as_bytes())
@@ -250,7 +255,42 @@ mod tests {
         };
 
         let nonce = issue_nonce(&secret, current_time, &context).expect("issue_nonce");
+        assert_eq!(nonce.len(), NONCE_ENCODED_LENGTH);
         assert!(verify_nonce(&secret, &nonce, current_time, 300, &context).is_ok());
+    }
+
+    #[test]
+    fn invalid_nonce_lengths_reject_before_secret_conversion() {
+        struct UnusedSecret;
+        impl IntoSecretBox for UnusedSecret {
+            fn into_secret_box(self) -> SecretBox<[u8]> {
+                panic!("invalid length must be rejected before secret conversion")
+            }
+        }
+        let context = NonceCtx {
+            htu: None,
+            htm: None,
+            jkt: None,
+            client: None,
+        };
+        for length in [
+            0,
+            NONCE_ENCODED_LENGTH - 1,
+            NONCE_ENCODED_LENGTH + 1,
+            131_072,
+        ] {
+            assert!(matches!(
+                verify_nonce(UnusedSecret, &"A".repeat(length), 0, 300, &context),
+                Err(DpopError::NonceMismatch)
+            ));
+        }
+        for character in ['*', '='] {
+            let invalid = format!("{}{}", "A".repeat(NONCE_ENCODED_LENGTH - 1), character);
+            assert!(matches!(
+                verify_nonce(b"synthetic-secret", &invalid, 0, 300, &context),
+                Err(DpopError::NonceMismatch)
+            ));
+        }
     }
 
     #[test]

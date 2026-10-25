@@ -98,6 +98,23 @@ Tests establish the exercised contracts, not an independent security audit of
 upstream. Existing protocol-normalization and backend-storage decisions remain
 separate review subjects; do not claim they were newly hardened by the port.
 
+## Review follow-up boundary
+
+Fixed-format nonce, access-token-hash and public-key fields are length-checked
+before base64 decoding, bounding those decoder allocations without changing
+valid accepted inputs. Impossible `ath` lengths are classified as `AthMalformed`;
+valid-length unequal digests remain `AthMismatch`. This is not an overall proof
+or request-size limit.
+
+The optional Actix URI helper's inherited proxy trust behavior needs separate
+review: selecting the first comma-separated forwarded value would broaden
+accepted inputs and choose a trusted hop. Moreover, its `connection_info()`
+fallback can itself consult forwarded headers even when `trust_proxies` is
+false. No toolkit production call uses this helper. Do not treat its flag as an
+independently qualified proxy-trust boundary; deployments must constrain/sanitize
+forwarded headers at their trusted ingress. This dependency repair does not
+silently change that policy or claim live deployment validation.
+
 ## Exit and rollback
 
 Prefer a reviewed upstream release that removes the affected dependency chain,

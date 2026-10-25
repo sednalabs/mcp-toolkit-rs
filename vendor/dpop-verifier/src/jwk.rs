@@ -11,8 +11,16 @@ use std::collections::BTreeMap;
 #[cfg(feature = "eddsa")]
 const ED25519_KEY_LENGTH: usize = 32;
 
+// Both supported public-key components are 32 bytes, base64url without padding.
+const PUBLIC_KEY_COMPONENT_ENCODED_LENGTH: usize = 43;
+
 /// Build a P-256 verifying key from JWK x/y (base64url, no padding).
 pub fn verifying_key_from_p256_xy(x_b64: &str, y_b64: &str) -> Result<VerifyingKey, DpopError> {
+    if x_b64.len() != PUBLIC_KEY_COMPONENT_ENCODED_LENGTH
+        || y_b64.len() != PUBLIC_KEY_COMPONENT_ENCODED_LENGTH
+    {
+        return Err(DpopError::BadJwk("jwk x/y must be 32 bytes"));
+    }
     let x_coordinate = B64
         .decode(x_b64)
         .map_err(|_| DpopError::BadJwk("bad jwk.x"))?;
@@ -49,6 +57,9 @@ pub fn thumbprint_ec_p256(x_b64: &str, y_b64: &str) -> Result<String, DpopError>
 pub fn verifying_key_from_okp_ed25519(
     x_b64: &str,
 ) -> Result<Ed25519VerifyingKey, crate::DpopError> {
+    if x_b64.len() != PUBLIC_KEY_COMPONENT_ENCODED_LENGTH {
+        return Err(DpopError::BadJwk("jwk x must be 32 bytes"));
+    }
     let key_bytes_vec = B64
         .decode(x_b64)
         .map_err(|_| crate::DpopError::BadJwk("bad jwk.x"))?;
@@ -124,6 +135,44 @@ mod tests {
             verifying_key_from_p256_xy(&x32, &y33).is_err(),
             "33-byte y must fail"
         );
+    }
+
+    #[test]
+    fn vk_rejects_oversized_encoded_components() {
+        let bounded = B64.encode([0_u8; 32]);
+        for length in [0, 42, 44, 131_072] {
+            let invalid = "A".repeat(length);
+            for (x, y) in [(&invalid, &bounded), (&bounded, &invalid)] {
+                assert!(matches!(
+                    verifying_key_from_p256_xy(x, y),
+                    Err(DpopError::BadJwk(_))
+                ));
+            }
+        }
+        for character in ['*', '='] {
+            let invalid = format!("{}{}", "A".repeat(42), character);
+            assert!(verifying_key_from_p256_xy(&invalid, &bounded).is_err());
+            assert!(verifying_key_from_p256_xy(&bounded, &invalid).is_err());
+        }
+    }
+
+    #[cfg(feature = "eddsa")]
+    #[test]
+    fn ed25519_key_length_guards_preserve_valid_keys() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+        let encoded = B64.encode(key.as_bytes());
+        assert_eq!(encoded.len(), PUBLIC_KEY_COMPONENT_ENCODED_LENGTH);
+        assert_eq!(verifying_key_from_okp_ed25519(&encoded).unwrap(), key);
+        for character in ['*', '='] {
+            let invalid = format!("{}{}", "A".repeat(42), character);
+            assert!(verifying_key_from_okp_ed25519(&invalid).is_err());
+        }
+        for length in [0, 42, 44, 131_072] {
+            assert!(matches!(
+                verifying_key_from_okp_ed25519(&"A".repeat(length)),
+                Err(DpopError::BadJwk(_))
+            ));
+        }
     }
 
     #[test]
