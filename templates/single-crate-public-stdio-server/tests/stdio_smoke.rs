@@ -191,12 +191,8 @@ fn stdio_discovery_preserves_current_and_legacy_tool_lifecycles() {
 #[test]
 fn copied_binary_prints_its_own_client_config_outside_source_tree() {
     const PROFILE_ENV: &str = "EXAMPLE_MCP_TOOL_PROFILE";
-    let root = std::env::temp_dir().join(format!(
-        "{}-copied-client-config-{}",
-        env!("CARGO_PKG_NAME"),
-        std::process::id(),
-    ));
-    std::fs::create_dir(&root).expect("fresh test directory");
+    let directory = tempfile::tempdir().expect("private test directory");
+    let root = directory.path();
     let copied = root.join(format!("copied server{}", std::env::consts::EXE_SUFFIX));
     std::fs::copy(
         env!("CARGO_BIN_EXE_single-crate-public-stdio-server"),
@@ -205,7 +201,7 @@ fn copied_binary_prints_its_own_client_config_outside_source_tree() {
     .expect("copy binary");
     let output = Command::new(&copied)
         .arg("--print-client-config")
-        .current_dir(&root)
+        .current_dir(root)
         .env(PROFILE_ENV, "private-environment-canary")
         .output()
         .expect("copied binary config");
@@ -224,5 +220,5 @@ fn copied_binary_prints_its_own_client_config_outside_source_tree() {
     assert!(stdout.contains("TOOL_PROFILE = \"read_only\""));
     assert!(!stdout.contains("private-environment-canary"));
     assert!(!root.join("Cargo.toml").exists());
-    std::fs::remove_dir_all(root).expect("remove test copy");
+    directory.close().expect("remove test copy");
 }
