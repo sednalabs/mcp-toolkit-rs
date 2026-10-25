@@ -235,6 +235,12 @@ fn doctor_accepts_generated_templates() {
         let stdout = String::from_utf8_lossy(&doctor.stdout);
         assert!(stdout.contains("Ready: yes"));
         assert!(stdout.contains("Tool schema snapshot"));
+        assert_eq!(
+            stdout.lines().find(|line| line.starts_with("  cargo ")),
+            Some("  cargo fmt --all"),
+            "doctor must format renamed source before suggesting checks",
+        );
+        assert!(!stdout.contains("  cargo fmt --all --check\n"));
         assert!(stdout.contains("cargo run -- --doctor"));
         assert!(stdout.contains("cargo run -- --print-tools"));
         assert!(stdout.contains("cargo run -- --print-tool-schema"));
