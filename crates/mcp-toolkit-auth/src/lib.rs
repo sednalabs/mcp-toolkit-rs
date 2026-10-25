@@ -61,6 +61,11 @@ pub use dpop::{
     parse_strict_dpop_authorization, parse_strict_dpop_proof, DpopParseError, DpopProof,
     DpopProofParseError, DpopToken, SenderConstrainedAuthError,
 };
+/// Canonical verifier, nonce, replay-store and error types for toolkit DPoP.
+///
+/// Consumers should import these types through this re-export rather than a
+/// separate verifier dependency, so their types match the atomic authenticator.
+pub use dpop_verifier;
 pub use error::{AuthError, AuthErrorContract};
 pub use mcp_toolkit_http::oauth::AuthorizationServerMetadata;
 pub use replay::{
