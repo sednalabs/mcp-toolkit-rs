@@ -56,7 +56,8 @@ pub enum ToolSurfaceCommand {
 pub fn tool_surface_command_from_env() -> Result<ToolSurfaceCommand, String> {
     let mut args = std::env::args_os().skip(1);
     let arg = args.next();
-    parse_tool_surface_command(arg.as_deref(), args.next().is_some())
+    let has_extra = args.next().is_some();
+    parse_tool_surface_command(arg.as_deref(), has_extra)
 }
 
 /// Parses local tool-surface command-line arguments.
@@ -74,9 +75,10 @@ where
 {
     let mut args = args.into_iter();
     let arg = args.next();
+    let has_extra = args.next().is_some();
     parse_tool_surface_command(
         arg.as_ref().map(|value| OsStr::new(value.as_ref())),
-        args.next().is_some(),
+        has_extra,
     )
 }
 
