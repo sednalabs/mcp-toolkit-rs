@@ -104,11 +104,16 @@ Fixed-format nonce, access-token-hash and public-key fields are length-checked
 before base64 decoding, bounding those decoder allocations without changing
 valid accepted inputs. Impossible `ath` lengths are classified as `AthMalformed`;
 valid-length unequal digests remain `AthMismatch`. This is not an overall proof
-or request-size limit.
+or request-size limit. Nonce and proof freshness arithmetic widens i64 operands
+before subtraction/addition, preserving mathematical comparisons and inclusive
+boundaries without panic or wraparound on extreme input. General compact-proof
+size policy remains a separate ingress/API design decision, not an arbitrary
+new limit in this compatibility port.
 
 The optional Actix URI helper's inherited proxy trust behavior needs separate
 review: selecting the first comma-separated forwarded value would broaden
-accepted inputs and choose a trusted hop. Moreover, its `connection_info()`
+accepted inputs and choose a trusted hop. Host/explicit-port composition also
+needs review to avoid duplicated ports. Moreover, its `connection_info()`
 fallback can itself consult forwarded headers even when `trust_proxies` is
 false. No toolkit production call uses this helper. Do not treat its flag as an
 independently qualified proxy-trust boundary; deployments must constrain/sanitize

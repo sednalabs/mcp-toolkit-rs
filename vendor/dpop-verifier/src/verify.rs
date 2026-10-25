@@ -450,11 +450,14 @@ impl DpopVerifier {
 
     /// Check timestamp freshness with configured limits
     fn check_timestamp_freshness(&self, iat: i64) -> Result<(), DpopError> {
-        let current_time = OffsetDateTime::now_utc().unix_timestamp();
-        if iat > current_time + self.options.future_skew_seconds {
+        // Preserve mathematical comparisons across the complete i64 input and
+        // configuration range, without debug panics or release-mode wrapping.
+        let current_time = i128::from(OffsetDateTime::now_utc().unix_timestamp());
+        let issued_at = i128::from(iat);
+        if issued_at > current_time + i128::from(self.options.future_skew_seconds) {
             return Err(DpopError::FutureSkew);
         }
-        if current_time - iat > self.options.max_age_seconds {
+        if current_time - issued_at > i128::from(self.options.max_age_seconds) {
             return Err(DpopError::Stale);
         }
         Ok(())
@@ -1015,6 +1018,43 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DpopError::AthMalformed));
+    }
+
+    #[tokio::test]
+    async fn extreme_issued_at_is_rejected_before_replay_admission() {
+        let (key, x, y) = gen_es256_key();
+        let header = serde_json::json!({"typ":"dpop+jwt","alg":"ES256","jwk":{"kty":"EC","crv":"P-256","x":x,"y":y}});
+        for iat in [i64::MIN, i64::MAX] {
+            let claims = serde_json::json!({"jti":"extreme-iat","iat":iat,"htm":"GET","htu":"https://example.test/mcp"});
+            let proof = make_jws(&key, header.clone(), claims);
+            let mut store = MemoryStore::default();
+            let result = DpopVerifier::new()
+                .verify(&mut store, &proof, "https://example.test/mcp", "GET", None)
+                .await;
+            if iat == i64::MIN {
+                assert!(matches!(result, Err(DpopError::Stale)));
+            } else {
+                assert!(matches!(result, Err(DpopError::FutureSkew)));
+            }
+            assert!(store.0.is_empty());
+        }
+    }
+
+    #[test]
+    fn extreme_freshness_options_use_mathematical_comparisons() {
+        let verifier = DpopVerifier {
+            options: VerifyOptions {
+                future_skew_seconds: i64::MAX,
+                max_age_seconds: i64::MAX,
+                ..VerifyOptions::default()
+            },
+        };
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        assert!(verifier.check_timestamp_freshness(now).is_ok());
+        assert!(matches!(
+            verifier.check_timestamp_freshness(i64::MIN),
+            Err(DpopError::Stale)
+        ));
     }
 
     #[tokio::test]

@@ -50,6 +50,9 @@ MCP Toolkit additionally:
   inputs are unchanged; impossible `ath` lengths now return `AthMalformed`
   rather than potentially `AthMismatch`. These are field-allocation bounds,
   not a claim of an overall compact-proof or HTTP request-size limit.
+- Widens timestamp operands to i128 before freshness arithmetic, avoiding
+  debug overflow panics and release wrapping for extreme nonce/iat inputs or
+  freshness options while preserving branch order and inclusive boundaries.
 - Applies Rust formatting. No audit, scanner, or security-policy exceptions are
   supplied by this directory.
 

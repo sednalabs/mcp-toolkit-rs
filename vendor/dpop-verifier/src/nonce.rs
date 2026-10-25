@@ -185,11 +185,13 @@ where
         .get(9 + NONCE_RANDOM_LENGTH..)
         .ok_or(DpopError::NonceMismatch)?;
 
-    // Age & future skew checks
-    if now_unix - timestamp > max_age_secs {
+    // Widen before arithmetic: nonce timestamps are untrusted i64 values.
+    let now = i128::from(now_unix);
+    let issued_at = i128::from(timestamp);
+    if now - issued_at > i128::from(max_age_secs) {
         return Err(DpopError::NonceStale);
     }
-    if timestamp - now_unix > NONCE_FUTURE_SKEW_SECS {
+    if issued_at - now > i128::from(NONCE_FUTURE_SKEW_SECS) {
         return Err(DpopError::FutureSkew);
     }
 
@@ -291,6 +293,56 @@ mod tests {
                 Err(DpopError::NonceMismatch)
             ));
         }
+    }
+
+    #[test]
+    fn extreme_nonce_timestamps_fail_closed() {
+        let secret = b"synthetic-secret";
+        let context = NonceCtx {
+            htu: None,
+            htm: None,
+            jkt: None,
+            client: None,
+        };
+        for (now, timestamp, stale) in [
+            (1_000, i64::MIN, true),
+            (1_000, i64::MAX, false),
+            (i64::MAX, i64::MIN, true),
+            (i64::MIN, i64::MAX, false),
+        ] {
+            let nonce = issue_nonce(secret, timestamp, &context).unwrap();
+            let result = verify_nonce(secret, &nonce, now, 300, &context);
+            if stale {
+                assert!(matches!(result, Err(DpopError::NonceStale)));
+            } else {
+                assert!(matches!(result, Err(DpopError::FutureSkew)));
+            }
+        }
+    }
+
+    #[test]
+    fn nonce_age_and_skew_boundaries_remain_inclusive() {
+        let secret = b"synthetic-secret";
+        let context = NonceCtx {
+            htu: None,
+            htm: None,
+            jkt: None,
+            client: None,
+        };
+        for timestamp in [700, 1_000, 1_005] {
+            let nonce = issue_nonce(secret, timestamp, &context).unwrap();
+            assert!(verify_nonce(secret, &nonce, 1_000, 300, &context).is_ok());
+        }
+        let stale = issue_nonce(secret, 699, &context).unwrap();
+        assert!(matches!(
+            verify_nonce(secret, &stale, 1_000, 300, &context),
+            Err(DpopError::NonceStale)
+        ));
+        let future = issue_nonce(secret, 1_006, &context).unwrap();
+        assert!(matches!(
+            verify_nonce(secret, &future, 1_000, 300, &context),
+            Err(DpopError::FutureSkew)
+        ));
     }
 
     #[test]
