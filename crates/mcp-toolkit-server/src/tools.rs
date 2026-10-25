@@ -22,6 +22,7 @@ use mcp_toolkit_core::{
     tool_schema::{tool_names, tool_schema_snapshot_value},
 };
 use rmcp::model::{ListToolsResult, PaginatedRequestParams, Tool};
+use std::ffi::OsStr;
 
 /// Default page size for generated `tools/list` implementations.
 pub const DEFAULT_TOOLS_LIST_PAGE_SIZE: usize = 100;
@@ -37,7 +38,7 @@ pub enum ToolSurfaceCommand {
     PrintToolSchema,
     /// Run the generated-server doctor against the current working directory.
     Doctor,
-    /// Print a copyable MCP client configuration snippet for the current project.
+    /// Print a copyable MCP client configuration snippet for this server.
     PrintClientConfig,
     /// Print help text and exit.
     Help,
@@ -48,8 +49,14 @@ pub enum ToolSurfaceCommand {
 /// # Errors
 /// Returns an operator-facing error string when an unknown argument is provided
 /// or when a supported command receives extra arguments.
+///
+/// # Security
+/// Unknown argument values are never included in errors, even when they contain
+/// non-Unicode bytes. Arguments may contain accidentally supplied credentials.
 pub fn tool_surface_command_from_env() -> Result<ToolSurfaceCommand, String> {
-    tool_surface_command_from_args(std::env::args().skip(1))
+    let mut args = std::env::args_os().skip(1);
+    let arg = args.next();
+    parse_tool_surface_command(arg.as_deref(), args.next().is_some())
 }
 
 /// Parses local tool-surface command-line arguments.
@@ -57,27 +64,40 @@ pub fn tool_surface_command_from_env() -> Result<ToolSurfaceCommand, String> {
 /// # Errors
 /// Returns an operator-facing error string when an unknown argument is provided
 /// or when a supported command receives extra arguments.
+///
+/// # Security
+/// Errors never echo unknown arguments or extra argument values.
 pub fn tool_surface_command_from_args<I, S>(args: I) -> Result<ToolSurfaceCommand, String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let mut args = args.into_iter();
-    let Some(arg) = args.next() else {
+    let arg = args.next();
+    parse_tool_surface_command(
+        arg.as_ref().map(|value| OsStr::new(value.as_ref())),
+        args.next().is_some(),
+    )
+}
+
+fn parse_tool_surface_command(
+    arg: Option<&OsStr>,
+    has_extra: bool,
+) -> Result<ToolSurfaceCommand, String> {
+    let Some(arg) = arg else {
         return Ok(ToolSurfaceCommand::Serve);
     };
-    let arg = arg.as_ref();
-    let command = match arg {
-        "--print-tools" => ToolSurfaceCommand::PrintTools,
-        "--print-tool-schema" => ToolSurfaceCommand::PrintToolSchema,
-        "--doctor" => ToolSurfaceCommand::Doctor,
-        "--print-client-config" => ToolSurfaceCommand::PrintClientConfig,
-        "--help" | "-h" => ToolSurfaceCommand::Help,
-        other => return Err(format!("unknown argument: {other}")),
+    let command = match arg.to_str() {
+        Some("--print-tools") => ToolSurfaceCommand::PrintTools,
+        Some("--print-tool-schema") => ToolSurfaceCommand::PrintToolSchema,
+        Some("--doctor") => ToolSurfaceCommand::Doctor,
+        Some("--print-client-config") => ToolSurfaceCommand::PrintClientConfig,
+        Some("--help" | "-h") => ToolSurfaceCommand::Help,
+        _ => return Err("unknown argument; use --help".to_string()),
     };
 
-    if args.next().is_some() {
-        return Err(format!("{arg} does not accept extra arguments"));
+    if has_extra {
+        return Err("command does not accept extra arguments; use --help".to_string());
     }
 
     Ok(command)
@@ -96,7 +116,7 @@ OPTIONS:
     --print-tools          Print the active profile's tool names, then exit
     --print-tool-schema    Print the active profile's canonical tool schema snapshot, then exit
     --doctor               Run static generated-server checks for the current directory
-    --print-client-config  Print a Codex-style MCP client config for the current directory
+    --print-client-config  Print this server's MCP client configuration
     -h, --help             Print this help text
 "
     )
@@ -286,7 +306,32 @@ mod tests {
         assert!(tool_surface_command_from_args(["--print-tools", "extra"]).is_err());
         assert_eq!(
             tool_surface_command_from_args(["--bogus", "extra"]),
-            Err("unknown argument: --bogus".to_string())
+            Err("unknown argument; use --help".to_string())
+        );
+    }
+
+    #[test]
+    fn argument_errors_never_echo_supplied_values() {
+        for args in [
+            vec!["PRIVATE-SECRET-CANARY"],
+            vec!["--print-tools", "PRIVATE-SECRET-CANARY"],
+        ] {
+            let error = tool_surface_command_from_args(args).expect_err("reject arguments");
+            assert!(!error.contains("PRIVATE-SECRET-CANARY"));
+            assert!(error.contains("--help"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_arguments_are_rejected_without_echoing_or_panicking() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let arg = OsStr::from_bytes(b"PRIVATE-SECRET-CANARY\xff");
+        assert_eq!(
+            super::parse_tool_surface_command(Some(arg), false),
+            Err("unknown argument; use --help".to_string())
         );
     }
 

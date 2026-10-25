@@ -57,10 +57,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="generated-server-check-") as directory:
         scratch = Path(directory)
         generated_env = env.copy()
-        generated_env["RUSTUP_TOOLCHAIN"] = GENERATED_RUST_TOOLCHAIN
+        generated_env.pop("RUSTUP_TOOLCHAIN", None)
         print(
             f"Generated project compiler selection: "
-            f"RUSTUP_TOOLCHAIN={GENERATED_RUST_TOOLCHAIN}",
+            f"each emitted rust-toolchain.toml ({GENERATED_RUST_TOOLCHAIN})",
             flush=True,
         )
         for template in TEMPLATES:
@@ -90,8 +90,18 @@ def main() -> None:
                 if os.name != "nt" and script.stat().st_mode & 0o111:
                     raise RuntimeError("permission regression fixture must not be executable")
                 run([*command, "--help"], project, generated_env)
+            # Package renaming can change import order and line wrapping. Follow
+            # the generator's first-run formatting instruction, then check it.
+            run(["cargo", "fmt", "--all"], project, generated_env)
+            run(["cargo", "fmt", "--all", "--check"], project, generated_env)
             run(
                 ["cargo", "test", "--all-targets", "--all-features"],
+                project,
+                generated_env,
+            )
+            run(["cargo", "build", "--locked"], project, generated_env)
+            run(
+                ["cargo", "clippy", "--locked", "--all-targets", "--all-features", "--", "-D", "warnings"],
                 project,
                 generated_env,
             )

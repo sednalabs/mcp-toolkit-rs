@@ -1859,7 +1859,7 @@ fn release_preflight_rejects_high_confidence_secret_markers() {
 }
 
 #[test]
-fn generator_emits_project_local_doctor_and_client_config_commands_for_every_template() {
+fn generator_emits_doctor_and_appropriate_client_config_commands_for_every_template() {
     let root = temp_root("all-template-local-commands");
 
     for template in templates() {
@@ -1874,6 +1874,11 @@ fn generator_emits_project_local_doctor_and_client_config_commands_for_every_tem
             overwrite: false,
         })
         .unwrap_or_else(|error| panic!("generate template {}: {error}", template.id));
+
+        let toolchain = read(&output.join("rust-toolchain.toml"));
+        assert!(toolchain.contains("channel = \"1.99.0\""));
+        assert!(toolchain.contains("clippy"));
+        assert!(toolchain.contains("rustfmt"));
 
         let main = read(&output.join("src/main.rs"));
         assert!(
@@ -1892,7 +1897,11 @@ fn generator_emits_project_local_doctor_and_client_config_commands_for_every_tem
             template.id
         );
         assert!(
-            main.contains("render_client_config"),
+            main.contains(if template.id == "hosted-http-auth" {
+                "render_client_config"
+            } else {
+                "render_executable_client_config"
+            }),
             "{} should use the toolkit client-config helper",
             template.id
         );
@@ -2577,4 +2586,32 @@ fn toml_path(path: &Path) -> String {
         .to_string()
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+}
+
+#[test]
+fn generated_next_commands_do_not_interpolate_shell_paths() {
+    let root = temp_root("cli-quoted-output");
+    let output = Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
+        .current_dir(&root)
+        .args([
+            "new",
+            "--name",
+            "safe-mcp",
+            "--output",
+            "service 'quoted' space",
+        ])
+        .output()
+        .expect("generate quoted output path");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    let next = stdout
+        .split("Next, from the generated directory shown above:")
+        .nth(1)
+        .expect("next steps");
+    assert!(next.contains("  mcp-toolkit doctor .\n"));
+    assert!(next.contains("  mcp-toolkit client-config .\n"));
+    assert!(next.contains("  cargo fmt --all\n"));
+    assert!(!next.contains("  cd "));
+    assert!(!next.contains("service 'quoted' space"));
+    cleanup(root);
 }

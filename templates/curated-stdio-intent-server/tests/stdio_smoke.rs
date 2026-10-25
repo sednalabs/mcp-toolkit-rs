@@ -101,7 +101,7 @@ fn cli_print_client_config_renders_stdio_config() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("[mcp_servers.\"curated-stdio-intent-server\"]"));
     assert!(stdout.contains("command = \""));
-    assert!(stdout.contains("CURATED_STDIO_INTENT_SERVER_TOOL_PROFILE = \"read_only\""));
+    assert!(stdout.contains("EXAMPLE_MCP_TOOL_PROFILE = \"read_only\""));
 }
 
 #[test]
@@ -185,4 +185,39 @@ fn stdio_discovery_preserves_current_and_legacy_tool_lifecycles() {
             assert_eq!(called["result"]["resultType"], "complete");
         }
     }
+}
+
+#[test]
+fn copied_binary_prints_its_own_client_config_outside_source_tree() {
+    const PROFILE_ENV: &str = "EXAMPLE_MCP_TOOL_PROFILE";
+    let root = std::env::temp_dir().join(format!(
+        "{}-copied-client-config-{}",
+        env!("CARGO_PKG_NAME"),
+        std::process::id(),
+    ));
+    std::fs::create_dir(&root).expect("fresh test directory");
+    let copied = root.join(format!("copied server{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(env!("CARGO_BIN_EXE_curated-stdio-intent-server"), &copied).expect("copy binary");
+    let output = Command::new(&copied)
+        .arg("--print-client-config")
+        .current_dir(&root)
+        .env(PROFILE_ENV, "private-environment-canary")
+        .output()
+        .expect("copied binary config");
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("config UTF-8");
+    let escaped_path = copied
+        .to_str()
+        .expect("test path UTF-8")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    assert!(
+        stdout.contains(&format!("command = \"{escaped_path}\"")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("TOOL_PROFILE = \"read_only\""));
+    assert!(!stdout.contains("private-environment-canary"));
+    assert!(!root.join("Cargo.toml").exists());
+    std::fs::remove_dir_all(root).expect("remove test copy");
 }

@@ -181,14 +181,12 @@ fn run_new(args: &[String]) -> Result<(), String> {
         summary.created_files, summary.unchanged_files, summary.overwritten_files
     );
     println!();
-    println!("Next:");
-    println!("  mcp-toolkit doctor {}", summary.output_dir.display());
-    println!(
-        "  mcp-toolkit client-config {}",
-        summary.output_dir.display()
-    );
-    println!("  cd {}", summary.output_dir.display());
-    println!("  cargo fmt --all --check");
+    // Keep commands path-free: generated paths may contain spaces, quotes or
+    // shell metacharacters, and quoting rules differ between shells.
+    println!("Next, from the generated directory shown above:");
+    println!("  mcp-toolkit doctor .");
+    println!("  mcp-toolkit client-config .");
+    println!("  cargo fmt --all");
     println!("  cargo test --all-targets --all-features");
     println!();
     println!(
