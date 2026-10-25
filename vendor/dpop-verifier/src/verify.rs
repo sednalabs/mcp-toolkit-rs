@@ -591,7 +591,7 @@ pub async fn verify_proof<S: ReplayStore + ?Sized>(
     opts: VerifyOptions,
 ) -> Result<VerifiedDpop, DpopError> {
     let verifier = DpopVerifier { options: opts };
-    verifier
+    let result = verifier
         .verify(
             store,
             dpop_compact_jws,
@@ -599,7 +599,8 @@ pub async fn verify_proof<S: ReplayStore + ?Sized>(
             expected_htm,
             access_token,
         )
-        .await
+        .await;
+    result
 }
 
 #[cfg(test)]

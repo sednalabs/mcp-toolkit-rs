@@ -30,6 +30,7 @@ upstream implementation; this is not a new protocol or cryptographic design.
 MCP Toolkit additionally:
 
 - Marks this package unpublished and adds crate-level context/documentation.
+- Uses HTTPS for the original upstream GitHub homepage metadata.
 - Keeps the optional Actix request-helper API while disabling Actix's unrelated
   default server features. Only its test/helper macros are requested. In
   particular, the helper does not need the legacy HTTP/2 dependency; downstream
@@ -41,6 +42,8 @@ MCP Toolkit additionally:
 - Turns discarded `matches!` expressions in tests into enforced assertions.
 - Makes signature-tampering fixtures change signature bytes while retaining
   valid header/claims encoding; removes their unsafe string mutation and loop.
+- Makes temporary result lifetimes explicit in the compatibility wrapper and
+  nonce key-rotation loop so Rust 2024 drop-order lints pass without suppression.
 - Applies Rust formatting. No audit, scanner, or security-policy exceptions are
   supplied by this directory.
 

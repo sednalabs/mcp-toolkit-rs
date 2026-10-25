@@ -228,7 +228,7 @@ where
             | Err(error @ DpopError::NonceStale)
             | Err(error @ DpopError::NonceMismatch) => last_error = error,
             Err(error) => return Err(error),
-        }
+        };
     }
     Err(last_error)
 }
