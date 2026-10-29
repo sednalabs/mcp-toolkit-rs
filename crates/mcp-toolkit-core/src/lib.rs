@@ -27,6 +27,7 @@
 //! ## References
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io)
 
+pub mod canonical_json;
 pub mod capability;
 pub mod duration_estimate;
 pub mod guarded_action;

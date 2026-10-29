@@ -127,8 +127,7 @@ pub fn canonical_json_bytes<T>(payload: &T) -> Result<Vec<u8>, serde_json::Error
 where
     T: Serialize,
 {
-    let value = crate::canonicalize_json(serde_json::to_value(payload)?);
-    serde_json::to_vec(&value)
+    mcp_toolkit_core::canonical_json::canonical_json_bytes(&serde_json::to_value(payload)?)
 }
 
 /// Asserts that a receipt fits within its canonical JSON byte budget.
