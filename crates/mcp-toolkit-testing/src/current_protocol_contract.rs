@@ -140,7 +140,9 @@ impl CurrentDiscoveryContract {
             );
         }
         assert!(
-            result.get("ttlMs").is_some_and(|value| value.as_u64().is_some()),
+            result
+                .get("ttlMs")
+                .is_some_and(|value| value.as_u64().is_some()),
             "discovery must contain nonnegative integer ttlMs"
         );
         assert!(
@@ -207,9 +209,9 @@ fn parse_single_sse_result(body: &[u8]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::CurrentDiscoveryContract;
-    use http::header::{CONTENT_TYPE, HeaderValue};
+    use http::header::{HeaderValue, CONTENT_TYPE};
     use http::{HeaderMap, StatusCode};
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     fn example_discovery() -> Value {
         json!({
@@ -284,11 +286,7 @@ mod tests {
         let headers = content_type("text/event-stream");
         assert!(
             std::panic::catch_unwind(|| {
-                contract().assert_http_response(
-                    StatusCode::OK,
-                    &headers,
-                    extra_event.as_bytes(),
-                )
+                contract().assert_http_response(StatusCode::OK, &headers, extra_event.as_bytes())
             })
             .is_err(),
             "unrelated SSE messages must not be silently accepted"
@@ -310,41 +308,38 @@ mod tests {
         let headers = content_type("application/json");
         let mut payload = example_discovery();
         payload["id"] = json!(8);
-        assert!(
-            std::panic::catch_unwind(|| {
-                contract().assert_http_response(
-                    StatusCode::OK,
-                    &headers,
-                    payload.to_string().as_bytes(),
-                )
-            })
-            .is_err()
-        );
+        assert!(std::panic::catch_unwind(|| {
+            contract().assert_http_response(
+                StatusCode::OK,
+                &headers,
+                payload.to_string().as_bytes(),
+            )
+        })
+        .is_err());
 
         let mut payload = example_discovery();
         payload["result"]["capabilities"] = json!({});
-        assert!(
-            std::panic::catch_unwind(|| {
-                contract().assert_http_response(
-                    StatusCode::OK,
-                    &headers,
-                    payload.to_string().as_bytes(),
-                )
-            })
-            .is_err()
-        );
+        assert!(std::panic::catch_unwind(|| {
+            contract().assert_http_response(
+                StatusCode::OK,
+                &headers,
+                payload.to_string().as_bytes(),
+            )
+        })
+        .is_err());
 
         let mut payload = example_discovery();
-        payload["result"].as_object_mut().expect("object").remove("_meta");
-        assert!(
-            std::panic::catch_unwind(|| {
-                contract().assert_http_response(
-                    StatusCode::OK,
-                    &headers,
-                    payload.to_string().as_bytes(),
-                )
-            })
-            .is_err()
-        );
+        payload["result"]
+            .as_object_mut()
+            .expect("object")
+            .remove("_meta");
+        assert!(std::panic::catch_unwind(|| {
+            contract().assert_http_response(
+                StatusCode::OK,
+                &headers,
+                payload.to_string().as_bytes(),
+            )
+        })
+        .is_err());
     }
 }
