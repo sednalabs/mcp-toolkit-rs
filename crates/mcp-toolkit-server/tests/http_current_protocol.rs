@@ -287,9 +287,8 @@ async fn current_protocol_discover_is_stateless_and_advertises_supported_version
         "unexpected discovery error: {payload}"
     );
 
-    let discovery: rmcp::model::DiscoverResult =
-        serde_json::from_value(payload["result"].clone())
-            .expect("valid current-protocol discovery response");
+    let discovery: rmcp::model::DiscoverResult = serde_json::from_value(payload["result"].clone())
+        .expect("valid current-protocol discovery response");
     assert!(
         discovery
             .supported_versions
