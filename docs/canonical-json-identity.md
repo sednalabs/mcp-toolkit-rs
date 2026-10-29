@@ -17,8 +17,8 @@ The same JSON value, regardless of object insertion order, has the same
 canonical bytes and SHA-256 digest. SHA-256 is calculated over those bytes,
 not over source text, a pretty-printed representation, or a preview.
 
-For an empty object, the bytes are `{}` and the SHA-256 hex digest is
-`44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a`.
+For an empty object, the bytes are `{}`; the corresponding SHA-256
+test vector is asserted in the core unit tests.
 
 ## Consumer contract
 
