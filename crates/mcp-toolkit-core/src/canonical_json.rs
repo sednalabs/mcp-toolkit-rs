@@ -41,10 +41,9 @@ pub fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, serde_json::Error>
 fn order_object_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
-            let mut entries = map.iter().collect::<Vec<_>>();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            let sorted: std::collections::BTreeMap<_, _> = map.iter().collect();
             let mut ordered = Map::new();
-            for (key, nested) in entries {
+            for (key, nested) in sorted {
                 ordered.insert(key.clone(), order_object_keys(nested));
             }
             Value::Object(ordered)
@@ -147,14 +146,10 @@ mod tests {
 
     #[test]
     fn canonical_bytes_are_independent_of_recursive_object_order() {
-        let left: Value = serde_json::from_str(
-            r#"{"z":{"b":2,"a":1},"a":[{"d":4,"c":3},"é🦀"]}"#,
-        )
-        .expect("left is valid JSON");
-        let right: Value = serde_json::from_str(
-            r#"{"a":[{"c":3,"d":4},"é🦀"],"z":{"a":1,"b":2}}"#,
-        )
-        .expect("right is valid JSON");
+        let left: Value = serde_json::from_str(r#"{"z":{"b":2,"a":1},"a":[{"d":4,"c":3},"é🦀"]}"#)
+            .expect("left is valid JSON");
+        let right: Value = serde_json::from_str(r#"{"a":[{"c":3,"d":4},"é🦀"],"z":{"a":1,"b":2}}"#)
+            .expect("right is valid JSON");
         let expected = r#"{"a":[{"c":3,"d":4},"é🦀"],"z":{"a":1,"b":2}}"#.as_bytes();
 
         assert_eq!(canonical_json_bytes(&left).expect("left bytes"), expected);
@@ -211,13 +206,19 @@ mod tests {
             bytes,
             r#"{"array":[true,null,-1],"control":"\u0000\n","text":"é🦀"}"#.as_bytes()
         );
-        assert!(bytes.len() > String::from_utf8(bytes.clone()).expect("utf8").chars().count());
+        assert!(
+            bytes.len()
+                > String::from_utf8(bytes.clone())
+                    .expect("utf8")
+                    .chars()
+                    .count()
+        );
     }
 
     #[test]
     fn debug_does_not_expose_payload_or_its_digest() {
-        let identity = CanonicalJsonIdentity::new(&json!({"secret": "sensitive"}))
-            .expect("identity");
+        let identity =
+            CanonicalJsonIdentity::new(&json!({"secret": "sensitive"})).expect("identity");
         let rendered = format!("{identity:?}");
         assert!(rendered.contains("byte_count"));
         assert!(!rendered.contains("sensitive"));
