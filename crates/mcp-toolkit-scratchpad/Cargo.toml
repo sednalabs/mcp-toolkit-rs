@@ -22,7 +22,7 @@ default = []
 tokio = ["dep:tokio"]
 
 [dependencies]
-duckdb = { version = "~1.10506.1", default-features = false, features = ["bundled"] }
+duckdb = { version = "~1.20000.0", default-features = false, features = ["bundled"] }
 mcp-toolkit-observability = { version = "0.1.0", path = "../mcp-toolkit-observability", features = ["tracing-bridge"] }
 mcp-toolkit-policy-core = { version = "0.1.0", path = "../mcp-toolkit-policy-core" }
 serde_json = "1.0.149"
