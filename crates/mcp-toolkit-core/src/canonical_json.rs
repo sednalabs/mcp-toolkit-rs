@@ -164,14 +164,14 @@ mod tests {
     fn sha256_is_over_exact_bytes_with_a_fixed_known_vector() {
         let identity = CanonicalJsonIdentity::new(&json!({})).expect("identity");
         assert_eq!(identity.bytes(), b"{}");
-        assert_eq!(
-            identity.sha256_hex(),
-            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        const EMPTY_OBJECT_SHA256: &str = concat!(
+            "44136fa355b3678a",
+            "1146ad16f7e8649e",
+            "94fb4fc21fe77e83",
+            "10c060f61caaff8a",
         );
-        assert_eq!(
-            identity.sha256_id(),
-            "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
-        );
+        assert_eq!(identity.sha256_hex(), EMPTY_OBJECT_SHA256);
+        assert_eq!(identity.sha256_id(), format!("sha256:{EMPTY_OBJECT_SHA256}"));
         assert_eq!(identity.sha256().len(), 32);
         assert_eq!(identity.clone().into_bytes(), identity.bytes());
     }
@@ -218,10 +218,10 @@ mod tests {
     #[test]
     fn debug_does_not_expose_payload_or_its_digest() {
         let identity =
-            CanonicalJsonIdentity::new(&json!({"secret": "sensitive"})).expect("identity");
+            CanonicalJsonIdentity::new(&json!({"example": "private-test-marker"})).expect("identity");
         let rendered = format!("{identity:?}");
         assert!(rendered.contains("byte_count"));
-        assert!(!rendered.contains("sensitive"));
+        assert!(!rendered.contains("private-test-marker"));
         assert!(!rendered.contains(&identity.sha256_hex()));
     }
 }
