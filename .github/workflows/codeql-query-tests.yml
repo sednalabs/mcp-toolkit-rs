@@ -58,7 +58,7 @@ jobs:
       - name: Set up CodeQL
         # github/codeql-action v4
         id: setup-codeql
-        uses: github/codeql-action/setup-codeql@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        uses: github/codeql-action/setup-codeql@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
 
       - name: Install query pack dependencies
         shell: bash
@@ -96,7 +96,7 @@ jobs:
       - name: Set up CodeQL
         # github/codeql-action v4
         id: setup-codeql
-        uses: github/codeql-action/setup-codeql@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        uses: github/codeql-action/setup-codeql@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
 
       - name: Install Rust toolkit contract query pack dependencies
         shell: bash

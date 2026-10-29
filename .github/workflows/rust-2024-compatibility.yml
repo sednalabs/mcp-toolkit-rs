@@ -146,7 +146,7 @@ jobs:
 
       - name: Cache cargo artifacts
         # swatinem/rust-cache v2
-        uses: swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
+        uses: swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31
         with:
           shared-key: rust-2024-compatibility-${{ runner.os }}-${{ matrix.target.cache_key }}
           workspaces: ${{ matrix.target.workspaces }}
