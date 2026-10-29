@@ -15,6 +15,34 @@ reviewed contract change.
 Use `assert_json_contract_snapshot` for other JSON surfaces that need canonical
 object ordering and strict/update behavior.
 
+## Current MCP HTTP Discovery
+
+Use \`current_protocol_contract::CurrentDiscoveryContract\` to assert a
+modern \`server/discover\` response at the actual HTTP boundary, after the
+service's own test client has supplied authentication and request metadata:
+
+\`\`\`rust
+use mcp_toolkit_testing::current_protocol_contract::CurrentDiscoveryContract;
+use serde_json::json;
+
+let contract = CurrentDiscoveryContract::new("2026-07-28", json!(7))
+    .require_capability("tools")
+    .require_server_identity();
+contract.assert_http_response(status, &response_headers, &response_body);
+\`\`\`
+
+The helper accepts JSON or single-result SSE responses. It checks HTTP success,
+JSON-RPC response correlation, the complete discovery result shape,
+advertised protocol version, requested capabilities, and **absence** of the
+legacy \`Mcp-Session-Id\` header. Server identity is a recommended optional
+assertion because it is self-reported metadata, **never authority**.
+
+The helper does not perform protocol negotiation, authenticate the caller,
+verify which version was actually negotiated, or test a real deployment. A
+consumer test must use the server's actual HTTP router, SDK and protected
+request path. Separate tests should cover rejected versions, resource and
+subscription behaviour, and authorization boundaries.
+
 ## Stdio Callability
 
 Use `stdio_contract::assert_stdio_tools_list` in binary integration tests:
