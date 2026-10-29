@@ -171,7 +171,10 @@ mod tests {
             "10c060f61caaff8a",
         );
         assert_eq!(identity.sha256_hex(), EMPTY_OBJECT_SHA256);
-        assert_eq!(identity.sha256_id(), format!("sha256:{EMPTY_OBJECT_SHA256}"));
+        assert_eq!(
+            identity.sha256_id(),
+            format!("sha256:{EMPTY_OBJECT_SHA256}")
+        );
         assert_eq!(identity.sha256().len(), 32);
         assert_eq!(identity.clone().into_bytes(), identity.bytes());
     }
@@ -217,8 +220,8 @@ mod tests {
 
     #[test]
     fn debug_does_not_expose_payload_or_its_digest() {
-        let identity =
-            CanonicalJsonIdentity::new(&json!({"example": "private-test-marker"})).expect("identity");
+        let identity = CanonicalJsonIdentity::new(&json!({"example": "private-test-marker"}))
+            .expect("identity");
         let rendered = format!("{identity:?}");
         assert!(rendered.contains("byte_count"));
         assert!(!rendered.contains("private-test-marker"));
