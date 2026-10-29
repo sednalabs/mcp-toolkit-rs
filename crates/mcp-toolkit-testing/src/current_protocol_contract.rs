@@ -23,7 +23,7 @@ use serde_json::Value;
 
 const SERVER_INFO_KEY: &str = "io.modelcontextprotocol/serverInfo";
 
-/// Required properties of one successful current-protocol \`server/discover\` response.
+/// Required properties of one successful current-protocol `server/discover` response.
 #[derive(Debug, Clone)]
 pub struct CurrentDiscoveryContract {
     expected_protocol_version: String,
@@ -67,7 +67,7 @@ impl CurrentDiscoveryContract {
 
     /// Asserts one HTTP discovery response and returns its full JSON-RPC envelope.
     ///
-    /// Accepts \`application/json\` or one-result \`text/event-stream\` without
+    /// Accepts `application/json` or one-result `text/event-stream` without
     /// accepting extra application events or ignoring JSON-RPC errors.
     ///
     /// # Panics
