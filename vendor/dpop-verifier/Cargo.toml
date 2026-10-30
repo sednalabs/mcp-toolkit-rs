@@ -1,0 +1,45 @@
+[package]
+name = "dpop-verifier"
+version = "4.4.1"
+publish = false
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Lightweight DPoP proof verifier with pluggable replay store"
+repository = "https://github.com/ukonhattu/dpop-verifier"
+homepage = "https://github.com/ukonhattu/dpop-verifier"
+documentation = "https://docs.rs/dpop-verifier"
+readme = "README.md"
+keywords = ["oauth", "dpop", "oidc", "security", "jwt"]
+categories = ["authentication", "cryptography", "web-programming"]
+exclude = [".github/*"]
+
+
+[badges]
+maintained = { status = "actively-developed" }
+
+[features]
+default = []
+actix-web = ["dep:actix-web"]
+eddsa = ["dep:ed25519-dalek"]
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+p256 = { version = "0.14.0", features = ["ecdsa"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+secrecy = "0.10.3"
+sha2 = "0.10"
+thiserror = "1"
+time = "0.3"
+subtle = "2.6.1"
+url = "2.5.7"
+# Request helpers need no server transports, compression, or cookie defaults.
+actix-web = { version = "4", default-features = false, features = ["macros"], optional = true }
+hmac = "0.12"
+rand_core = { version = "0.6", features = ["getrandom"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"], optional = true }
+signature = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -65,7 +65,7 @@ Auth/token mechanics must follow these rules:
 | Claim extraction | `crates/mcp-toolkit-auth/src/claims.rs` | Approved canonicalization glue | Extract scopes, roles, issuer, audience, subject, and client identity only after provider verification. |
 | Replay/JTI checks | `crates/mcp-toolkit-auth/src/replay.rs` | Approved local policy/storage glue | Store replay markers through the `JtiReplayStore` abstraction; fail closed on backend errors. |
 | Auth error mapping | `crates/mcp-toolkit-auth/src/error.rs`, `claims.rs`, and `surface.rs` | Approved local contract glue | Map provider failures to stable low-leakage error codes and challenges. |
-| DPoP sender constraints | `crates/mcp-toolkit-auth/src/dpop.rs` and `authenticator.rs` | Crate-backed atomic verification | `dpop-verifier` 4.4.0 validates the full proof and toolkit immediately matches its JKT against `cnf.jkt`; see the [atomic authentication boundary](design/dpop-atomic-authentication-boundary.md). Normal Bearer entrypoints reject every `cnf` claim. The time-bounded dependency custody decision and reassessment triggers are in the [DPoP verifier custody record](design/dpop-verifier-custody.md). |
+| DPoP sender constraints | `crates/mcp-toolkit-auth/src/dpop.rs` and `authenticator.rs`, with `vendor/dpop-verifier` | Crate-backed atomic verification under temporary source custody | The narrowly ported, unpublished `dpop-verifier` 4.4.1 preserves upstream 4.4.0 proof and HMAC nonce verification while using patched-compatible P-256 dependencies. Toolkit matches verified JKT against `cnf.jkt` before replay insertion; see the [atomic authentication boundary](design/dpop-atomic-authentication-boundary.md). Bearer entrypoints still reject every `cnf` claim. Ownership, permitted changes, expiry and exit are in the [custody record](design/dpop-verifier-custody.md). |
 | Outbound DPoP P-256 key generation | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Narrow `p256` production boundary | Generate P-256 key material only; use `jsonwebtoken` for JWK extraction, thumbprints, compact JWS encoding, and ES256 signing. Do not expand this boundary into proof verification or bespoke JOSE parsing. |
 | Test-only P-256 proof fixtures | `crates/mcp-toolkit-auth/src/internal_tests.rs` and integration tests | `p256` test use | Real signed DPoP fixtures only; production verification remains exclusively in `dpop-verifier`. |
 | RFC 8693 token exchange client | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Crate-backed HTTP, JOSE, URL, and typed local glue | Use the explicit exact-endpoint trust policy, typed bearer subject, no-redirect/no-ambient-proxy client, bounded nonce stores, one nonce retry, and provider-backed binding metadata documented in `docs/design/outbound-dpop-token-exchange.md`. |
@@ -117,3 +117,11 @@ posture by checking that:
 The script is intentionally narrow. It does not replace code review, dependency
 governance notes, or hosted Rust validation; it prevents the easiest regressions
 from becoming the default path.
+
+The existing verifier source is quarantined under `vendor/dpop-verifier`, not
+treated as newly approved local JOSE plumbing in `mcp-toolkit-auth`. The source
+custody exception is specific and time-bounded; it does not permit new crypto
+primitives, manual proof parsing in toolkit glue, or broader protocol changes.
+The verifier is an explicit workspace member, covered by workspace tests,
+all-feature Clippy, advisory/license/source checks, and the non-publication
+guard. Its provenance and permitted delta are recorded beside the source.

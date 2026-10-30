@@ -283,7 +283,11 @@ def validate_excluded_publication_posture(
     """Keep every non-first-wave workspace package publication-disabled."""
 
     errors: list[str] = []
-    for manifest_path in sorted((repo_root / "crates").glob("*/Cargo.toml")):
+    manifest_paths = [
+        *(repo_root / "crates").glob("*/Cargo.toml"),
+        *(repo_root / "vendor").glob("*/Cargo.toml"),
+    ]
+    for manifest_path in sorted(manifest_paths):
         with manifest_path.open("rb") as f:
             manifest = tomllib.load(f)
         package = manifest.get("package")
@@ -450,7 +454,9 @@ def main() -> int:
         github_summary(
             f"- `{package}`: full registry package verification deferred until "
             "its prerequisite toolkit crates are published or available in an "
-            "approved staging registry\n"
+            "approved staging registry. Auth and its dependants additionally need "
+            "a reviewed registry release replacing the unpublished, toolkit-custodied "
+            "dpop-verifier 4.4.1; package listing is not publication readiness\n"
         )
 
     return 0

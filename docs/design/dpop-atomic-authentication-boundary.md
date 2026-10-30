@@ -4,7 +4,8 @@
 
 `mcp-toolkit-auth` accepts sender-constrained access tokens only through
 `Authenticator::authenticate_sender_constrained_dpop`. That operation invokes
-`dpop-verifier` 4.4.0 itself with the raw compact proof, the exact access
+the toolkit-custodied `dpop-verifier` 4.4.1 compatibility port of upstream
+4.4.0 with the raw compact proof, the exact access
 token, canonical HTTP target and method, a configured `DpopVerifier`, and the
 resource server's `ReplayStore`. It then compares the verified JKT with
 `cnf.jkt` before returning an authenticator-bound `VerifiedAuthContext`.
@@ -60,6 +61,20 @@ not disclose verifier internals.
    Authenticator provenance is not a reusable HTTP authorization decision:
    policy middleware must additionally consume a fresh request-bound surface
    witness.
+
+Import verifier, replay, nonce and error types through
+`mcp_toolkit_auth::dpop_verifier` (or `mcp_toolkit::auth::dpop_verifier` when
+the facade's `auth` feature is enabled). The direct, repository-relative
+dependency follows a toolkit Git dependency into downstream applications; it
+does not depend on a root-only Cargo patch. A separately declared registry or
+vendored verifier is a different Rust crate identity and must not be mixed with
+the authenticator's types. Existing applications should migrate these imports
+and remove the duplicate dependency when updating their toolkit revision.
+
+The temporary ownership, provenance, expiry and registry-publication constraint
+are recorded in [the custody record](dpop-verifier-custody.md). This port retains
+the existing verifier's method/URI normalization and nonce policy; it is not a
+new protocol implementation or a claim of full independent RFC conformance.
 
 ## Trust boundary
 
