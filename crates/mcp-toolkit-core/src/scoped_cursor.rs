@@ -149,7 +149,12 @@ impl ScopedCursorStore {
     /// Generate at least 128 unpredictable bits; the syntax check does not prove
     /// entropy. Tokens must not be supplied by a model. No authentication is
     /// performed here, and a token alone never bypasses the scope check.
-    pub fn insert(&self, token: &str, scope: CursorScope, payload: Value) -> Result<(), CursorError> {
+    pub fn insert(
+        &self,
+        token: &str,
+        scope: CursorScope,
+        payload: Value,
+    ) -> Result<(), CursorError> {
         self.insert_at(token, scope, payload, Instant::now())
     }
 
@@ -161,7 +166,9 @@ impl ScopedCursorStore {
         now: Instant,
     ) -> Result<(), CursorError> {
         if !(32..=256).contains(&token.len())
-            || !token.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            || !token
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
         {
             return Err(CursorError::InvalidToken);
         }
@@ -170,7 +177,9 @@ impl ScopedCursorStore {
             limit: self.limits.max_payload_bytes,
         };
         serde_json::to_writer(&mut counter, &payload).map_err(|_| CursorError::PayloadTooLarge)?;
-        let expires_at = now.checked_add(self.limits.ttl).ok_or(CursorError::InvalidConfiguration)?;
+        let expires_at = now
+            .checked_add(self.limits.ttl)
+            .ok_or(CursorError::InvalidConfiguration)?;
         let mut entries = self.entries.lock().map_err(|_| CursorError::Unavailable)?;
         entries.retain(|_, entry| entry.expires_at > now);
         if entries.contains_key(token) {
@@ -179,7 +188,14 @@ impl ScopedCursorStore {
         if entries.len() >= self.limits.max_entries {
             return Err(CursorError::CapacityReached);
         }
-        entries.insert(token.to_owned(), Entry { scope, payload, expires_at });
+        entries.insert(
+            token.to_owned(),
+            Entry {
+                scope,
+                payload,
+                expires_at,
+            },
+        );
         Ok(())
     }
 
@@ -219,7 +235,8 @@ impl ScopedCursorStore {
         }
         let mut entries = self.entries.lock().map_err(|_| CursorError::Unavailable)?;
         entries.retain(|_, entry| entry.expires_at > now);
-        let entry = entries.get(token)
+        let entry = entries
+            .get(token)
             .filter(|entry| entry.scope == *scope)
             .ok_or(CursorError::InvalidCursor)?;
         let payload = entry.payload.clone();
@@ -237,7 +254,9 @@ struct LimitedCounter {
 
 impl Write for LimitedCounter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.used = self.used.checked_add(bytes.len())
+        self.used = self
+            .used
+            .checked_add(bytes.len())
             .filter(|used| *used <= self.limit)
             .ok_or_else(|| io::Error::other("serialized payload limit"))?;
         Ok(bytes.len())
@@ -265,7 +284,8 @@ mod tests {
             ttl: Duration::from_secs(60),
             max_entries: n,
             max_payload_bytes: bytes,
-        }).unwrap()
+        })
+        .unwrap()
     }
 
     #[test]
@@ -286,7 +306,10 @@ mod tests {
             CursorScope::new("actor", "other", "epoch"),
             CursorScope::new("actor", "resource", "other"),
         ] {
-            assert_eq!(s.consume(A, &foreign.unwrap()), Err(CursorError::InvalidCursor));
+            assert_eq!(
+                s.consume(A, &foreign.unwrap()),
+                Err(CursorError::InvalidCursor)
+            );
         }
         assert_eq!(s.resolve(A, &scope()).unwrap(), json!(1));
     }
@@ -296,15 +319,25 @@ mod tests {
         let s = store(2, 100);
         let now = Instant::now();
         s.insert_at(A, scope(), json!(1), now).unwrap();
-        assert_eq!(s.lookup_at(A, &scope(), false, now + Duration::from_secs(59)).unwrap(), json!(1));
-        assert_eq!(s.lookup_at(A, &scope(), false, now + Duration::from_secs(60)), Err(CursorError::InvalidCursor));
+        assert_eq!(
+            s.lookup_at(A, &scope(), false, now + Duration::from_secs(59))
+                .unwrap(),
+            json!(1)
+        );
+        assert_eq!(
+            s.lookup_at(A, &scope(), false, now + Duration::from_secs(60)),
+            Err(CursorError::InvalidCursor)
+        );
     }
 
     #[test]
     fn capacity_never_evicts_live_cursors() {
         let s = store(1, 100);
         s.insert(A, scope(), json!(1)).unwrap();
-        assert_eq!(s.insert(B, scope(), json!(2)), Err(CursorError::CapacityReached));
+        assert_eq!(
+            s.insert(B, scope(), json!(2)),
+            Err(CursorError::CapacityReached)
+        );
         assert_eq!(s.resolve(A, &scope()).unwrap(), json!(1));
     }
 
@@ -313,15 +346,22 @@ mod tests {
         let s = store(1, 100);
         let now = Instant::now();
         s.insert_at(A, scope(), json!(1), now).unwrap();
-        s.insert_at(B, scope(), json!(2), now + Duration::from_secs(61)).unwrap();
-        assert_eq!(s.lookup_at(A, &scope(), false, now + Duration::from_secs(61)), Err(CursorError::InvalidCursor));
+        s.insert_at(B, scope(), json!(2), now + Duration::from_secs(61))
+            .unwrap();
+        assert_eq!(
+            s.lookup_at(A, &scope(), false, now + Duration::from_secs(61)),
+            Err(CursorError::InvalidCursor)
+        );
     }
 
     #[test]
     fn collision_preserves_original_payload() {
         let s = store(2, 100);
         s.insert(A, scope(), json!(1)).unwrap();
-        assert_eq!(s.insert(A, scope(), json!(2)), Err(CursorError::TokenCollision));
+        assert_eq!(
+            s.insert(A, scope(), json!(2)),
+            Err(CursorError::TokenCollision)
+        );
         assert_eq!(s.resolve(A, &scope()).unwrap(), json!(1));
     }
 
@@ -329,25 +369,52 @@ mod tests {
     fn payload_bound_counts_utf8_serialization_bytes() {
         let s = store(2, 5);
         s.insert(A, scope(), json!("a")).unwrap();
-        assert_eq!(s.insert(B, scope(), json!("éé")), Err(CursorError::PayloadTooLarge));
+        assert_eq!(
+            s.insert(B, scope(), json!("éé")),
+            Err(CursorError::PayloadTooLarge)
+        );
     }
 
     #[test]
     fn tokens_and_scopes_are_bounded() {
         let s = store(2, 100);
-        assert_eq!(s.insert("short", scope(), json!(1)), Err(CursorError::InvalidToken));
-        assert_eq!(CursorScope::new("", "a", "b"), Err(CursorError::InvalidScope));
-        assert_eq!(CursorScope::new("a".repeat(1025), "a", "b"), Err(CursorError::InvalidScope));
+        assert_eq!(
+            s.insert("short", scope(), json!(1)),
+            Err(CursorError::InvalidToken)
+        );
+        assert_eq!(
+            CursorScope::new("", "a", "b"),
+            Err(CursorError::InvalidScope)
+        );
+        assert_eq!(
+            CursorScope::new("a".repeat(1025), "a", "b"),
+            Err(CursorError::InvalidScope)
+        );
     }
 
     #[test]
     fn zero_limits_are_rejected() {
         for limits in [
-            CursorLimits { ttl: Duration::ZERO, max_entries: 1, max_payload_bytes: 1 },
-            CursorLimits { ttl: Duration::from_secs(1), max_entries: 0, max_payload_bytes: 1 },
-            CursorLimits { ttl: Duration::from_secs(1), max_entries: 1, max_payload_bytes: 0 },
+            CursorLimits {
+                ttl: Duration::ZERO,
+                max_entries: 1,
+                max_payload_bytes: 1,
+            },
+            CursorLimits {
+                ttl: Duration::from_secs(1),
+                max_entries: 0,
+                max_payload_bytes: 1,
+            },
+            CursorLimits {
+                ttl: Duration::from_secs(1),
+                max_entries: 1,
+                max_payload_bytes: 0,
+            },
         ] {
-            assert!(matches!(ScopedCursorStore::new(limits), Err(CursorError::InvalidConfiguration)));
+            assert!(matches!(
+                ScopedCursorStore::new(limits),
+                Err(CursorError::InvalidConfiguration)
+            ));
         }
     }
 
@@ -355,17 +422,28 @@ mod tests {
     fn concurrent_consumption_succeeds_once() {
         let s = std::sync::Arc::new(store(2, 100));
         s.insert(A, scope(), json!(1)).unwrap();
-        let joins: Vec<_> = (0..8).map(|_| {
-            let s = s.clone();
-            std::thread::spawn(move || s.consume(A, &scope()).is_ok())
-        }).collect();
-        assert_eq!(joins.into_iter().map(|j| usize::from(j.join().unwrap())).sum::<usize>(), 1);
+        let joins: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || s.consume(A, &scope()).is_ok())
+            })
+            .collect();
+        assert_eq!(
+            joins
+                .into_iter()
+                .map(|j| usize::from(j.join().unwrap()))
+                .sum::<usize>(),
+            1
+        );
     }
 
     #[test]
     fn restart_does_not_revalidate_old_token() {
         let s = store(2, 100);
         s.insert(A, scope(), json!(1)).unwrap();
-        assert_eq!(store(2, 100).resolve(A, &scope()), Err(CursorError::InvalidCursor));
+        assert_eq!(
+            store(2, 100).resolve(A, &scope()),
+            Err(CursorError::InvalidCursor)
+        );
     }
 }
