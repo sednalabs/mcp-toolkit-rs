@@ -24,12 +24,12 @@
 //! * **BOUNDARY**: `docs/toolkit-boundary.md`
 //! * **MCP**: <https://modelcontextprotocol.io>
 
+#[cfg(feature = "http")]
+pub mod apps_http;
 #[cfg(feature = "auth")]
 pub mod auth;
 #[cfg(feature = "http")]
 pub mod http;
-#[cfg(feature = "http")]
-pub mod apps_http;
 #[cfg(feature = "operational-resources")]
 pub mod operational_resources;
 #[cfg(feature = "stdio")]

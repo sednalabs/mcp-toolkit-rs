@@ -74,7 +74,10 @@ pub async fn mirror_apps_tool_security_schemes(request: Request, next: Next) -> 
     let bytes = match to_bytes(body, APPS_TOOL_LIST_JSON_LIMIT_BYTES).await {
         Ok(bytes) => bytes,
         Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "MCP Apps tool list response exceeds the byte limit.")
+            return (
+                StatusCode::BAD_GATEWAY,
+                "MCP Apps tool list response exceeds the byte limit.",
+            )
                 .into_response();
         }
     };
@@ -153,7 +156,8 @@ mod tests {
 
     #[test]
     fn does_not_rewrite_non_tool_responses() {
-        let input = json!({"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"hello"}]}});
+        let input =
+            json!({"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"hello"}]}});
         assert!(project_tool_list_payload(input.to_string().as_bytes()).is_none());
         assert!(project_tool_list_payload(b"not-json").is_none());
     }
@@ -231,7 +235,9 @@ mod tests {
             .await
             .unwrap();
         let (_, result) = read_response(response).await;
-        assert!(result["result"]["tools"][0].get("securitySchemes").is_none());
+        assert!(result["result"]["tools"][0]
+            .get("securitySchemes")
+            .is_none());
     }
 
     #[tokio::test]
@@ -265,6 +271,8 @@ mod tests {
         );
         let (status, result) = read_response(response).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert!(result["result"]["tools"][0].get("securitySchemes").is_none());
+        assert!(result["result"]["tools"][0]
+            .get("securitySchemes")
+            .is_none());
     }
 }
