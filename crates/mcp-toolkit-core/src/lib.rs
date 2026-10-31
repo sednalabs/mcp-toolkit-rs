@@ -32,6 +32,7 @@ pub mod duration_estimate;
 pub mod guarded_action;
 pub mod mcp_apps;
 pub mod notifications;
+pub mod resource_invalidation;
 pub mod openai_tool_search;
 pub mod pagination;
 pub mod query_evidence;
