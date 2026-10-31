@@ -85,3 +85,18 @@ cargo test --manifest-path templates/curated-stdio-intent-server/Cargo.toml \
 ```
 
 Review the generated `spec/tool_schema_snapshot.v1.json` diff before merging.
+
+## Portable first run
+
+The emitted `rust-toolchain.toml` selects Rust 1.99.0, including rustfmt and
+Clippy. Run Cargo from this directory; rustup can install that toolchain on first
+use. After the initial dependency resolution, retain `Cargo.lock` and use
+`cargo test --locked` for repeatable builds.
+
+`--print-client-config` works even after copying just the binary to a path with
+spaces and running it outside the source tree. It points to that exact executable
+and emits the public `read_only` default, not values inherited from your shell.
+`--doctor` remains a static source-project check; it does not check provider
+connectivity. For JSON config or a fixed read-only service with no profile setting,
+reuse `render_executable_client_config` with `McpServersJson` and an empty
+environment slice instead of maintaining handwritten JSON.

@@ -2,6 +2,8 @@ use mcp_toolkit_testing::stdio_contract::{
     assert_stdio_tool_response_excludes_substrings, assert_stdio_tools_list, StdioMcpProcess,
 };
 use serde_json::json;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
@@ -101,7 +103,7 @@ fn cli_print_client_config_renders_stdio_config() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("[mcp_servers.\"single-crate-public-stdio-server\"]"));
     assert!(stdout.contains("command = \""));
-    assert!(stdout.contains("SINGLE_CRATE_PUBLIC_STDIO_SERVER_TOOL_PROFILE = \"read_only\""));
+    assert!(stdout.contains("EXAMPLE_MCP_TOOL_PROFILE = \"read_only\""));
 }
 
 #[test]
@@ -186,4 +188,52 @@ fn stdio_discovery_preserves_current_and_legacy_tool_lifecycles() {
             assert_eq!(called["result"]["resultType"], "complete");
         }
     }
+}
+
+#[test]
+fn copied_binary_prints_its_own_client_config_outside_source_tree() {
+    const PROFILE_ENV: &str = "EXAMPLE_MCP_TOOL_PROFILE";
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("copied-client-config-");
+    #[cfg(unix)]
+    builder.permissions(std::fs::Permissions::from_mode(0o700));
+    let directory = builder.tempdir().expect("owned test directory");
+    let root = directory.path();
+    #[cfg(unix)]
+    assert_eq!(
+        root.metadata()
+            .expect("test directory metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+    );
+    let copied = root.join(format!("copied server{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(
+        env!("CARGO_BIN_EXE_single-crate-public-stdio-server"),
+        &copied,
+    )
+    .expect("copy binary");
+    let output = Command::new(&copied)
+        .arg("--print-client-config")
+        .current_dir(root)
+        .env(PROFILE_ENV, "private-environment-canary")
+        .output()
+        .expect("copied binary config");
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("config UTF-8");
+    let escaped_path = copied
+        .to_str()
+        .expect("test path UTF-8")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    assert!(
+        stdout.contains(&format!("command = \"{escaped_path}\"")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("TOOL_PROFILE = \"read_only\""));
+    assert!(!stdout.contains("private-environment-canary"));
+    assert!(!root.join("Cargo.toml").exists());
+    directory.close().expect("remove test copy");
 }
