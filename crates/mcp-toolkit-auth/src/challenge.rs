@@ -84,6 +84,68 @@ pub fn build_bearer_challenge_value(challenge: &BearerChallenge<'_>) -> Option<S
         .map(|value| value.to_string())
 }
 
+/// Build the OAuth challenge metadata used by MCP Apps tool-level errors.
+///
+/// This returns the `_meta` JSON object, not an HTTP response and not a
+/// `CallToolResult`. The caller remains responsible for marking the result
+/// `isError=true`, enforcing the request's OAuth permissions and attaching
+/// this metadata to the actual tool response.
+///
+/// Returns `None` for missing or malformed public resource metadata, RFC
+/// 6750 errors, required descriptions or insufficient-scope hints. It rejects
+/// control characters rather than silently turning them into a different
+/// browser-visible OAuth instruction.
+///
+/// ```
+/// use mcp_toolkit_auth::challenge::{
+///     BearerChallenge, build_mcp_apps_tool_authenticate_meta
+/// };
+/// let challenge = BearerChallenge {
+///     realm: "example-mcp",
+///     resource_metadata: Some("https://example.com/.well-known/oauth-protected-resource/mcp"),
+///     scope: Some("items.write"),
+///     error: Some("insufficient_scope"),
+///     error_description: Some("Additional write permission is required."),
+///     error_uri: None,
+/// };
+/// let meta = build_mcp_apps_tool_authenticate_meta(&challenge).unwrap();
+/// assert_eq!(meta["mcp/www_authenticate"].as_array().unwrap().len(), 1);
+/// ```
+///
+/// # Security
+///
+/// The resource metadata URL and required scopes must be derived from trusted
+/// deployment/auth context, never from an untrusted tool argument or message.
+/// This helper is presentation only; it never grants access or invokes login.
+pub fn build_mcp_apps_tool_authenticate_meta(
+    challenge: &BearerChallenge<'_>,
+) -> Option<serde_json::Value> {
+    let metadata = challenge.resource_metadata?;
+    let error = challenge.error?;
+    let description = challenge.error_description?;
+    if metadata.trim().is_empty()
+        || !matches!(
+            error,
+            "invalid_request" | "invalid_token" | "insufficient_scope"
+        )
+        || description.trim().is_empty()
+        || [metadata, error, description]
+            .iter()
+            .any(|value| value.chars().any(char::is_control))
+    {
+        return None;
+    }
+    if error == "insufficient_scope"
+        && challenge
+            .scope
+            .is_none_or(|scope| scope.trim().is_empty() || scope.chars().any(char::is_control))
+    {
+        return None;
+    }
+    let value = build_bearer_challenge_value(challenge)?;
+    Some(serde_json::json!({ "mcp/www_authenticate": [value] }))
+}
+
 fn push_param(parts: &mut Vec<String>, name: &str, value: &str) {
     let sanitized = sanitize_value(value);
     if sanitized.is_empty() {
@@ -108,7 +170,77 @@ fn escape_quoted(value: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_bearer_challenge, build_bearer_challenge_value, BearerChallenge};
+    use super::{
+        build_bearer_challenge, build_bearer_challenge_value,
+        build_mcp_apps_tool_authenticate_meta, BearerChallenge,
+    };
+    use mcp_toolkit_testing::openai_apps_contract::OpenAiAppsConformanceProfile;
+
+    fn apps_challenge() -> BearerChallenge<'static> {
+        BearerChallenge {
+            realm: "example",
+            resource_metadata: Some(
+                "https://example.test/.well-known/oauth-protected-resource/mcp",
+            ),
+            scope: Some("irc.write"),
+            error: Some("insufficient_scope"),
+            error_description: Some("Permission to send messages is required."),
+            error_uri: None,
+        }
+    }
+
+    #[test]
+    fn apps_challenge_passes_existing_chatgpt_contract() {
+        let meta = build_mcp_apps_tool_authenticate_meta(&apps_challenge()).unwrap();
+        let issuers = ["https://issuer.example"];
+        let scopes = ["irc.write"];
+        OpenAiAppsConformanceProfile::new("https://example.test/mcp", &issuers)
+            .with_required_scopes(&scopes)
+            .assert_tool_result_authenticate_meta(&meta);
+    }
+
+    #[test]
+    fn apps_challenge_fails_closed_without_required_ui_fields() {
+        let mut c = apps_challenge();
+        c.resource_metadata = None;
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.error = None;
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.error = Some("not_a_bearer_error");
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.error_description = Some("   ");
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.scope = None;
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+    }
+
+    #[test]
+    fn apps_challenge_rejects_injected_newlines() {
+        let mut c = apps_challenge();
+        c.resource_metadata = Some("https://example.test/mcp\nX-Attack: yes");
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.error_description = Some("Please login\r\nX-Attack: yes");
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.scope = Some("irc.write\nextra");
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+    }
+
+    #[test]
+    fn apps_challenge_escapes_header_metacharacters() {
+        let mut c = apps_challenge();
+        c.error_description = Some("Permission for \"IRC write\" is required.");
+        let meta = build_mcp_apps_tool_authenticate_meta(&c).unwrap();
+        let serialized = meta["mcp/www_authenticate"][0].as_str().unwrap();
+        assert!(
+            serialized.contains(r#"error_description="Permission for \"IRC write\" is required.""#)
+        );
+    }
 
     #[test]
     fn builds_resource_metadata_challenge() {

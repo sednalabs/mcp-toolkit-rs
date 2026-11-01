@@ -225,6 +225,38 @@ async fn assert_current_tools_list_response(response: axum::response::Response) 
 }
 
 #[tokio::test]
+async fn current_tool_list_exposes_private_complete_cache_hints() {
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .server_config(StreamableHttpServerConfig::default().with_json_response(true))
+        .allowed_hosts(["127.0.0.1", "localhost"])
+        .build(|| Ok(EmptyToolServer));
+    let state = runtime.into_state(false);
+    let response = handle_mcp(State(state), current_request()).await;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("response body")
+        .to_bytes();
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(HEADER_SESSION_ID));
+    assert_eq!(
+        headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+        Some("application/json"),
+    );
+    let envelope: Value = serde_json::from_slice(&body).expect("valid HTTP JSON");
+    assert_eq!(envelope["id"], json!(1));
+    assert_eq!(envelope["result"]["resultType"], json!("complete"));
+    assert_eq!(envelope["result"]["ttlMs"], json!(0));
+    assert_eq!(envelope["result"]["cacheScope"], json!("private"));
+    assert!(envelope["result"]["tools"].is_array());
+}
+
+#[tokio::test]
 async fn current_protocol_post_is_stateless_without_initialize() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1", "localhost"])
