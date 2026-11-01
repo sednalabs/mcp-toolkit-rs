@@ -234,6 +234,23 @@ This first slice currently covers:
 This first slice does not yet cover invalid-token, insufficient-scope, or auth-server
 discovery variants.
 
+### MCP Apps tool-level OAuth challenges
+
+`mcp_toolkit_auth::challenge::build_mcp_apps_tool_authenticate_meta`
+builds the `_meta["mcp/www_authenticate"]` array from the existing,
+RFC 6750-safe `BearerChallenge` builder. It requires a nonempty trusted
+protected-resource metadata URL, an allowed bearer error code, a nonempty
+error description and a scope hint when the error is `insufficient_scope`.
+Malformed or control-bearing values return `None` instead of producing
+a misleading ChatGPT login prompt.
+
+The returned JSON object belongs in a **tool-level error result**. The
+consumer must set `isError=true` and enforce authentication/authorisation
+independently; a challenge is not a credential, delegation or scope grant.
+The result should be exercised through the existing
+`OpenAiAppsConformanceProfile.assert_tool_result_authenticate_meta`
+runtime contract. No HTTP middleware or extra OAuth server is introduced.
+
 OpenAI Apps connectors should additionally use
 `mcp-toolkit-testing::openai_apps_contract::OpenAiAppsConformanceProfile`. That
 profile composes the generic auth-surface expectations with Apps-specific
