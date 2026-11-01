@@ -8,7 +8,9 @@ For hosted Rust/Axum servers using RMCP's Tool model, enable the optional
 `mcp-toolkit-server` `http` feature and attach its
 `apps_http::mirror_apps_tool_security_schemes` middleware **only** to the
 protected MCP route. The middleware reads successful, uncompressed
-`application/json` responses (maximum 256 KiB), copies tool security
+`application/json` responses (maximum 256 KiB) only when the MCP 2026-07-28
+`Mcp-Method: tools/list` header is present. Headerless responses pass through
+without buffering. It copies tool security
 metadata using the core normalizer, and leaves SSE subscription streams,
 denied requests, and other methods unchanged. When the bytes change it
 removes stale Content-Length and ETag headers.

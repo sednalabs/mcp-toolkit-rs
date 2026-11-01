@@ -50,12 +50,15 @@ pub async fn mirror_apps_tool_security_schemes(request: Request, next: Next) -> 
     if request.method() != Method::POST {
         return next.run(request).await;
     }
-    // Standard modern MCP hosts send Mcp-Method. Headerless clients are still
-    // supported: the response shape then determines whether projection applies.
-    if let Some(method) = request.headers().get("mcp-method") {
-        if method.to_str().ok() != Some("tools/list") {
-            return next.run(request).await;
-        }
+    // MCP 2026-07-28 requires this header. Do not buffer arbitrary JSON
+    // from headerless or unrelated requests, especially large tool results.
+    if request
+        .headers()
+        .get("mcp-method")
+        .and_then(|value| value.to_str().ok())
+        != Some("tools/list")
+    {
+        return next.run(request).await;
     }
 
     let response = next.run(request).await;
@@ -133,7 +136,14 @@ mod tests {
 
     async fn read_response(response: Response) -> (StatusCode, Value) {
         let status = response.status();
+        let declared_length = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .map(|value| value.to_str().unwrap().parse::<usize>().unwrap());
         let bytes = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+        if let Some(declared) = declared_length {
+            assert_eq!(declared, bytes.len(), "stale Content-Length after projection");
+        }
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
@@ -178,7 +188,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!response.headers().contains_key(header::CONTENT_LENGTH));
         let (status, result) = read_response(response).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
@@ -235,6 +244,28 @@ mod tests {
             .await
             .unwrap();
         let (_, result) = read_response(response).await;
+        assert!(result["result"]["tools"][0]
+            .get("securitySchemes")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn headerless_requests_do_not_rewrite_json() {
+        let app = Router::new()
+            .route("/mcp", post(|| async { Json(tool_payload()) }))
+            .layer(middleware::from_fn(mirror_apps_tool_security_schemes));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, result) = read_response(response).await;
+        assert_eq!(status, StatusCode::OK);
         assert!(result["result"]["tools"][0]
             .get("securitySchemes")
             .is_none());
