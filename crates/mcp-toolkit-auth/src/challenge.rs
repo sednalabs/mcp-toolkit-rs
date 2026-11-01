@@ -124,7 +124,10 @@ pub fn build_mcp_apps_tool_authenticate_meta(
     let error = challenge.error?;
     let description = challenge.error_description?;
     if metadata.trim().is_empty()
-        || !matches!(error, "invalid_request" | "invalid_token" | "insufficient_scope")
+        || !matches!(
+            error,
+            "invalid_request" | "invalid_token" | "insufficient_scope"
+        )
         || description.trim().is_empty()
         || [metadata, error, description]
             .iter()
@@ -234,7 +237,9 @@ mod tests {
         c.error_description = Some("Permission for \"IRC write\" is required.");
         let meta = build_mcp_apps_tool_authenticate_meta(&c).unwrap();
         let serialized = meta["mcp/www_authenticate"][0].as_str().unwrap();
-        assert!(serialized.contains(r#"error_description="Permission for \"IRC write\" is required.""#));
+        assert!(
+            serialized.contains(r#"error_description="Permission for \"IRC write\" is required.""#)
+        );
     }
 
     #[test]
