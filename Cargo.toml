@@ -32,5 +32,5 @@ rust-version = "1.99"
 # strict serialized Origin parsing, and the current-protocol no-SSE-replay carry.
 # Replace this patch only after equivalent upstream fixes and tests are proven.
 [patch.crates-io]
-rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "ce2071b7adf6813539fa45c9786036f768ee1921" }
-rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "ce2071b7adf6813539fa45c9786036f768ee1921" }
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "85996267259986d1fe169aed2373f07d1cecb686" }
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "85996267259986d1fe169aed2373f07d1cecb686" }
