@@ -231,10 +231,10 @@ mod tests {
     #[test]
     fn apps_challenge_escapes_header_metacharacters() {
         let mut c = apps_challenge();
-        c.error_description = Some("Permission for \\"IRC write\\" is required.");
+        c.error_description = Some("Permission for \"IRC write\" is required.");
         let meta = build_mcp_apps_tool_authenticate_meta(&c).unwrap();
         let serialized = meta["mcp/www_authenticate"][0].as_str().unwrap();
-        assert!(serialized.contains(r#"error_description="Permission for \\"IRC write\\" is required.""#));
+        assert!(serialized.contains(r#"error_description="Permission for \"IRC write\" is required.""#));
     }
 
     #[test]
