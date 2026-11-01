@@ -32,6 +32,7 @@ pub mod auth_surface_contract;
 pub mod catalog_profile_contract;
 pub mod complete_catalogue_contract;
 pub mod current_protocol_contract;
+pub mod current_cacheable_result_contract;
 pub mod openai_apps_contract;
 pub mod receipt_contract;
 pub mod response_safety_contract;

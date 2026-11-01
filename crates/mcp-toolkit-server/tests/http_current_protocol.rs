@@ -225,6 +225,30 @@ async fn assert_current_tools_list_response(response: axum::response::Response) 
 }
 
 #[tokio::test]
+async fn current_tool_list_exposes_private_complete_cache_hints() {
+    use mcp_toolkit_testing::current_cacheable_result_contract::CurrentCacheableResultContract;
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .server_config(StreamableHttpServerConfig::default().with_json_response(true))
+        .allowed_hosts(["127.0.0.1", "localhost"])
+        .build(|| Ok(EmptyToolServer));
+    let state = runtime.into_state(false);
+    let response = handle_mcp(State(state), current_request()).await;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("response body")
+        .to_bytes();
+    let envelope = CurrentCacheableResultContract::new(json!(1))
+        .assert_http_json_response(status, &headers, &body);
+    assert!(envelope["result"]["tools"].is_array());
+}
+
+#[tokio::test]
 async fn current_protocol_post_is_stateless_without_initialize() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
         .allowed_hosts(["127.0.0.1", "localhost"])
