@@ -142,7 +142,11 @@ mod tests {
             .map(|value| value.to_str().unwrap().parse::<usize>().unwrap());
         let bytes = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
         if let Some(declared) = declared_length {
-            assert_eq!(declared, bytes.len(), "stale Content-Length after projection");
+            assert_eq!(
+                declared,
+                bytes.len(),
+                "stale Content-Length after projection"
+            );
         }
         (status, serde_json::from_slice(&bytes).unwrap())
     }
