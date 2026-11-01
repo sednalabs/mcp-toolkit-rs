@@ -72,8 +72,9 @@ impl InvalidationSet {
         {
             return Err(InvalidationError::InvalidInventory);
         }
-        let accepted: BTreeSet<_> = keys.iter().cloned().collect();
-        if accepted.len() != keys.len() {
+        let expected_len = keys.len();
+        let accepted: BTreeSet<_> = keys.into_iter().collect();
+        if accepted.len() != expected_len {
             return Err(InvalidationError::InvalidInventory);
         }
         Ok(Self {
@@ -88,9 +89,10 @@ impl InvalidationSet {
     /// Foreign keys and already-pending keys are ignored. This is not an
     /// authorisation decision for a later delivery.
     pub fn mark(&mut self, key: &str) -> bool {
-        if !self.accepted.contains(key) || !self.pending.insert(key.to_owned()) {
+        if !self.accepted.contains(key) || self.pending.contains(key) {
             return false;
         }
+        self.pending.insert(key.to_owned());
         self.queue.push_back(key.to_owned());
         true
     }
@@ -100,9 +102,11 @@ impl InvalidationSet {
     /// Useful for initial reads or after a backend continuity boundary. The
     /// returned ordering is stable, and existing pending markers keep their place.
     pub fn mark_all(&mut self) {
-        let keys: Vec<_> = self.accepted.iter().cloned().collect();
-        for key in keys {
-            self.mark(&key);
+        for key in &self.accepted {
+            if !self.pending.contains(key) {
+                self.pending.insert(key.clone());
+                self.queue.push_back(key.clone());
+            }
         }
     }
 
