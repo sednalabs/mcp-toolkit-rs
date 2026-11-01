@@ -27,5 +27,10 @@ members = [
 [workspace.package]
 rust-version = "1.99"
 
-# RMCP 3.8.0 is resolved from the official crates.io release.
-# The previous SDK fork carry must be verified against upstream behavior before landing.
+# RMCP 3.8.0 release plus narrowly maintained transport hardening.
+# The official 3.8.0 source still lacks duplicate-Origin rejection,
+# strict serialized Origin parsing, and the current-protocol no-SSE-replay carry.
+# Replace this patch only after equivalent upstream fixes and tests are proven.
+[patch.crates-io]
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "ce2071b7adf6813539fa45c9786036f768ee1921" }
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "ce2071b7adf6813539fa45c9786036f768ee1921" }
