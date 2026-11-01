@@ -180,13 +180,13 @@ mod tests {
 
     #[test]
     fn rejects_legacy_session_and_wrong_id() {
-        let mut headers = headers();
-        headers.insert("mcp-session-id", HeaderValue::from_static("legacy"));
+        let mut legacy_headers = headers();
+        legacy_headers.insert("mcp-session-id", HeaderValue::from_static("legacy"));
         let payload = valid().to_string();
         assert!(std::panic::catch_unwind(|| {
             CurrentCacheableResultContract::new(json!(7)).assert_http_json_response(
                 StatusCode::OK,
-                &headers,
+                &legacy_headers,
                 payload.as_bytes(),
             );
         })
