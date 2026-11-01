@@ -105,7 +105,10 @@ impl CurrentCacheableResultContract {
             "cacheScope must be public or private"
         );
         if self.resource_private {
-            assert_eq!(scope, "private", "private response must not be publicly cacheable");
+            assert_eq!(
+                scope, "private",
+                "private response must not be publicly cacheable"
+            );
         }
         value
     }
@@ -172,11 +175,7 @@ mod tests {
         assert!(std::panic::catch_unwind(|| verify(&payload)).is_err());
         CurrentCacheableResultContract::new(json!(7))
             .with_max_ttl_ms(1)
-            .assert_http_json_response(
-                StatusCode::OK,
-                &headers(),
-                payload.to_string().as_bytes(),
-            );
+            .assert_http_json_response(StatusCode::OK, &headers(), payload.to_string().as_bytes());
     }
 
     #[test]
@@ -208,10 +207,6 @@ mod tests {
         payload["result"]["cacheScope"] = json!("public");
         CurrentCacheableResultContract::new(json!(7))
             .allow_public_cache()
-            .assert_http_json_response(
-                StatusCode::OK,
-                &headers(),
-                payload.to_string().as_bytes(),
-            );
+            .assert_http_json_response(StatusCode::OK, &headers(), payload.to_string().as_bytes());
     }
 }
