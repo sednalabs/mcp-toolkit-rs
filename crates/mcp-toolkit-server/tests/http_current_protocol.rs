@@ -226,7 +226,6 @@ async fn assert_current_tools_list_response(response: axum::response::Response) 
 
 #[tokio::test]
 async fn current_tool_list_exposes_private_complete_cache_hints() {
-    use mcp_toolkit_testing::current_cacheable_result_contract::CurrentCacheableResultContract;
     use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
     let runtime = LocalMcpHttpRuntimeBuilder::new()
@@ -243,8 +242,17 @@ async fn current_tool_list_exposes_private_complete_cache_hints() {
         .await
         .expect("response body")
         .to_bytes();
-    let envelope = CurrentCacheableResultContract::new(json!(1))
-        .assert_http_json_response(status, &headers, &body);
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(HEADER_SESSION_ID));
+    assert_eq!(
+        headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+        Some("application/json"),
+    );
+    let envelope: Value = serde_json::from_slice(&body).expect("valid HTTP JSON");
+    assert_eq!(envelope["id"], json!(1));
+    assert_eq!(envelope["result"]["resultType"], json!("complete"));
+    assert_eq!(envelope["result"]["ttlMs"], json!(0));
+    assert_eq!(envelope["result"]["cacheScope"], json!("private"));
     assert!(envelope["result"]["tools"].is_array());
 }
 
