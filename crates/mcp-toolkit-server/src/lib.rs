@@ -24,6 +24,8 @@
 //! * **BOUNDARY**: `docs/toolkit-boundary.md`
 //! * **MCP**: <https://modelcontextprotocol.io>
 
+#[cfg(feature = "http")]
+pub mod apps_http;
 #[cfg(feature = "auth")]
 pub mod auth;
 #[cfg(feature = "http")]
