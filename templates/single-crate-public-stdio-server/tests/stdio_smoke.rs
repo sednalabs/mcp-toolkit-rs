@@ -1,5 +1,5 @@
 use mcp_toolkit_testing::stdio_contract::{
-    assert_stdio_tool_response_excludes_substrings, assert_stdio_tools_list,
+    assert_stdio_tool_response_excludes_substrings, assert_stdio_tools_list, StdioMcpProcess,
 };
 use serde_json::json;
 use std::process::Command;
@@ -102,4 +102,88 @@ fn cli_print_client_config_renders_stdio_config() {
     assert!(stdout.contains("[mcp_servers.\"single-crate-public-stdio-server\"]"));
     assert!(stdout.contains("command = \""));
     assert!(stdout.contains("SINGLE_CRATE_PUBLIC_STDIO_SERVER_TOOL_PROFILE = \"read_only\""));
+}
+
+#[test]
+fn stdio_discovery_preserves_current_and_legacy_tool_lifecycles() {
+    for legacy in [false, true] {
+        let mut process =
+            StdioMcpProcess::start(env!("CARGO_BIN_EXE_single-crate-public-stdio-server"));
+        let meta = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "toolkit-sdk-upgrade-contract",
+                "version": "0.0.0"
+            },
+            "io.modelcontextprotocol/clientCapabilities": {}
+        });
+        process.send(json!({
+            "jsonrpc": "2.0", "id": 10, "method": "server/discover",
+            "params": {"_meta": meta.clone()}
+        }));
+        let discovery = process.response(10);
+        assert!(discovery.get("error").is_none(), "{discovery}");
+        assert!(discovery["result"]["supportedVersions"]
+            .as_array()
+            .expect("supported versions")
+            .contains(&json!("2026-07-28")));
+
+        if legacy {
+            process.send(json!({
+                "jsonrpc": "2.0", "id": 11, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "legacy-contract", "version": "0.0.0"}
+                }
+            }));
+            let initialized = process.response(11);
+            assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+            process.send(json!({
+                "jsonrpc": "2.0", "method": "notifications/initialized", "params": {}
+            }));
+        }
+
+        let mut list_params = json!({});
+        if !legacy {
+            list_params["_meta"] = meta.clone();
+        }
+        process.send(json!({
+            "jsonrpc": "2.0", "id": 12, "method": "tools/list", "params": list_params
+        }));
+        let listed = process.response(12);
+        assert!(listed.get("error").is_none(), "{listed}");
+        let names: Vec<_> = listed["result"]["tools"]
+            .as_array()
+            .expect("listed tools")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert_eq!(names, ["brief_target", "detail_by_tracking_id"]);
+        if !legacy {
+            assert_eq!(listed["result"]["resultType"], "complete");
+            assert_eq!(listed["result"]["ttlMs"], 0);
+            assert_eq!(listed["result"]["cacheScope"], "private");
+        }
+
+        let mut call_params = json!({"name": "brief_target", "arguments": {"target": "probe"}});
+        if !legacy {
+            call_params["_meta"] = meta;
+        }
+        process.send(json!({
+            "jsonrpc": "2.0", "id": 13, "method": "tools/call", "params": call_params
+        }));
+        let called = process.response(13);
+        assert!(called.get("error").is_none(), "{called}");
+        assert_eq!(called["result"]["isError"], false);
+        assert!(!called["result"]["content"]
+            .as_array()
+            .expect("tool content")
+            .is_empty());
+        if legacy {
+            assert!(called["result"].get("resultType").is_none());
+        } else {
+            assert_eq!(called["result"]["resultType"], "complete");
+        }
+    }
 }

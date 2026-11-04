@@ -542,7 +542,7 @@ impl TaskAuthority {
 
     /// Spawns an RMCP task bound to `principal`.
     ///
-    /// A current Tokio runtime is required because RMCP 3.5.0 materializes the
+    /// A current Tokio runtime is required because RMCP materializes the
     /// task operation with `tokio::spawn`. Toolkit checks that requirement before
     /// entering RMCP so a synchronous caller gets [`TaskAuthorityError::RuntimeUnavailable`]
     /// instead of a Tokio panic or partially materialized task.

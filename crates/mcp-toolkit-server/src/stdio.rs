@@ -13,7 +13,8 @@
 //!   configured auth posture.
 //!
 //! ## References
-//! * **MCP Transport**: <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
+//! * **MCP Transport**: <https://modelcontextprotocol.io/specification/2026-07-28/basic/transports>
+//! * RMCP owns current request-metadata and legacy initialize lifecycle selection.
 
 use std::fmt;
 
@@ -27,7 +28,7 @@ use rmcp::{
 /// Error returned while serving an MCP server over stdio.
 #[derive(Debug)]
 pub enum StdioServeError {
-    /// The MCP initialize handshake failed before the server started.
+    /// MCP startup or a requested legacy initialize handshake failed.
     Initialize(Box<ServerInitializeError>),
     /// The background service task failed while waiting for shutdown.
     Wait(tokio::task::JoinError),
@@ -86,8 +87,9 @@ impl StdioServerBuilder {
     /// Serves an MCP server over stdio and waits until the service exits.
     ///
     /// # Errors
-    /// Returns `StdioServeError::Initialize` when the MCP initialize handshake
-    /// fails. Returns `StdioServeError::Wait` when the spawned service task fails.
+    /// Returns `StdioServeError::Initialize` when MCP startup or a requested
+    /// legacy handshake fails. Returns `StdioServeError::Wait` when the spawned
+    /// service task fails.
     ///
     /// # Security
     /// This helper only wires process-local stdio transport. Callers must reject
@@ -106,8 +108,9 @@ impl StdioServerBuilder {
 /// Serves an MCP server over stdio and waits until the service exits.
 ///
 /// # Errors
-/// Returns `StdioServeError::Initialize` when the MCP initialize handshake
-/// fails. Returns `StdioServeError::Wait` when the spawned service task fails.
+/// Returns `StdioServeError::Initialize` when MCP startup or a requested legacy
+/// handshake fails. Returns `StdioServeError::Wait` when the spawned service task
+/// fails.
 ///
 /// # Security
 /// This helper only wires process-local stdio transport. Callers must reject

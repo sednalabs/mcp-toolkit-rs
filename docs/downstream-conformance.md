@@ -12,13 +12,13 @@ That keeps toolkit pull requests reviewable while still making drift visible.
 ## Protocol-era conformance
 
 The protocol date and the Rust SDK release are separate compatibility axes. The
-2026-10-02 migration candidate is pinned to `rmcp = 3.5.0` (with
-`rmcp-macros = 3.5.0`) and records both protocol eras explicitly:
+2026-10-19 migration candidate is pinned to `rmcp = 3.5.1` (with
+`rmcp-macros = 3.5.1`) and records both protocol eras explicitly:
 
 | Protocol date | Lifecycle exercised | Required evidence |
 | --- | --- | --- |
 | `2025-11-25` | Legacy `initialize`/`notifications/initialized` handshake, selected explicitly through `ProtocolVersion::LATEST_WITH_INITIALIZE`. | A hosted contract run must show the initialize response echoes `2025-11-25` and that the subsequent legacy `tools/list`/`tools/call` requests succeed. |
-| `2026-07-28` | Current stateless request model; no initialize handshake, and each request carries protocol version, client identity, and client capabilities in `params._meta`. `ProtocolVersion::LATEST` selects this newest stateless era. | A hosted contract run must show current `tools/list`/`tools/call` requests with the complete `_meta` object and must bind the exact commit, workflow run, and `rmcp = 3.5.0` lockfile. |
+| `2026-07-28` | Current stateless request model; no initialize handshake, and each request carries protocol version, client identity, and client capabilities in `params._meta`. `ProtocolVersion::LATEST` selects this newest stateless era. | A hosted contract run must show current `server/discover`/`tools/list`/`tools/call` requests with the complete `_meta` object and must bind the exact commit, workflow run, and `rmcp = 3.5.1` lockfile. |
 
 When testing an `initialize` handshake or session-based behavior, select
 `ProtocolVersion::LATEST_WITH_INITIALIZE` instead of `LATEST`: once `LATEST`
@@ -28,7 +28,7 @@ current behavior and exposes an explicit legacy entry point for `2025-11-25`
 compatibility checks.
 
 Consumers with direct `rmcp` or `rmcp-macros` dependencies should align their
-exact pins with the toolkit's `3.5.0` baseline and refresh the consuming
+exact pins with the toolkit's `3.5.1` baseline and refresh the consuming
 workspace lockfile. Keep stateless requests on `2026-07-28` with complete
 per-request `_meta`; choose `LATEST_WITH_INITIALIZE` only for an intentional
 legacy handshake and its session-based follow-up requests.

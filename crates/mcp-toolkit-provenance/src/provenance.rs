@@ -132,6 +132,27 @@ pub enum StampFreshness {
 ///
 /// # Errors
 /// This function is infallible; measurement failures are returned as variants.
+///
+/// # Security
+/// The caller owns the stamp timestamp and must establish its trustworthiness.
+/// `Fresh` describes timestamp ordering only; it does not authenticate the stamp
+/// or authorize an operation. Unknown or unavailable evidence is not fresh.
+///
+/// # Examples
+/// ```
+/// use mcp_toolkit_provenance::{
+///     build_provenance_from_env, capture_current_runtime_provenance,
+///     evaluate_stamp_freshness, StampFreshness, StampTimestamp,
+/// };
+///
+/// let captured = capture_current_runtime_provenance(build_provenance_from_env!())?;
+/// // Preserve a failed stamp measurement rather than substituting the current time.
+/// assert_eq!(
+///     evaluate_stamp_freshness(&captured, StampTimestamp::Unknown),
+///     StampFreshness::UnknownStamp,
+/// );
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub fn evaluate_stamp_freshness(
     captured: &CapturedRuntimeProvenance,
     stamp: StampTimestamp,

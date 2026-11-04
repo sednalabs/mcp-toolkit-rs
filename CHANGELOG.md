@@ -5,6 +5,10 @@ are approved for publication.
 
 ## Unreleased
 
+- Updated the exact RMCP runtime and macro baseline to 3.5.1 while retaining
+  the maintained SDK's `Origin`/schema-cache and current-protocol disconnect
+  corrections. Added stdio discovery, tool-list cache-hint, and tool-call
+  contracts for current `2026-07-28` and legacy `2025-11-25` clients.
 - Raised the Toolkit compiler pin and declared compatibility floor to Rust
   1.99.0 / 1.99 across crates and templates; RMCP 3.5.0 retains its own 1.88
   MSRV, and generated-server checks report the compiler selected in each
