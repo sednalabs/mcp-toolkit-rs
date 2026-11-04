@@ -241,8 +241,9 @@ builds the `_meta["mcp/www_authenticate"]` array from the existing,
 RFC 6750-safe `BearerChallenge` builder. It requires a nonempty trusted
 protected-resource metadata URL, an allowed bearer error code, a nonempty
 error description and a scope hint when the error is `insufficient_scope`.
-Malformed or control-bearing values return `None` instead of producing
-a misleading ChatGPT login prompt.
+Missing or blank required fields, unsupported error codes, and control
+characters in any supplied field return `None`. URL syntax, URL trust and
+scope token validity remain the caller's responsibility.
 
 The returned JSON object belongs in a **tool-level error result**. The
 consumer must set `isError=true` and enforce authentication/authorisation

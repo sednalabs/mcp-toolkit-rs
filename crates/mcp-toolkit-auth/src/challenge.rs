@@ -91,10 +91,10 @@ pub fn build_bearer_challenge_value(challenge: &BearerChallenge<'_>) -> Option<S
 /// `isError=true`, enforcing the request's OAuth permissions and attaching
 /// this metadata to the actual tool response.
 ///
-/// Returns `None` for missing or malformed public resource metadata, RFC
-/// 6750 errors, required descriptions or insufficient-scope hints. It rejects
-/// control characters rather than silently turning them into a different
-/// browser-visible OAuth instruction.
+/// Returns `None` for missing or blank resource metadata or descriptions,
+/// missing or unsupported bearer errors, missing or blank insufficient-scope
+/// hints, or control characters in any supplied field. URL syntax and scope
+/// token validity remain the caller's responsibility.
 ///
 /// ```
 /// use mcp_toolkit_auth::challenge::{
@@ -116,6 +116,8 @@ pub fn build_bearer_challenge_value(challenge: &BearerChallenge<'_>) -> Option<S
 ///
 /// The resource metadata URL and required scopes must be derived from trusted
 /// deployment/auth context, never from an untrusted tool argument or message.
+/// Callers must validate URL syntax and trust; this helper only checks that
+/// resource metadata is nonempty and all supplied fields are control-free.
 /// This helper is presentation only; it never grants access or invokes login.
 pub fn build_mcp_apps_tool_authenticate_meta(
     challenge: &BearerChallenge<'_>,
@@ -123,22 +125,31 @@ pub fn build_mcp_apps_tool_authenticate_meta(
     let metadata = challenge.resource_metadata?;
     let error = challenge.error?;
     let description = challenge.error_description?;
+    let has_control = [
+        Some(challenge.realm),
+        Some(metadata),
+        Some(error),
+        Some(description),
+        challenge.scope,
+        challenge.error_uri,
+    ]
+    .iter()
+    .flatten()
+    .any(|value| value.chars().any(char::is_control));
     if metadata.trim().is_empty()
         || !matches!(
             error,
             "invalid_request" | "invalid_token" | "insufficient_scope"
         )
         || description.trim().is_empty()
-        || [metadata, error, description]
-            .iter()
-            .any(|value| value.chars().any(char::is_control))
+        || has_control
     {
         return None;
     }
     if error == "insufficient_scope"
         && challenge
             .scope
-            .is_none_or(|scope| scope.trim().is_empty() || scope.chars().any(char::is_control))
+            .is_none_or(|scope| scope.trim().is_empty())
     {
         return None;
     }
@@ -229,6 +240,45 @@ mod tests {
         c = apps_challenge();
         c.scope = Some("irc.write\nextra");
         assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+    }
+
+    #[test]
+    fn apps_challenge_rejects_controls_in_remaining_fields() {
+        let mut c = apps_challenge();
+        c.realm = "example\nother";
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        c = apps_challenge();
+        c.error_uri = Some("https://example.test/help\r\nother");
+        assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        for error in ["invalid_token", "invalid_request"] {
+            c = apps_challenge();
+            c.error = Some(error);
+            c.scope = Some("items.read\nadmin");
+            assert!(build_mcp_apps_tool_authenticate_meta(&c).is_none());
+        }
+    }
+
+    #[test]
+    fn apps_challenge_preserves_valid_optional_fields() {
+        for error in ["invalid_token", "invalid_request", "insufficient_scope"] {
+            let mut c = apps_challenge();
+            c.error = Some(error);
+            c.error_uri = Some("https://example.test/help");
+            let meta = build_mcp_apps_tool_authenticate_meta(&c).unwrap();
+            let value = meta["mcp/www_authenticate"][0].as_str().unwrap();
+            assert!(value.contains(r#"realm="example""#));
+            assert!(value.contains(r#"scope="irc.write""#));
+            assert!(value.contains(r#"error_uri="https://example.test/help""#));
+            let issuers = ["https://issuer.example"];
+            let scopes = ["irc.write"];
+            OpenAiAppsConformanceProfile::new("https://example.test/mcp", &issuers)
+                .with_required_scopes(&scopes)
+                .assert_tool_result_authenticate_meta(&meta);
+            c.scope = None;
+            if error != "insufficient_scope" {
+                assert!(build_mcp_apps_tool_authenticate_meta(&c).is_some());
+            }
+        }
     }
 
     #[test]
