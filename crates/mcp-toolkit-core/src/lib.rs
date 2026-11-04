@@ -38,6 +38,7 @@ pub mod query_evidence;
 pub mod resource_invalidation;
 pub mod response_contract;
 pub mod rmcp_models;
+pub mod scoped_cursor;
 pub mod tool_inventory;
 pub mod tool_schema;
 
