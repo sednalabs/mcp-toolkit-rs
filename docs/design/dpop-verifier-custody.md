@@ -1,96 +1,141 @@
 # DPoP Verifier Dependency Custody
 
-## Decision
+## Decision and expiry
 
-As of 2026-10-03, continue using the exact `dpop-verifier` 4.4.0 release under
-a time-bounded exception to the repository's normal adoption/reputation gate.
-Sedna Labs maintainers own this decision. Reassess no later than 2027-01-01 UTC,
-or earlier if a newer release, advisory, relevant verifier defect, or package
-provenance change appears. Do not silently extend the exception.
+As of 2026-10-25, Sedna Labs maintainers temporarily own the narrow verifier
+compatibility port in `vendor/dpop-verifier`. The locally identified version
+`4.4.1` is **not an upstream release**. This replaces the earlier decision to
+consume the upstream 4.4.0 registry release unchanged; it does not replace DPoP
+with toolkit-authored cryptography or weaken authentication.
 
-This decision supersedes the 2026-08-26 expiry recorded in issue #166. Issue
-#166 remains open until this decision is documented in the repository and its
-required hosted qualification and protected landing evidence are complete.
+Reassess and end or explicitly renew this custody **no later than 2026-11-24
+00:00 UTC**, and immediately on an upstream compatible release, new advisory,
+verification defect, or provenance change. Do not silently extend it. Sedna
+Labs maintainers own patch review, security response, downstream compatibility,
+and the return to a maintained upstream source. Issue #280 retains the
+reassessment lineage; this earlier deadline supersedes its prior interval.
 
-The 90-day interval is longer than the dependency-governance target of 30 days.
-It gives maintainers one bounded upstream monitoring interval while retaining
-automatic reassessment triggers. The exception accepts weak independent-use
-evidence only; it does not waive source, license, advisory, compatibility,
-review, or hosted qualification gates.
+The approved exception is limited to local source custody and the existing weak
+independent-adoption evidence. It does not waive advisory, license, review,
+compatibility, hosted checks, or publication gates. `deny.toml` ignores remain
+empty. No live deployment, release, or merge is implied by this decision.
 
-## Exact package and provenance
+## Exact source and permitted delta
 
-- Package: `dpop-verifier` 4.4.0, from crates.io; direct dependency in
-  `mcp-toolkit-auth`.
-- Crate archive SHA-256: `3ffe26542b84d85fc36fec8dfac45abf0d2f93c2d5ee9ffdebe3bb22a090d016`,
-  matching the workspace lockfile.
-- Published `.cargo_vcs_info.json` names upstream commit
-  `aae68f7ef479fa96e8da65d7aab4115205f869ca`; that exact commit is the
-  upstream default-branch head and declares version 4.4.0.
-- The live crates.io sparse index lists 4.4.0 as the latest version and not
-  yanked, published 2025-11-13.
-- License: `MIT OR Apache-2.0`, both allowed by the repository policy.
+- Upstream: `dpop-verifier` 4.4.0, commit
+  `aae68f7ef479fa96e8da65d7aab4115205f869ca`.
+- Original crates.io archive SHA-256:
+  `3ffe26542b84d85fc36fec8dfac45abf0d2f93c2d5ee9ffdebe3bb22a090d016`.
+- The initial P-256 compatibility port was previously recorded in
+  `sednalabs/agent-ops` commit `971c76e145b0dbf86653c0808c0b2f314a81bbde`.
+  The source was read back at `6ae1531336e79fcaf9008fdd334fa7523ba05cf4`;
+  each imported file was verified against its Git blob identity before review.
+- Retained license: `MIT OR Apache-2.0`, with both upstream license files.
+- Authoritative local provenance and changes:
+  [`vendor/dpop-verifier/UPSTREAM.md`](../../vendor/dpop-verifier/UPSTREAM.md).
 
-The published source commit and immutable package checksum join successfully.
-The GitHub repository has no v4.4.0 tag, but the package's VCS metadata
-provides the exact source commit, so the missing tag alone is not a provenance
-failure.
+The port moves P-256 key/SEC1 handling to `p256` 0.14, permitting patched
+`crypto-bigint` and `ctutils` versions. Test-fixture repairs, real assertions,
+formatting, warning-free compatibility annotations, and minimum required
+optional adapter dependency features are reviewed maintenance changes. Proof
+parsing, signature validation, thumbprints, method/URI normalization, HMAC nonce
+policy, freshness and replay admission retain the upstream implementation.
+Public helpers that expose P-256 types now use the 0.14 types; this is not a
+claim of general upstream semver compatibility.
 
-## Reassessment evidence
+Do not expand this copy with new algorithms, custom JOSE/token parsing,
+cryptographic primitives or policy changes without a separate design and review.
+Do not maintain a second divergent copy for toolkit consumers.
 
-The upstream repository is public and not archived, but its latest source
-change and release activity are from 2025-11-13. Its GitHub repository reports
-two stars, one fork, and no open issues. The crate describes itself as a small
-implementation made for the author's own needs. This is weak and stale
-maintenance evidence and remains below the repository's adoption/reputation
-threshold; no current download count was available from the crates.io API at
-the time of review.
+## Why this bounded route
 
-The current OSV query for crates.io package `dpop-verifier` 4.4.0 returned no
-known vulnerability records. This does not replace the repository's hosted
-`cargo audit`, advisory, source, license, and compatibility checks, which must
-pass for the exact PR candidate before landing. The existing PR #163 result is
-historical evidence only.
+The upstream registry release still requires `p256` 0.13, which retains
+`crypto-bigint` 0.5.5. RUSTSEC-2026-0387 only identifies versions >=0.7.6 as
+patched. Compatible lockfile updates and default-off optional features cannot
+remove that mandatory chain. The earlier adoption exception did not waive this
+advisory gate.
 
-No generally useful verifier change was identified in this reassessment. The
-Toolkit already sends the compact proof, access token, canonical method and
-target, verifier policy, and replay store through the crate's atomic verifier
-entrypoint. It compares the verified proof-key thumbprint with the validated
-token's `cnf.jkt` before replay insertion; ordinary Bearer entrypoints reject
-confirmation-bearing tokens. Existing authentication tests exercise signed
-proofs, request and token binding, key mismatch, replay, freshness, nonce, and
-replay-store failures. No verifier defect or reusable upstream hardening
-proposal is evidenced, so no upstream change is proposed. Reopen this
-assessment if a concrete defect or cross-consumer hardening need is reported.
+The reviewed maintained alternatives did not provide a qualified drop-in
+replacement for the existing confirmation-before-replay contract and configurable
+context-bound HMAC nonce policies. A broader library or verifier API migration
+therefore remains separate. Reusing the small, independently reviewed port
+preserves the existing integration contract with less new security-sensitive code than a
+replacement protocol implementation.
 
-## Alternatives and rollback
+## Consumer and publication contract
 
-No drop-in maintained Rust verifier meeting this Toolkit boundary was
-identified. The visible Rust options are embedded in broader OAuth/server
-stacks or are specialized to a particular protocol/application; replacing the
-current crate would expand scope without stronger maintenance, adoption, or
-conformance evidence. Implementing proof verification locally would also move
-cryptographic and protocol logic into Toolkit-owned code.
+`mcp-toolkit-auth` directly depends on the repository-relative verifier path,
+with exact local version `=4.4.1`. This follows a Git dependency into downstream
+consumers; a workspace-root `[patch]` would not. Import public verifier types
+through `mcp_toolkit_auth::dpop_verifier`, or the toolkit facade's auth re-export.
+Remove duplicate direct verifier dependencies when migrating. Test a fresh Git
+consumer without a DPoP patch table or copied workspace lockfile.
 
-If a hard gate fails, a relevant defect appears, or no acceptable renewal is
-approved by the reassessment date, disable DPoP support at the public Toolkit
-boundary and continue rejecting confirmation-bearing tokens from Bearer-only
-entrypoints until a separately reviewed replacement is available. Do not
-silently fork or weaken verification.
+The vendor remains `publish = false`. Its local version is not available from
+crates.io. Auth and dependent crates are **not registry-release-ready** while
+that unpublished dependency remains: `cargo package --list` is not proof that a
+published package resolves. Return to a reviewed published upstream release,
+or obtain separately reviewed publication authority and a valid distribution
+plan before attempting a registry release. No new source allowlist or advisory
+ignore is needed for the checked-in source.
+
+## Required qualification
+
+- Keep the verifier an explicit workspace member so all-feature tests, Clippy,
+  coverage and advisory checks include the custodied source.
+- Keep vendor source in the hosted source-cache fingerprint and preserve
+  `publish = false` enforcement for vendored packages.
+- Exercise both default and all-feature verifier tests, including genuinely
+  distinct-key negative fixtures and asserted error variants.
+- Retain toolkit signed-proof, token/key/method/URI, nonce, freshness, replay and
+  store-failure tests; ordinary Bearer authentication must reject every `cnf`.
+- Require full-lock `cargo audit --deny warnings` and all cargo-deny lanes to
+  pass without exceptions, and all required hosted gates on the exact head.
+- Verify a fresh downstream Git consumer uses exactly one canonical verifier
+  from that toolkit revision, including HMAC nonce policy and typed replay/errors.
+
+Tests establish the exercised contracts, not an independent security audit of
+upstream. Existing protocol-normalization and backend-storage decisions remain
+separate review subjects; do not claim they were newly hardened by the port.
+
+## Review follow-up boundary
+
+Fixed-format nonce, access-token-hash and public-key fields are length-checked
+before base64 decoding, bounding those decoder allocations without changing
+valid accepted inputs. Impossible `ath` lengths are classified as `AthMalformed`;
+valid-length unequal digests remain `AthMismatch`. This is not an overall proof
+or request-size limit. Nonce and proof freshness arithmetic widens i64 operands
+before subtraction/addition, preserving mathematical comparisons and inclusive
+boundaries without panic or wraparound on extreme input. General compact-proof
+size policy remains a separate ingress/API design decision, not an arbitrary
+new limit in this compatibility port.
+
+The optional Actix URI helper's inherited proxy trust behavior needs separate
+review: selecting the first comma-separated forwarded value would broaden
+accepted inputs and choose a trusted hop. Host/explicit-port composition also
+needs review to avoid duplicated ports. Moreover, its `connection_info()`
+fallback can itself consult forwarded headers even when `trust_proxies` is
+false. No toolkit production call uses this helper. Do not treat its flag as an
+independently qualified proxy-trust boundary; deployments must constrain/sanitize
+forwarded headers at their trusted ingress. This dependency repair does not
+silently change that policy or claim live deployment validation.
+
+## Exit and rollback
+
+Prefer a reviewed upstream release that removes the affected dependency chain,
+then remove the local copy and its temporary exception after toolkit and fresh
+consumer compatibility checks. Preserve a narrow, reproducible upstreamable
+diff; upstream publication or outreach is a separate authorized action.
+
+Reverting to the vulnerable registry chain is not a security rollback. If the
+custodied implementation fails a hard gate or its authority expires, stop
+landing/releasing it and obtain an explicit remediation decision. Do not silently
+disable DPoP, weaken nonce/replay policy, extend custody, or suppress findings.
 
 ## References
 
-- [Issue #166](https://github.com/sednalabs/mcp-toolkit-rs/issues/166) records
-  the original exception and reassessment lineage.
-- [Issue #280](https://github.com/sednalabs/mcp-toolkit-rs/issues/280) owns the
-  next scheduled reassessment and its early resume triggers.
-- [Upstream repository](https://github.com/ukonhattu/dpop-verifier) and
-  [published 4.4.0 documentation](https://docs.rs/crate/dpop-verifier/4.4.0)
-  provide the upstream API and source context.
-- [Crates.io sparse index](https://index.crates.io/dp/op/dpop-verifier) is the
-  live registry version/yank record.
-- [OSV query API](https://api.osv.dev/v1/query) was queried for the exact crate
-  and version on 2026-10-03; hosted repository checks remain authoritative for
-  landing.
-- The Toolkit integration contract remains in the [atomic DPoP authentication
-  boundary](dpop-atomic-authentication-boundary.md).
+- [Upstream source](https://github.com/ukonhattu/dpop-verifier/tree/aae68f7ef479fa96e8da65d7aab4115205f869ca)
+- [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html)
+- [Issue #280](https://github.com/sednalabs/mcp-toolkit-rs/issues/280)
+- [Atomic authentication boundary](dpop-atomic-authentication-boundary.md)
+- [Dependency governance](../dependency-governance.md)

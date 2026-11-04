@@ -51,6 +51,9 @@ jobs:
       - name: Validate baseline and coverage test ownership
         run: python3 scripts/check_rust_baseline_workflow.py
 
+      - name: Test dependency custody guards
+        run: python3 -m unittest discover -s scripts -p "test_dependency_custody.py"
+
   rust-baseline-lane:
     name: Rust baseline / ${{ matrix.lane.target_name }} / ${{ matrix.lane.phase_name }}
     runs-on: ubuntu-24.04
@@ -193,7 +196,7 @@ jobs:
         run: |
           set -euo pipefail
           source_hash="$(
-            git ls-files -s -- Cargo.toml Cargo.lock rust-toolchain.toml .cargo crates |
+            git ls-files -s -- Cargo.toml Cargo.lock rust-toolchain.toml .cargo crates vendor |
               sha256sum |
               cut -d' ' -f1
           )"
@@ -212,10 +215,51 @@ jobs:
       - name: Run baseline lane
         run: ${{ matrix.lane.command }}
 
+  dpop-git-consumer:
+    name: DPoP fresh Git consumer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        # actions/checkout v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain 1.99.0
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.0
+          components: clippy, rustfmt
+
+      - name: Qualify revision-pinned downstream DPoP consumer
+        env:
+          TOOLKIT_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 scripts/check_dpop_git_consumer.py --revision "$TOOLKIT_REVISION"
+          --evidence-dir "${{ runner.temp }}/dpop-git-consumer-proof"
+
+      - name: Upload downstream consumer evidence
+        if: ${{ always() }}
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dpop-git-consumer-proof
+          path: |
+            ${{ runner.temp }}/dpop-git-consumer-proof/*.json
+            ${{ runner.temp }}/dpop-git-consumer-proof/*.log
+            ${{ runner.temp }}/dpop-git-consumer-proof/consumer/Cargo.toml
+            ${{ runner.temp }}/dpop-git-consumer-proof/consumer/Cargo.lock
+            ${{ runner.temp }}/dpop-git-consumer-proof/consumer/src/lib.rs
+          if-no-files-found: error
+
   rust-baseline:
     name: Run targeted Rust baseline
     runs-on: ubuntu-24.04
-    needs: [workflow-runner-policy, rust-baseline-lane]
+    needs: [workflow-runner-policy, rust-baseline-lane, dpop-git-consumer]
     if: ${{ always() }}
     steps:
       - name: Require every baseline lane to pass
@@ -229,4 +273,8 @@ jobs:
             echo "One or more Rust baseline lanes failed." >&2
             exit 1
           fi
-          echo "Workflow runner policy and Rust baseline lanes passed."
+          if [[ "${{ needs.dpop-git-consumer.result }}" != "success" ]]; then
+            echo "Fresh Git consumer qualification failed." >&2
+            exit 1
+          fi
+          echo "Workflow runner policy, Rust baseline lanes and Git consumer passed."

@@ -63,6 +63,11 @@ def main() -> None:
     require(rust_config, "- templates", "Rust template coverage")
     require(
         rust_config,
+        "paths:\n  - crates\n  - templates\n  - vendor",
+        "vendored Rust source in the inclusion paths",
+    )
+    require(
+        rust_config,
         "- .github/codeql/rust-toolkit-contract/test/**",
         "Rust query-test exclusion",
     )

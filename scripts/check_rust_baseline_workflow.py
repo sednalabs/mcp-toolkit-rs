@@ -72,6 +72,14 @@ def check() -> None:
         "root baseline must retain all-target/all-feature workspace Clippy compilation"
     )
     assert "name: Run targeted Rust baseline" in baseline
+    consumer = job_block(baseline, "dpop-git-consumer")
+    assert 'scripts/check_dpop_git_consumer.py --revision "$TOOLKIT_REVISION"' in consumer
+    assert "github.event.pull_request.head.sha || github.sha" in consumer
+    baseline_aggregate = job_block(baseline, "rust-baseline")
+    assert "needs: [workflow-runner-policy, rust-baseline-lane, dpop-git-consumer]" in baseline_aggregate
+    assert 'if [[ "${{ needs.dpop-git-consumer.result }}" != "success" ]]; then' in baseline_aggregate
+    assert "continue-on-error:" not in consumer
+    assert "continue-on-error:" not in baseline_aggregate
 
     cargo_home_cache = step_block(baseline, "Cache Cargo home for workspace Clippy")
     assert 'cache-targets: "false"' in cargo_home_cache, (
@@ -80,7 +88,7 @@ def check() -> None:
     assert 'cache-bin: "false"' in cargo_home_cache
 
     source_key = step_block(baseline, "Compute workspace Clippy target cache key")
-    assert "git ls-files -s -- Cargo.toml Cargo.lock rust-toolchain.toml .cargo crates" in source_key
+    assert "git ls-files -s -- Cargo.toml Cargo.lock rust-toolchain.toml .cargo crates vendor" in source_key
     assert "sha256sum" in source_key
 
     target_cache = step_block(baseline, "Cache workspace Clippy target")
