@@ -68,7 +68,7 @@ impl CurrentCacheableResultContract {
                 .get(CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
                 .and_then(|v| v.split(';').next())
-                .is_some_and(|kind| kind.trim() == "application/json"),
+                .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("application/json")),
             "current MCP JSON content type"
         );
         let value: Value = serde_json::from_slice(bytes).expect("valid JSON-RPC response");
@@ -148,6 +148,44 @@ mod tests {
     #[test]
     fn accepts_private_current_results() {
         verify(&valid());
+    }
+
+    #[test]
+    fn accepts_json_media_type_case_variants_and_parameters() {
+        for content_type in [
+            "application/json",
+            "APPLICATION/JSON",
+            "Application/Json; charset=utf-8",
+        ] {
+            let mut headers = headers();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+            CurrentCacheableResultContract::new(json!(7)).assert_http_json_response(
+                StatusCode::OK,
+                &headers,
+                valid().to_string().as_bytes(),
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_json_media_types() {
+        for content_type in [
+            "text/event-stream",
+            "text/json",
+            "application/jsonp",
+            "application/json-invalid; charset=utf-8",
+        ] {
+            let mut headers = headers();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+            assert!(std::panic::catch_unwind(|| {
+                CurrentCacheableResultContract::new(json!(7)).assert_http_json_response(
+                    StatusCode::OK,
+                    &headers,
+                    valid().to_string().as_bytes(),
+                );
+            })
+            .is_err());
+        }
     }
 
     #[test]
