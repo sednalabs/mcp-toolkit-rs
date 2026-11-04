@@ -146,10 +146,7 @@ pub fn build_mcp_apps_tool_authenticate_meta(
     {
         return None;
     }
-    if error == "insufficient_scope"
-        && challenge
-            .scope
-            .is_none_or(|scope| scope.trim().is_empty())
+    if error == "insufficient_scope" && challenge.scope.is_none_or(|scope| scope.trim().is_empty())
     {
         return None;
     }
