@@ -448,7 +448,10 @@ mod tests {
                 .expect("write JWKS error response");
         });
 
-        let cache = JwksCache::new(format!("http://{address}/jwks"), Duration::from_secs(300));
+        let cache = JwksCache::new(
+            format!("http://127.0.0.1:{}/jwks", address.port()),
+            Duration::from_secs(300),
+        );
         let error = cache
             .fetch_jwks()
             .await
