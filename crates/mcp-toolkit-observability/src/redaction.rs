@@ -40,6 +40,9 @@ pub const DEFAULT_REDACT_KEYS: &[&str] = &[
     "subject_token",
     "client_secret",
     "authorization",
+    "private_key",
+    "password",
+    "api_key",
 ];
 
 static RE_AUTH_BEARER: Lazy<Regex> = Lazy::new(|| {
@@ -200,6 +203,45 @@ mod tests {
         let text = "access_token=abc&foo=bar";
         let scrubbed = redact_kv_pairs(text, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE);
         assert_eq!(scrubbed, "access_token=<redacted>&foo=bar");
+    }
+
+    #[test]
+    fn structured_secret_field_corpus_preserves_safe_context() {
+        let fixtures: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/secret-fields.json")).unwrap();
+        for fixture in fixtures.as_array().unwrap() {
+            let mut payload = fixture["input"].clone();
+            redact_json_keys(&mut payload, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE);
+            assert_eq!(payload, fixture["expected"], "{}", fixture["name"]);
+            let encoded = serde_json::to_string(&payload).unwrap();
+            for canary in fixture["canaries"].as_array().unwrap() {
+                assert!(
+                    !encoded.contains(canary.as_str().unwrap()),
+                    "{}",
+                    fixture["name"]
+                );
+            }
+            let first_pass = payload.clone();
+            redact_json_keys(&mut payload, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE);
+            assert_eq!(payload, first_pass, "redaction must be idempotent");
+        }
+    }
+
+    #[test]
+    fn credential_keys_are_redacted_in_kv_pairs_by_default() {
+        let text = "PRIVATE_KEY=synthetic-key-canary&password=synthetic-password-canary&api_key=synthetic-api-canary&private_key_id=public-id";
+        assert_eq!(
+            redact_kv_pairs(text, DEFAULT_REDACT_KEYS, DEFAULT_REDACT_VALUE),
+            "PRIVATE_KEY=<redacted>&password=<redacted>&api_key=<redacted>&private_key_id=public-id"
+        );
+    }
+
+    #[test]
+    fn explicit_key_policy_is_not_expanded() {
+        let mut payload = json!({"password": "synthetic-password-canary", "token": "hidden"});
+        redact_json_keys(&mut payload, &["token"], DEFAULT_REDACT_VALUE);
+        assert_eq!(payload["password"], "synthetic-password-canary");
+        assert_eq!(payload["token"], DEFAULT_REDACT_VALUE);
     }
 
     #[test]
