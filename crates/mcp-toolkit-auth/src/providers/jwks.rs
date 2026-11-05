@@ -182,14 +182,22 @@ impl JwksCache {
             .timeout(Duration::from_secs(5))
             .send()
             .await
-            .map_err(|e| AuthError::Generic {
-                message: format!("Failed to fetch JWKS: {e}"),
-                status_code: 500,
+            .map_err(|_| AuthError::Generic {
+                message: "JWKS provider unavailable".to_string(),
+                status_code: 503,
                 code: None,
-                reason: None,
+                reason: Some("jwks_fetch_failed"),
             })?;
 
         if !response.status().is_success() {
+            if response.status().is_server_error() {
+                return Err(AuthError::Generic {
+                    message: "JWKS provider unavailable".to_string(),
+                    status_code: 503,
+                    code: None,
+                    reason: Some("jwks_fetch_failed"),
+                });
+            }
             return Err(AuthError::Generic {
                 message: format!("JWKS fetch failed with status {}", response.status()),
                 status_code: 500,
@@ -326,10 +334,29 @@ impl Authenticator {
 #[cfg(test)]
 mod tests {
     use super::{is_json_content_type, JwksCache, JwksState, JWKS_KID_MISS_REFRESH_COOLDOWN};
+    use crate::AuthError;
     use jsonwebtoken::jwk::{
         AlgorithmParameters, CommonParameters, Jwk, JwkSet, RSAKeyParameters, RSAKeyType,
     };
     use std::time::{Duration, Instant};
+    use tokio::io::AsyncWriteExt;
+
+    fn assert_jwks_provider_unavailable(error: AuthError) {
+        match error {
+            AuthError::Generic {
+                message,
+                status_code,
+                code,
+                reason,
+            } => {
+                assert_eq!(message, "JWKS provider unavailable");
+                assert_eq!(status_code, 503);
+                assert_eq!(code, None);
+                assert_eq!(reason, Some("jwks_fetch_failed"));
+            }
+            other => panic!("expected a JWKS provider dependency error, got {other:?}"),
+        }
+    }
 
     fn test_jwks(kid: &str) -> JwkSet {
         JwkSet {
@@ -402,6 +429,32 @@ mod tests {
             .refresh_on_kid_miss()
             .await
             .expect_err("stale unknown-kid miss should attempt refresh");
-        assert!(err.to_string().contains("Failed to fetch JWKS"));
+        assert_jwks_provider_unavailable(err);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn jwks_http_5xx_is_a_provider_dependency_failure() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind JWKS test server");
+        let address = listener.local_addr().expect("JWKS test server address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept JWKS request");
+            stream
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .expect("write JWKS error response");
+        });
+
+        let cache = JwksCache::new(format!("http://{address}/jwks"), Duration::from_secs(300));
+        let error = cache
+            .fetch_jwks()
+            .await
+            .expect_err("JWKS provider HTTP 5xx must fail closed");
+        server.await.expect("JWKS test server task");
+
+        assert_jwks_provider_unavailable(error);
     }
 }
