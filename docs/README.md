@@ -47,3 +47,5 @@ Paths such as `spec/`, `.github/workflows/`, generated snapshots, and release
 receipts in a consuming repository remain owned and maintained by that
 consumer. Toolkit documentation describes the contract; it does not make
 consumer-local evidence part of this repository.
+
+- [The next small service](next-service-quickstart.md): pinned starter, binary-local client configuration, and offline proof.

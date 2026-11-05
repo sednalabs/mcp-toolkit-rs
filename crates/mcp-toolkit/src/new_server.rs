@@ -127,7 +127,7 @@ impl fmt::Display for NewServerError {
             ),
             Self::InvalidPackageName(package_name) => write!(
                 formatter,
-                "invalid package name `{package_name}`; use ASCII letters, numbers, `_`, or `-`"
+                "invalid package name `{package_name}`; start with an ASCII letter or `_`, use only letters, numbers, `_`, or `-`, and avoid Rust keywords or `_` alone"
             ),
             Self::MissingEmbeddedTemplate(source_dir) => write!(
                 formatter,
@@ -250,6 +250,18 @@ pub fn find_template(name: &str) -> Option<TemplateSpec> {
 /// a relative output directory rooted at the caller's current working directory.
 pub fn generate_new_server(options: &NewServerOptions) -> Result<NewServerSummary, NewServerError> {
     validate_package_name(&options.package_name)?;
+    if let ToolkitDependencySource::LocalPath(root) = &options.toolkit_dependency {
+        if root.to_str().is_none() {
+            return Err(NewServerError::Io {
+                path: root.clone(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "toolkit dependency path must be valid Unicode for Cargo.toml",
+                ),
+            });
+        }
+    }
+
     let template = find_template(&options.template)
         .ok_or_else(|| NewServerError::UnknownTemplate(options.template.clone()))?;
     let embedded = embedded_templates::EMBEDDED_TEMPLATES
@@ -329,10 +341,16 @@ fn prepare_assets(
 }
 
 fn validate_package_name(package_name: &str) -> Result<(), NewServerError> {
-    let valid = !package_name.is_empty()
-        && package_name != "."
-        && package_name != ".."
-        && !package_name.starts_with('-')
+    // Templates import the generated library with an ordinary Rust identifier.
+    // A Cargo-compatible spelling is insufficient when it becomes a keyword,
+    // starts with a digit, or is the reserved underscore identifier.
+    let crate_name = cargo_crate_identifier(package_name);
+    let valid = package_name
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && crate_name != "_"
+        && !is_rust_keyword(&crate_name)
         && !package_name.ends_with('-')
         && package_name
             .bytes()
@@ -343,6 +361,63 @@ fn validate_package_name(package_name: &str) -> Result<(), NewServerError> {
     } else {
         Err(NewServerError::InvalidPackageName(package_name.to_string()))
     }
+}
+
+fn is_rust_keyword(identifier: &str) -> bool {
+    // Strict and reserved keywords for the maintained templates' Rust 2021 edition.
+    matches!(
+        identifier,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+            | "abstract"
+            | "become"
+            | "box"
+            | "do"
+            | "final"
+            | "macro"
+            | "override"
+            | "priv"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+            | "try"
+    )
 }
 
 fn safe_template_relative_path(relative_path: &str) -> Result<PathBuf, NewServerError> {
@@ -560,10 +635,9 @@ fn toolkit_path_dependencies(text: &str) -> Vec<String> {
 
 fn dependency_prefix(package: &str, toolkit_dependency: &ToolkitDependencySource) -> String {
     match toolkit_dependency {
-        ToolkitDependencySource::LocalPath(root) => format!(
-            "path = \"{}\"",
-            toml_path(&root.join("crates").join(package))
-        ),
+        ToolkitDependencySource::LocalPath(root) => {
+            format!("path = {}", toml_path(&root.join("crates").join(package)))
+        }
         ToolkitDependencySource::Git(url) => {
             format!(
                 "git = \"{}\"",
@@ -574,10 +648,9 @@ fn dependency_prefix(package: &str, toolkit_dependency: &ToolkitDependencySource
 }
 
 fn toml_path(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
+    // Generation rejects non-Unicode roots before preparing any assets. The
+    // appended crate names are ASCII, so this conversion is lossless here.
+    toml_edit::Value::from(path.to_string_lossy().as_ref()).to_string()
 }
 
 fn create_output_dir(output_dir: &OutputDirectory) -> Result<(), NewServerError> {
@@ -664,6 +737,55 @@ mod tests {
     }
 
     #[test]
+    fn package_name_validation_rejects_invalid_rust_crate_identifiers() {
+        for name in [
+            "123-server",
+            "1",
+            "_",
+            "self",
+            "Self",
+            "type",
+            "async",
+            "try",
+        ] {
+            assert!(validate_package_name(name).is_err(), "{name} should fail");
+        }
+        for name in [
+            "server",
+            "my-server",
+            "_private",
+            "server_2",
+            "async-server",
+        ] {
+            assert!(validate_package_name(name).is_ok(), "{name} should pass");
+        }
+    }
+
+    #[test]
+    fn invalid_rust_crate_names_fail_before_creating_output() {
+        for (index, name) in ["123-server", "_", "self", "type", "async"]
+            .iter()
+            .enumerate()
+        {
+            let output = PathBuf::from(format!(
+                "target/invalid-name-proof-{}-{index}",
+                std::process::id()
+            ));
+            assert!(!output.exists(), "test output must not exist");
+            let error = generate_new_server(&NewServerOptions {
+                template: "curated-stdio-intent".to_string(),
+                package_name: (*name).to_string(),
+                output_dir: output.clone(),
+                toolkit_dependency: ToolkitDependencySource::LocalPath(default_toolkit_root()),
+                overwrite: false,
+            })
+            .expect_err("reject invalid crate name");
+            assert!(matches!(error, NewServerError::InvalidPackageName(_)));
+            assert!(!output.exists(), "rejected name must not create output");
+        }
+    }
+
+    #[test]
     fn profile_environment_key_is_derived_from_package_name() {
         assert_eq!(profile_env_key("demo-server"), "DEMO_SERVER_TOOL_PROFILE");
         assert_eq!(profile_env_key("analytics_v2"), "ANALYTICS_V2_TOOL_PROFILE");
@@ -712,6 +834,59 @@ mod tests {
                 r#"mcp-toolkit-http = { git = "https://example.com/toolkit.git", features = ["auth"] }"#,
             )
         );
+    }
+
+    #[test]
+    fn local_dependency_paths_roundtrip_toml_special_characters() {
+        for root in [
+            PathBuf::from("relative toolkit"),
+            PathBuf::from("relative/toolkit\nnext\tpath"),
+            PathBuf::from("relative/\"quoted\"\\toolkit"),
+        ] {
+            let expected = root.join("crates").join("mcp-toolkit");
+            let source = ToolkitDependencySource::LocalPath(root);
+            let manifest = format!(
+                "[dependencies]\nmcp-toolkit = {{ {} }}\n",
+                dependency_prefix("mcp-toolkit", &source)
+            )
+            .parse::<toml_edit::DocumentMut>()
+            .expect("local dependency path must remain valid TOML");
+            assert_eq!(
+                manifest["dependencies"]["mcp-toolkit"]["path"].as_str(),
+                expected.to_str()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_toolkit_root_is_rejected_before_creating_output() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = PathBuf::from(OsString::from_vec(b"toolkit-\xff".to_vec()));
+        let output = PathBuf::from(format!(
+            "target/invalid-toolkit-path-proof-{}",
+            std::process::id()
+        ));
+        assert!(!output.exists(), "test output must not exist");
+        let error = generate_new_server(&NewServerOptions {
+            template: "curated-stdio-intent".to_string(),
+            package_name: "example-mcp".to_string(),
+            output_dir: output.clone(),
+            toolkit_dependency: ToolkitDependencySource::LocalPath(root.clone()),
+            overwrite: false,
+        })
+        .expect_err("reject non-Unicode toolkit path");
+        match error {
+            NewServerError::Io { path, source } => {
+                assert_eq!(path, root);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidInput);
+                assert!(source.to_string().contains("valid Unicode"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        assert!(!output.exists(), "invalid path must not create output");
     }
 
     #[test]

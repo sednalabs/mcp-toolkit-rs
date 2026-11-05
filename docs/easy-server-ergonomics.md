@@ -1,5 +1,7 @@
 # Easy Server Ergonomics
 
+For a copyable small-service path, start with [The next small service](next-service-quickstart.md).
+
 This guide captures the small product decisions that make toolkit-built MCP
 servers easy to try, easy to debug, and hard to misuse. Use it with
 `docs/new-server-delivery-lane.md` before adding provider-specific code.
