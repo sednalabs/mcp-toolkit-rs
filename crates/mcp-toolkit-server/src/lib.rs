@@ -32,6 +32,13 @@ pub mod auth;
 pub mod http;
 #[cfg(feature = "operational-resources")]
 pub mod operational_resources;
+#[cfg(any(
+    feature = "stdio",
+    feature = "http",
+    feature = "auth",
+    feature = "operational-resources"
+))]
+pub mod response;
 #[cfg(feature = "stdio")]
 pub mod stdio;
 #[cfg(any(feature = "stdio", feature = "http", feature = "auth"))]
