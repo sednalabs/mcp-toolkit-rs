@@ -31,6 +31,8 @@ rust-version = "1.99"
 # The official 3.8.0 source still lacks duplicate-Origin rejection,
 # strict serialized Origin parsing, and the current-protocol no-SSE-replay carry.
 # Replace this patch only after equivalent upstream fixes and tests are proven.
+# Cargo patch tables do not propagate to downstream consumers. Consumers needing
+# this hardening must declare the same immutable override in their root manifest.
 [patch.crates-io]
-rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "85996267259986d1fe169aed2373f07d1cecb686" }
-rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "85996267259986d1fe169aed2373f07d1cecb686" }
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "623a757c7673a2294e2ab4f507be8a43d325be28" }
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "623a757c7673a2294e2ab4f507be8a43d325be28" }

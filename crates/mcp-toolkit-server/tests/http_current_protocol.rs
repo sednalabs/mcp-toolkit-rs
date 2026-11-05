@@ -224,6 +224,115 @@ async fn assert_current_tools_list_response(response: axum::response::Response) 
     );
 }
 
+fn current_discover_request() -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("http://127.0.0.1/mcp")
+        .header(HOST, "127.0.0.1")
+        .header(ACCEPT, ACCEPT_STREAMABLE)
+        .header(CONTENT_TYPE, "application/json")
+        .header(HEADER_MCP_PROTOCOL_VERSION, CURRENT_PROTOCOL)
+        .header(HEADER_MCP_METHOD, "server/discover")
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 17,
+                "method": "server/discover",
+                "params": {
+                    "_meta": {
+                        PROTOCOL_VERSION_META_KEY: CURRENT_PROTOCOL,
+                        CLIENT_INFO_META_KEY: {
+                            "name": "mcp-toolkit-http-contract",
+                            "version": "0.0.0"
+                        },
+                        CLIENT_CAPABILITIES_META_KEY: {}
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .expect("current discovery request")
+}
+
+#[tokio::test]
+async fn current_protocol_discover_is_stateless_and_advertises_supported_versions() {
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .allowed_hosts(["127.0.0.1", "localhost"])
+        .build(|| Ok(EmptyToolServer));
+    let state = runtime.into_state(false);
+
+    let response = handle_mcp(State(state), current_discover_request()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        !response.headers().contains_key(HEADER_SESSION_ID),
+        "discovery must not require or create a legacy MCP session"
+    );
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect discovery response")
+        .to_bytes();
+    let payload = decode_jsonrpc_payload(&content_type, &body);
+    assert_eq!(payload["jsonrpc"], json!("2.0"));
+    assert_eq!(payload["id"], json!(17));
+    assert!(
+        payload.get("error").is_none(),
+        "unexpected discovery error: {payload}"
+    );
+
+    let discovery: rmcp::model::DiscoverResult = serde_json::from_value(payload["result"].clone())
+        .expect("valid current-protocol discovery response");
+    assert!(
+        discovery
+            .supported_versions
+            .contains(&rmcp::model::ProtocolVersion::V_2026_07_28),
+        "discovery must advertise the current MCP protocol"
+    );
+    assert!(
+        discovery.capabilities.tools.is_some(),
+        "discovery must advertise the server's tool capability"
+    );
+}
+
+#[tokio::test]
+async fn current_tool_list_exposes_private_complete_cache_hints() {
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+
+    let runtime = LocalMcpHttpRuntimeBuilder::new()
+        .server_config(StreamableHttpServerConfig::default().with_json_response(true))
+        .allowed_hosts(["127.0.0.1", "localhost"])
+        .build(|| Ok(EmptyToolServer));
+    let state = runtime.into_state(false);
+    let response = handle_mcp(State(state), current_request()).await;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("response body")
+        .to_bytes();
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(HEADER_SESSION_ID));
+    assert_eq!(
+        headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+        Some("application/json"),
+    );
+    let envelope: Value = serde_json::from_slice(&body).expect("valid HTTP JSON");
+    assert_eq!(envelope["id"], json!(1));
+    assert_eq!(envelope["result"]["resultType"], json!("complete"));
+    assert_eq!(envelope["result"]["ttlMs"], json!(0));
+    assert_eq!(envelope["result"]["cacheScope"], json!("private"));
+    assert!(envelope["result"]["tools"].is_array());
+}
+
 #[tokio::test]
 async fn current_protocol_post_is_stateless_without_initialize() {
     let runtime = LocalMcpHttpRuntimeBuilder::new()
