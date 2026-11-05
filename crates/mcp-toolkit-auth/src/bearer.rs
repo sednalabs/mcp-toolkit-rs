@@ -16,9 +16,21 @@ use http::HeaderMap;
 use thiserror::Error;
 
 /// A bearer token borrowed from an `Authorization` header.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Debug output omits the credential; explicit access remains available through
+/// [`Self::as_str`].
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct BearerToken<'a> {
     value: &'a str,
+}
+
+impl std::fmt::Debug for BearerToken<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BearerToken")
+            .field("value", &"[redacted]")
+            .finish()
+    }
 }
 
 impl<'a> BearerToken<'a> {
@@ -140,6 +152,41 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, value);
         parse_strict_bearer_authorization(&headers).map(|token| token.as_str().to_owned())
+    }
+
+    #[test]
+    fn bearer_debug_omits_credentials_in_direct_and_nested_output() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer synthetic-credential-canary"),
+        );
+        let parsed = parse_strict_bearer_authorization(&headers);
+        let token = parsed.as_ref().expect("valid synthetic header");
+
+        for rendered in [
+            format!("{token:?}"),
+            format!("{token:#?}"),
+            format!("{parsed:?}"),
+            format!("{parsed:#?}"),
+            format!("{:?}", Some(*token)),
+            format!("{:#?}", Some(*token)),
+        ] {
+            assert!(!rendered.contains("synthetic-credential-canary"));
+            assert!(rendered.contains("[redacted]"));
+        }
+        assert_eq!(token.as_str(), "synthetic-credential-canary");
+    }
+
+    #[test]
+    fn bearer_debug_output_does_not_depend_on_credential_value() {
+        let first = super::parse_strict_bearer_value("Bearer first").expect("first header");
+        let second =
+            super::parse_strict_bearer_value("Bearer a-longer-second").expect("second header");
+
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
+        assert_eq!(format!("{first:#?}"), format!("{second:#?}"));
+        assert_ne!(first, second);
     }
 
     #[test]
