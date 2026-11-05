@@ -191,7 +191,8 @@ mod tests {
                 true,
             ),
         ] {
-            let result = compact_result(outcome, "summary", None, ResponseLimits::default()).unwrap();
+            let result =
+                compact_result(outcome, "summary", None, ResponseLimits::default()).unwrap();
             let wire = serde_json::to_value(result).unwrap();
             assert_eq!(wire["isError"], failed);
             assert_eq!(wire["structuredContent"], payload);
@@ -260,7 +261,8 @@ mod tests {
     fn metadata_does_not_collide_and_counts_toward_whole_result_budget() {
         let payload = json!({"meta": {"source": "domain"}, "_meta": "domain"});
         let meta: MetaObject =
-            serde_json::from_value(json!({"source": "protocol", "large": "y".repeat(100)})).unwrap();
+            serde_json::from_value(json!({"source": "protocol", "large": "y".repeat(100)}))
+                .unwrap();
         let result = compact_result(
             ToolOutcome::Success(payload.clone()),
             "\n",
