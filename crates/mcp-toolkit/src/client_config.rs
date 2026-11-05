@@ -1,7 +1,7 @@
 //! # MCP Toolkit Client Configuration Renderer
 //!
 //! Renders copyable MCP client configuration snippets for generated Rust MCP
-//! server projects.
+//! server projects and standalone installed stdio binaries.
 //!
 //! ## Rationale
 //! Generated servers should not leave operators to hand-translate a package
@@ -10,10 +10,11 @@
 //! helper deterministic and filesystem-only.
 //!
 //! ## Security Boundaries
-//! * Reads only the generated project's `Cargo.toml` package name.
+//! * Project rendering reads only the generated project's `Cargo.toml` package name.
+//! * Executable rendering reads no files or process environment values.
 //! * Does not execute generated code or inspect credential material.
-//! * Emits no secrets; profile and URL values come from caller-supplied options
-//!   or starter-template defaults.
+//! * Never discovers credentials; caller-supplied values are rendered verbatim
+//!   after escaping and validation. Pass only non-secret configuration values.
 //!
 //! ## References
 //! * `docs/provider-auth-and-client-config.md`
@@ -49,6 +50,124 @@ impl ClientConfigTransport {
             "stdio" => Some(Self::Stdio),
             "http" | "hosted-http" | "hosted_http" => Some(Self::HostedHttp),
             _ => None,
+        }
+    }
+}
+
+/// Selects a common stdio MCP client configuration format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientConfigFormat {
+    /// Codex-style `[mcp_servers."name"]` tables.
+    CodexToml,
+    /// A JSON object with an `mcpServers` map.
+    McpServersJson,
+}
+
+/// Reports invalid explicit configuration without echoing caller data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExecutableClientConfigError {
+    /// The executable path cannot be represented in JSON or TOML without loss.
+    NonUnicodeExecutable,
+    /// A required field is empty or contains a control character.
+    InvalidField,
+    /// Environment keys must be unique, nonempty ASCII letters, digits or `_`.
+    InvalidEnvironment,
+}
+
+impl fmt::Display for ExecutableClientConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NonUnicodeExecutable => "client configuration requires a Unicode executable path",
+            Self::InvalidField => "client configuration fields must be nonempty and contain no control characters",
+            Self::InvalidEnvironment => "client configuration environment keys must be unique ASCII letters, digits or underscores",
+        })
+    }
+}
+
+impl Error for ExecutableClientConfigError {}
+
+/// Renders configuration for one stdio executable, without needing its source tree.
+///
+/// Pass `std::env::current_exe()?` from a binary-local `--print-client-config`
+/// command. An empty `environment` slice omits the environment block entirely;
+/// no tool profile is inferred. Arguments are empty because this helper targets
+/// the toolkit's no-arguments stdio launch contract.
+///
+/// ```
+/// use std::path::Path;
+/// use mcp_toolkit::client_config::{render_executable_client_config, ClientConfigFormat};
+/// let config = render_executable_client_config(
+///     "archive", Path::new("/opt/archive-mcp"),
+///     ClientConfigFormat::McpServersJson, &[],
+/// )?;
+/// assert!(config.contains("mcpServers"));
+/// assert!(!config.contains("env"));
+/// # Ok::<(), mcp_toolkit::client_config::ExecutableClientConfigError>(())
+/// ```
+///
+/// # Errors
+/// Rejects empty names/paths, control characters, non-Unicode executable paths,
+/// and invalid or duplicate environment keys before rendering either format.
+/// Empty environment values are allowed. Errors do not echo input values.
+///
+/// # Security
+/// Reads no environment values, files or credentials, and never executes the
+/// command. Explicit environment values are NOT redacted: pass only public
+/// defaults such as a read-only profile, never tokens or account secrets.
+/// Use an absolute executable path to avoid client-dependent PATH resolution.
+pub fn render_executable_client_config(
+    server_name: &str,
+    executable: &Path,
+    format: ClientConfigFormat,
+    environment: &[(&str, &str)],
+) -> Result<String, ExecutableClientConfigError> {
+    let command = executable
+        .to_str()
+        .ok_or(ExecutableClientConfigError::NonUnicodeExecutable)?;
+    for value in [server_name, command] {
+        if value.is_empty() || value.chars().any(char::is_control) {
+            return Err(ExecutableClientConfigError::InvalidField);
+        }
+    }
+    let mut env = std::collections::BTreeMap::new();
+    for &(key, value) in environment {
+        if key.is_empty()
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            || env.insert(key, value).is_some()
+        {
+            return Err(ExecutableClientConfigError::InvalidEnvironment);
+        }
+        if value.chars().any(char::is_control) {
+            return Err(ExecutableClientConfigError::InvalidField);
+        }
+    }
+    match format {
+        ClientConfigFormat::CodexToml => {
+            let name = toml_string(server_name);
+            let mut output = format!(
+                "[mcp_servers.{name}]\ncommand = {}\nargs = []\n",
+                toml_string(command),
+            );
+            if !env.is_empty() {
+                output.push_str(&format!("\n[mcp_servers.{name}.env]\n"));
+                for (key, value) in env {
+                    output.push_str(&format!("{key} = {}\n", toml_string(value)));
+                }
+            }
+            Ok(output)
+        }
+        ClientConfigFormat::McpServersJson => {
+            let mut server = serde_json::json!({"command": command, "args": []});
+            if !env.is_empty() {
+                server["env"] = serde_json::json!(env);
+            }
+            // Value serialization is infallible; use its pretty Display formatter
+            // rather than exposing a generic serialization error with input data.
+            let config = serde_json::json!({"mcpServers": {server_name: server}});
+            Ok(format!("{config:#}\n"))
         }
     }
 }
@@ -365,6 +484,109 @@ impl Default for ClientConfigOptions {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn executable_configs_round_trip_without_source_tree_or_invented_environment() {
+        let name = "archive \\\"資料";
+        let command = Path::new("C:\\MCP tools\\archive \\\"資料.exe");
+        for format in [
+            ClientConfigFormat::CodexToml,
+            ClientConfigFormat::McpServersJson,
+        ] {
+            let rendered = render_executable_client_config(name, command, format, &[]).unwrap();
+            match format {
+                ClientConfigFormat::CodexToml => {
+                    let parsed = rendered.parse::<toml_edit::DocumentMut>().unwrap();
+                    let server = &parsed["mcp_servers"][name];
+                    assert_eq!(server["command"].as_str(), command.to_str());
+                    assert!(server["args"].as_array().unwrap().is_empty());
+                    assert!(server.get("env").is_none());
+                }
+                ClientConfigFormat::McpServersJson => {
+                    let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+                    let server = &parsed["mcpServers"][name];
+                    assert_eq!(server["command"].as_str(), command.to_str());
+                    assert_eq!(server["args"], serde_json::json!([]));
+                    assert!(server.get("env").is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn executable_config_only_renders_explicit_environment_in_stable_order() {
+        let environment = [("Z_LAST", ""), ("ARCHIVE_PROFILE", "read_only")];
+        let toml = render_executable_client_config(
+            "archive",
+            Path::new("archive"),
+            ClientConfigFormat::CodexToml,
+            &environment,
+        )
+        .unwrap();
+        let parsed = toml.parse::<toml_edit::DocumentMut>().unwrap();
+        let env = &parsed["mcp_servers"]["archive"]["env"];
+        assert_eq!(env["ARCHIVE_PROFILE"].as_str(), Some("read_only"));
+        assert_eq!(env["Z_LAST"].as_str(), Some(""));
+        assert!(toml.find("ARCHIVE_PROFILE").unwrap() < toml.find("Z_LAST").unwrap());
+        let json = render_executable_client_config(
+            "archive",
+            Path::new("archive"),
+            ClientConfigFormat::McpServersJson,
+            &environment,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed["mcpServers"]["archive"]["env"],
+            serde_json::json!({
+                "ARCHIVE_PROFILE": "read_only", "Z_LAST": "",
+            })
+        );
+    }
+
+    #[test]
+    fn executable_config_rejects_ambiguous_or_unsafe_inputs_without_echoing_them() {
+        for format in [
+            ClientConfigFormat::CodexToml,
+            ClientConfigFormat::McpServersJson,
+        ] {
+            for (name, path, env) in [
+                ("", "archive", vec![]),
+                ("archive", "", vec![]),
+                ("secret-canary\n", "archive", vec![]),
+                ("archive", "secret-canary\0", vec![]),
+                ("archive", "archive", vec![("secret-canary", "value")]),
+                ("archive", "archive", vec![("PROFILE", "secret-canary\n")]),
+                (
+                    "archive",
+                    "archive",
+                    vec![("PROFILE", "one"), ("PROFILE", "two")],
+                ),
+            ] {
+                let error = render_executable_client_config(name, Path::new(path), format, &env)
+                    .unwrap_err();
+                assert!(!error.to_string().contains("secret-canary"));
+                assert!(!format!("{error:?}").contains("secret-canary"));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn executable_config_rejects_non_unicode_paths_without_lossy_replacement() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/private-\xff"));
+        assert_eq!(
+            render_executable_client_config(
+                "archive",
+                path,
+                ClientConfigFormat::McpServersJson,
+                &[],
+            )
+            .unwrap_err(),
+            ExecutableClientConfigError::NonUnicodeExecutable
+        );
+    }
 
     fn project_legacy() -> PathBuf {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
