@@ -344,7 +344,8 @@ Regenerate with `--toolkit-git` for portable repositories or with
 
 ## Validation Commands
 
-For generated stdio or hosted projects:
+For freshly generated stdio or hosted projects, run `cargo fmt --all` once:
+renaming can change import order and line wrapping. For subsequent checks:
 
 ```bash
 cargo fmt --all --check

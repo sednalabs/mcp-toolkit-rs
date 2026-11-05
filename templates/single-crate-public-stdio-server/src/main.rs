@@ -1,4 +1,4 @@
-use mcp_toolkit::client_config::{render_client_config, ClientConfigOptions};
+use mcp_toolkit::client_config::{render_executable_client_config, ClientConfigFormat};
 use mcp_toolkit::doctor::inspect_project;
 use mcp_toolkit::server::tools::{
     render_tool_surface_command, render_tool_surface_help, tool_surface_command_from_env,
@@ -48,11 +48,18 @@ fn print_doctor() -> MainResult<()> {
 }
 
 fn print_client_config() -> MainResult<()> {
-    let options = ClientConfigOptions {
-        root: std::env::current_dir()?,
-        ..ClientConfigOptions::default()
-    };
-    print!("{}", render_client_config(&options)?);
+    const PROFILE_ENV: &str = "EXAMPLE_MCP_TOOL_PROFILE";
+    // This also works after copying just the binary, from any working directory.
+    // Render a public safe default, never the caller's environment values.
+    print!(
+        "{}",
+        render_executable_client_config(
+            BINARY_NAME,
+            &std::env::current_exe()?,
+            ClientConfigFormat::CodexToml,
+            &[(PROFILE_ENV, "read_only")],
+        )?
+    );
     Ok(())
 }
 
