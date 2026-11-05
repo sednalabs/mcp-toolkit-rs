@@ -176,21 +176,9 @@ impl StdioMcpProcess {
     /// # Panics
     /// Panics if the response does not arrive before `timeout`.
     pub fn response_with_timeout(&self, id: u64, timeout: Duration) -> Value {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .unwrap_or_else(|| {
-                    panic!("timed out waiting for JSON-RPC response id {id}");
-                });
-            let value = self
-                .responses
-                .recv_timeout(remaining)
-                .unwrap_or_else(|_| panic!("timed out waiting for JSON-RPC response id {id}"));
-            if value.get("id") == Some(&json!(id)) {
-                return value;
-            }
-        }
+        wait_for_response(id, timeout, Instant::now, |remaining| {
+            self.responses.recv_timeout(remaining)
+        })
     }
 
     /// Call `tools/list` and return exported tool names in server order.
@@ -286,6 +274,27 @@ fn tool_call_request_with_meta(
     })
 }
 
+// Keep the deadline loop independent of process ownership and wall-clock progress
+// so tests can exercise exact receive budgets without spawning unrelated children.
+fn wait_for_response(
+    id: u64,
+    timeout: Duration,
+    mut now: impl FnMut() -> Instant,
+    mut receive: impl FnMut(Duration) -> Result<Value, mpsc::RecvTimeoutError>,
+) -> Value {
+    let deadline = now() + timeout;
+    loop {
+        let remaining = deadline.checked_duration_since(now()).unwrap_or_else(|| {
+            panic!("timed out waiting for JSON-RPC response id {id}");
+        });
+        let value = receive(remaining)
+            .unwrap_or_else(|_| panic!("timed out waiting for JSON-RPC response id {id}"));
+        if value.get("id") == Some(&json!(id)) {
+            return value;
+        }
+    }
+}
+
 impl Drop for StdioMcpProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -336,11 +345,11 @@ pub fn assert_stdio_tool_response_excludes_substrings<S>(
 mod tests {
     use super::{
         current_request_meta, tool_call_request, tool_call_request_with_meta,
-        uses_current_request_model, StdioMcpProcess, CLIENT_CAPABILITIES_META_KEY,
+        uses_current_request_model, wait_for_response, CLIENT_CAPABILITIES_META_KEY,
         CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY,
     };
     use serde_json::json;
-    use std::thread;
+    use std::sync::mpsc::{self, RecvTimeoutError};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -422,63 +431,99 @@ mod tests {
     }
 
     #[test]
-    fn response_ignores_unrelated_ids_until_match() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(json!({"jsonrpc":"2.0","id":99,"result":{}}))
-            .expect("send unrelated");
-        tx.send(json!({"jsonrpc":"2.0","id":7,"result":{"ok":true}}))
-            .expect("send target");
+    fn response_ignores_notifications_and_unrelated_ids_until_match() {
+        let (tx, rx) = mpsc::channel();
+        let expected = json!({"jsonrpc":"2.0","id":7,"result":{"ok":true}});
+        for value in [
+            json!({"jsonrpc":"2.0","method":"notifications/progress"}),
+            json!({"jsonrpc":"2.0","id":99,"result":{}}),
+            json!({"jsonrpc":"2.0","id":"7","result":{}}),
+            expected.clone(),
+        ] {
+            tx.send(value).expect("enqueue response");
+        }
+        drop(tx);
 
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("sleep 30")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn sleeper");
-        let stdin = child.stdin.take().expect("stdin");
-        let process = StdioMcpProcess {
-            child,
-            stdin,
-            responses: rx,
-            request_meta: None,
-        };
-
-        let response = process.response(7);
-        assert_eq!(response["result"], json!({"ok": true}));
+        let now = Instant::now();
+        let response = wait_for_response(
+            7,
+            Duration::from_secs(10),
+            || now,
+            |remaining| rx.recv_timeout(remaining),
+        );
+        assert_eq!(response, expected);
     }
 
     #[test]
     fn response_timeout_is_absolute_across_unrelated_messages() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        thread::spawn(move || loop {
-            if tx
-                .send(json!({"jsonrpc":"2.0","id":99,"result":{}}))
-                .is_err()
-            {
-                break;
-            }
-            thread::sleep(Duration::from_millis(5));
-        });
-
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("sleep 30")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn sleeper");
-        let stdin = child.stdin.take().expect("stdin");
-        let process = StdioMcpProcess {
-            child,
-            stdin,
-            responses: rx,
-            request_meta: None,
-        };
-
         let start = Instant::now();
+        let mut times = [0, 0, 10, 35, 51].into_iter();
+        let mut receive_budgets = Vec::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            process.response_with_timeout(7, Duration::from_millis(50));
+            wait_for_response(
+                7,
+                Duration::from_millis(50),
+                || start + Duration::from_millis(times.next().expect("unexpected clock read")),
+                |remaining| {
+                    receive_budgets.push(remaining);
+                    Ok(json!({"jsonrpc":"2.0","id":99,"result":{}}))
+                },
+            );
         }));
-        assert!(result.is_err());
-        assert!(start.elapsed() < Duration::from_secs(1));
+
+        assert_eq!(
+            receive_budgets,
+            [50, 40, 15].map(Duration::from_millis),
+            "unrelated responses must consume, not restart, the original timeout"
+        );
+        assert_timeout_panic(result, 7);
+    }
+
+    #[test]
+    fn response_at_deadline_can_read_an_already_queued_match() {
+        let start = Instant::now();
+        let timeout = Duration::from_millis(50);
+        let mut times = [start, start + timeout].into_iter();
+        let (tx, rx) = mpsc::channel();
+        let expected = json!({"jsonrpc":"2.0","id":7,"result":{}});
+        tx.send(expected.clone()).expect("enqueue response");
+        drop(tx);
+
+        let response = wait_for_response(
+            7,
+            timeout,
+            || times.next().expect("unexpected clock read"),
+            |remaining| {
+                assert_eq!(remaining, Duration::ZERO);
+                rx.recv_timeout(remaining)
+            },
+        );
+        assert_eq!(response, expected);
+    }
+
+    #[test]
+    fn response_reports_the_requested_id_when_receive_times_out_or_disconnects() {
+        for (id, error) in [
+            (7, RecvTimeoutError::Timeout),
+            (42, RecvTimeoutError::Disconnected),
+        ] {
+            let now = Instant::now();
+            let result = std::panic::catch_unwind(|| {
+                wait_for_response(id, Duration::from_secs(10), || now, |_| Err(error));
+            });
+            assert_timeout_panic(result, id);
+        }
+    }
+
+    fn assert_timeout_panic(result: std::thread::Result<()>, id: u64) {
+        let panic = result.expect_err("waiting for the requested response should time out");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied());
+        assert_eq!(
+            message,
+            Some(format!("timed out waiting for JSON-RPC response id {id}").as_str())
+        );
     }
 }

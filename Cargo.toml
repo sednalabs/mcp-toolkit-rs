@@ -21,6 +21,7 @@ members = [
   "crates/mcp-toolkit-tasks",
   "crates/mcp-toolkit-testing",
   "crates/mcp-toolkit-server",
+  "vendor/dpop-verifier",
 ]
 
 [workspace.package]

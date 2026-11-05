@@ -32,6 +32,14 @@ When a workflow clones or checks out `mcp-toolkit-rs` directly, pass the lockfil
 SHA or another explicit reviewed ref into that workflow. That keeps hosted proof
 stable without spreading manifest `rev` pins across every adopting service.
 
+Auth and its dependants also have a temporary publication blocker: the
+[toolkit-custodied DPoP verifier](design/dpop-verifier-custody.md) is an unpublished
+local `4.4.1` port, consumed by a direct path within the Git source. The vendor is
+`publish = false`; package-list checks do not prove registry resolution. A reviewed
+upstream release or separately approved distribution plan must resolve this
+blocker before any affected crate can be published. Consumers implementing DPoP
+backends should use `mcp_toolkit_auth::dpop_verifier` for canonical type identity.
+
 ## Release Approval Gate
 
 Do not publish crates from routine pull request validation. A crates.io release
