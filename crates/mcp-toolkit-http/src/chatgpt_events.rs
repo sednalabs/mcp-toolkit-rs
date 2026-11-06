@@ -853,7 +853,10 @@ mod tests {
         assert_eq!(format!("{signer:?}"), "WebhookSigner { .. }");
         assert_eq!(format!("{body:?}"), "PreparedWebhook { .. }");
         assert_eq!(format!("{signed:?}"), "SignedWebhook { .. }");
-        assert_eq!(format!("{:?}", pending(fresh_nonce())), "PendingChallenge { .. }");
+        assert_eq!(
+            format!("{:?}", pending(fresh_nonce())),
+            "PendingChallenge { .. }"
+        );
         assert!(!format!("{:?}", signed.headers())
             .contains(signed.headers()["webhook-signature"].to_str().unwrap()));
     }
@@ -877,7 +880,9 @@ mod tests {
                 .sign("verify_1", NOW + 1, signed.body())
                 .unwrap()
         );
-        pending.verify(StatusCode::OK, &echo(&nonce), NOW + 1).unwrap();
+        pending
+            .verify(StatusCode::OK, &echo(&nonce), NOW + 1)
+            .unwrap();
     }
 
     #[test]
@@ -953,7 +958,10 @@ mod tests {
 
     #[test]
     fn response_budget_accepts_exact_boundary_and_rejects_one_over() {
-        for length in [MAX_CHALLENGE_RESPONSE_BYTES, MAX_CHALLENGE_RESPONSE_BYTES + 1] {
+        for length in [
+            MAX_CHALLENGE_RESPONSE_BYTES,
+            MAX_CHALLENGE_RESPONSE_BYTES + 1,
+        ] {
             let nonce = fresh_nonce();
             let mut response = echo(&nonce);
             response.resize(length, b' ');
@@ -961,7 +969,10 @@ mod tests {
             if length == MAX_CHALLENGE_RESPONSE_BYTES {
                 assert!(result.is_ok());
             } else {
-                assert_eq!(result, Err(WebhookPreparationError::InvalidChallengeResponse));
+                assert_eq!(
+                    result,
+                    Err(WebhookPreparationError::InvalidChallengeResponse)
+                );
             }
         }
     }
