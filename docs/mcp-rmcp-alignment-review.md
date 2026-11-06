@@ -33,10 +33,15 @@ initialize/initialized lifecycle retained for compatibility, while
 `2026-07-28` is the current stateless request lifecycle. These are protocol
 dates, not SDK release numbers.
 
-Successor baseline note (2026-10-19): the current pins are `3.5.1`, with the
+Historical successor baseline note (2026-10-19): the pins were `3.5.1`, with the
 maintained HTTP corrections preserved alongside the complete upstream patch release.
 See `current-mcp-baseline.md` for source identity and current/legacy validation
 scope. Earlier release numbers below remain historical review evidence.
+
+Successor baseline note (2026-11-06): the shipped pins are `3.8.0`, with a
+maintained transport-hardening source override. See the
+[current baseline](current-mcp-baseline.md) for the exact revision and scope.
+The earlier dated review findings remain historical evidence.
 
 Primary references:
 

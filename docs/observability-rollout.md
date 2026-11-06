@@ -31,6 +31,21 @@ Recommended server adoption order:
 2. Enable `metrics-facade` once tracing events are stable.
 3. Enable `otel-export` only where distributed tracing is required.
 
+## Structured secret fields
+
+`redaction::DEFAULT_REDACT_KEYS` includes `private_key`, `password`, and
+`api_key` alongside token, client-secret and authorization fields.
+`redact_json_keys` traverses objects and arrays and replaces the whole value
+at matching keys. Matching is case-insensitive and exact: `private_key_id`
+and `api_key_count` do not match. Explicit caller key lists are not extended.
+
+The [synthetic structured-field corpus](../crates/mcp-toolkit-observability/tests/fixtures/README.md)
+covers escaping, nested values, Unicode, and preservation of operational fields.
+It does not prove arbitrary free-text scrubbing. The recursive helper has no
+depth or size admission limit; callers must bound input and use allowlisted
+client-error fields. Redaction remains heuristic telemetry defense in depth,
+not a guarantee that a tool response is safe to disclose.
+
 ## Before / After Pattern
 
 Before:

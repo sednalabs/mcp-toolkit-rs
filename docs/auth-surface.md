@@ -34,6 +34,19 @@ That convention has worked well operationally because it keeps resource metadata
 validation, and client configuration aligned. It should be documented as recommended rather than
 mandatory.
 
+## Strict bearer extraction and diagnostics
+
+`parse_strict_bearer_authorization` accepts exactly one authorization header,
+a case-insensitive Bearer scheme, one ASCII space, and a nonempty opaque token
+without surrounding whitespace or controls. Preserve repeated headers rather
+than flattening them before parsing. This extracts a credential; it does not
+validate signatures, claims, or authority.
+
+`BearerToken` debug formatting omits the credential, including when nested in
+other debug output. Explicit `as_str()` access still returns the raw credential
+and must not be logged. See the [strict-header fixture corpus](../crates/mcp-toolkit-auth/tests/fixtures/README.md)
+for byte-level cases, error precedence, and cross-runtime limits.
+
 ## Specs (Alignment Targets)
 
 - **RFC 8414** — OAuth 2.0 Authorization Server Metadata (well-known paths)

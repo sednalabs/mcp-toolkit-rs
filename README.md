@@ -69,6 +69,17 @@ not part of this canonical Sedna Labs package family.
 | `mcp-toolkit-testing` | Tool-schema and auth-surface contract-test helpers. |
 | `mcp-toolkit-docs` | Documentation and tool-metadata helpers. |
 
+## Focused runtime helpers
+
+- [Compact tool results](docs/compact-tool-results.md): opt-in text projection,
+  unchanged structured content and explicit MCP success/error signaling within
+  caller-selected byte budgets. Inputs must already be safe for the caller.
+- [Bounded process capture](docs/bounded-process-capture.md): capped stdout/stderr
+  over existing supervision, with explicit deadlines and environment entries.
+  This is not a sandbox or a whole-process-tree termination guarantee.
+- [Contract testing](docs/contract-testing.md): reusable assertions and portable
+  descriptor-profile fixtures, with each profile's acceptance limits explicit.
+
 ## Git dependency example
 
 Use only the crates and features your service needs:
