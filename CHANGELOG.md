@@ -5,6 +5,9 @@ are approved for publication.
 
 ## Unreleased
 
+- Added bounded concurrent subprocess capture over the existing process manager,
+  with explicit environment, redacted diagnostics and root-only lifecycle evidence.
+
 - Updated the exact RMCP runtime and macro baseline to 3.5.1 while retaining
   the maintained SDK's `Origin`/schema-cache and current-protocol disconnect
   corrections. Added stdio discovery, tool-list cache-hint, and tool-call
