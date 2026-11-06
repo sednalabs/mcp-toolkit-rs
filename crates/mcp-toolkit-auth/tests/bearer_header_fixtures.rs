@@ -46,7 +46,8 @@ fn strict_bearer_header_corpus_matches_public_parser() {
         let mut headers = HeaderMap::new();
         for header in case.headers {
             let name = HeaderName::from_bytes(header.name.as_bytes()).expect("valid header name");
-            let value = HeaderValue::from_bytes(&header.value_bytes).expect("valid HTTP field bytes");
+            let value =
+                HeaderValue::from_bytes(&header.value_bytes).expect("valid HTTP field bytes");
             // Append preserves repeated fields, including case-normalized names.
             // Inserting into a map would erase the ambiguity being tested.
             headers.append(name, value);
