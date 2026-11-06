@@ -340,9 +340,7 @@ mod tests {
                 std::task::Poll::Ready(Err(std::io::Error::other("synthetic-secret")))
             }
         }
-        let error = read_bounded(Broken, &mut Vec::new(), 1)
-            .await
-            .unwrap_err();
+        let error = read_bounded(Broken, &mut Vec::new(), 1).await.unwrap_err();
         assert_eq!(error, CaptureEnd::ReadFailed);
         assert!(!format!("{error:?}").contains("synthetic-secret"));
     }
@@ -512,9 +510,7 @@ mod tests {
         let command = CaptureCommand::new("/nonexistent/synthetic-secret")
             .unwrap()
             .arg("synthetic-secret");
-        let error = capture(&manager(), command, limits(1))
-            .await
-            .unwrap_err();
+        let error = capture(&manager(), command, limits(1)).await.unwrap_err();
         assert_eq!(error, CaptureError::SpawnFailed);
         assert!(!format!("{error} {error:?}").contains("synthetic-secret"));
         assert!(std::error::Error::source(&error).is_none());
