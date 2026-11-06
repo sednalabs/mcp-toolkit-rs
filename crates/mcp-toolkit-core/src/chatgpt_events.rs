@@ -20,9 +20,11 @@
 //! * [Draft Events design](https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/main/docs/design-sketch-proposal.md)
 
 use std::fmt;
+use std::marker::PhantomData;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use serde::de::{value::MapAccessDeserializer, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
 
@@ -113,6 +115,7 @@ impl RequestedLifetime {
 struct RawSubscribe {
     name: String,
     arguments: Map<String, Value>,
+    #[serde(deserialize_with = "deserialize_object_only")]
     delivery: RawDelivery,
     #[serde(default)]
     cursor: Option<String>,
@@ -137,6 +140,7 @@ struct RawDelivery {
 struct RawUnsubscribe {
     name: String,
     arguments: Map<String, Value>,
+    #[serde(deserialize_with = "deserialize_object_only")]
     delivery: RawStopDelivery,
     #[serde(default, rename = "_meta")]
     _metadata: Option<Map<String, Value>>,
@@ -199,8 +203,7 @@ impl WebhookSubscribeRequest {
     /// ```
     pub fn parse(params: &[u8]) -> Result<Self, EventRequestError> {
         check_budget(params)?;
-        let raw: RawSubscribe =
-            serde_json::from_slice(params).map_err(|_| EventRequestError::InvalidRequest)?;
+        let raw: RawSubscribe = parse_object_only(params)?;
         if raw.delivery.mode != "webhook" {
             return Err(EventRequestError::InvalidRequest);
         }
@@ -296,8 +299,7 @@ impl SubscriptionKey {
     /// contact this callback to unsubscribe or reveal whether a foreign key exists.
     pub fn parse_unsubscribe(params: &[u8]) -> Result<Self, EventRequestError> {
         check_budget(params)?;
-        let raw: RawUnsubscribe =
-            serde_json::from_slice(params).map_err(|_| EventRequestError::InvalidRequest)?;
+        let raw: RawUnsubscribe = parse_object_only(params)?;
         if raw.delivery.mode != "webhook" {
             return Err(EventRequestError::InvalidRequest);
         }
@@ -351,6 +353,41 @@ impl SubscriptionKey {
         .map_err(|_| EventRequestError::InvalidRequest)?;
         Ok(format!("sub_{}", identity.sha256_hex()))
     }
+}
+
+// Serde's derived named structs also accept positional sequences. The wire
+// contract requires objects, so preserve map decoding (including duplicate-field
+// rejection) at each request and delivery boundary.
+fn deserialize_object_only<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct ObjectVisitor<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+        type Value = T;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(ObjectVisitor(PhantomData))
+}
+
+fn parse_object_only<'de, T: Deserialize<'de>>(params: &'de [u8]) -> Result<T, EventRequestError> {
+    let mut deserializer = serde_json::Deserializer::from_slice(params);
+    let request = deserialize_object_only(&mut deserializer)
+        .map_err(|_| EventRequestError::InvalidRequest)?;
+    deserializer
+        .end()
+        .map_err(|_| EventRequestError::InvalidRequest)?;
+    Ok(request)
 }
 
 fn check_budget(params: &[u8]) -> Result<(), EventRequestError> {
@@ -724,6 +761,81 @@ mod tests {
             WebhookSubscribeRequest::parse(nested.as_bytes()),
             Err(EventRequestError::InvalidRequest)
         ));
+    }
+
+    #[test]
+    fn requests_and_delivery_require_objects_not_positional_arrays() {
+        let subscribe = request();
+        let delivery = &subscribe["delivery"];
+        let subscribe_delivery = json!([
+            delivery["mode"],
+            delivery["url"],
+            delivery["secret"]
+        ]);
+        let stop_delivery = json!([delivery["mode"], delivery["url"]]);
+        let mut malformed = subscribe.clone();
+        malformed["delivery"] = subscribe_delivery.clone();
+        assert!(matches!(
+            parse(&malformed),
+            Err(EventRequestError::InvalidRequest)
+        ));
+        for delivery_value in [delivery.clone(), subscribe_delivery] {
+            let positional = json!([
+                subscribe["name"],
+                subscribe["arguments"],
+                delivery_value,
+                null,
+                null,
+                null,
+                null
+            ]);
+            assert!(matches!(
+                parse(&positional),
+                Err(EventRequestError::InvalidRequest)
+            ));
+        }
+
+        let stop = json!({
+            "name": subscribe["name"],
+            "arguments": subscribe["arguments"],
+            "delivery": {"mode": delivery["mode"], "url": delivery["url"]}
+        });
+        let mut malformed = stop.clone();
+        malformed["delivery"] = stop_delivery.clone();
+        assert!(matches!(
+            SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&malformed).unwrap()),
+            Err(EventRequestError::InvalidRequest)
+        ));
+        for delivery_value in [stop["delivery"].clone(), stop_delivery] {
+            let positional = json!([
+                stop["name"],
+                stop["arguments"],
+                delivery_value,
+                null
+            ]);
+            assert!(matches!(
+                SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&positional).unwrap()),
+                Err(EventRequestError::InvalidRequest)
+            ));
+        }
+    }
+
+    #[test]
+    fn object_decoding_rejects_trailing_values_and_duplicate_delivery_fields() {
+        let valid = serde_json::to_string(&request()).unwrap();
+        for malformed in [
+            format!("{valid} {{}}"),
+            valid.replacen(
+                "\"mode\":\"webhook\"",
+                "\"mode\":\"webhook\",\"mode\":\"webhook\"",
+                1,
+            ),
+        ] {
+            assert!(matches!(
+                WebhookSubscribeRequest::parse(malformed.as_bytes()),
+                Err(EventRequestError::InvalidRequest)
+            ));
+        }
     }
 
     #[test]
