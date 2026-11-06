@@ -82,6 +82,7 @@ jobs:
             command: |
               cargo test --locked -p mcp-toolkit-http --no-default-features --features chatgpt-events --all-targets
               cargo test --locked -p mcp-toolkit-http --no-default-features --features chatgpt-events --doc
+              cargo test --locked -p mcp-toolkit-core --lib webhook::tests
               cargo test --locked -p mcp-toolkit-core --doc
               cargo check --locked -p mcp-toolkit-http --no-default-features
           - target_name: generated-servers

@@ -28,7 +28,7 @@ use std::io::{self, Write};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use http::{header::CONTENT_TYPE, HeaderMap, HeaderValue, StatusCode};
-use mcp_toolkit_core::chatgpt_events::validate_signing_secret;
+use mcp_toolkit_core::webhook::validate_chatgpt_signing_secret;
 use serde::de::{value::MapAccessDeserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -36,7 +36,8 @@ use standardwebhooks::Webhook;
 use subtle::ConstantTimeEq;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-pub use mcp_toolkit_core::chatgpt_events::MAX_EVENT_BODY_BYTES;
+/// Complete ChatGPT webhook event bodies must not exceed this many UTF-8 bytes.
+pub const MAX_EVENT_BODY_BYTES: usize = 256 * 1024;
 
 /// Maximum byte length of an event/message or subscription header identifier.
 pub const MAX_HEADER_ID_BYTES: usize = 256;
@@ -254,7 +255,7 @@ impl fmt::Debug for WebhookSigner {
 }
 
 impl WebhookSigner {
-    /// Validates each key through the core `whsec_`/24..=64-byte contract.
+    /// Validates each key through the core ChatGPT `whsec_`/24..=64-byte profile.
     ///
     /// # Errors
     /// Rejects either invalid key without exposing its contents.
@@ -264,7 +265,7 @@ impl WebhookSigner {
     /// Format validation cannot establish key entropy, consent or eligibility.
     pub fn new(current: &str, previous: Option<&str>) -> Result<Self, WebhookPreparationError> {
         fn key(secret: &str) -> Result<Webhook, WebhookPreparationError> {
-            validate_signing_secret(secret)
+            validate_chatgpt_signing_secret(secret)
                 .map_err(|_| WebhookPreparationError::InvalidSigningSecret)?;
             Webhook::new(secret).map_err(|_| WebhookPreparationError::InvalidSigningSecret)
         }

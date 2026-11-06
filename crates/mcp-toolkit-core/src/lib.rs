@@ -29,7 +29,6 @@
 
 pub mod canonical_json;
 pub mod capability;
-pub mod chatgpt_events;
 pub mod duration_estimate;
 pub mod guarded_action;
 pub mod mcp_apps;
@@ -43,6 +42,7 @@ pub mod rmcp_models;
 pub mod scoped_cursor;
 pub mod tool_inventory;
 pub mod tool_schema;
+pub mod webhook;
 
 /// Re-export the pinned RMCP SDK used by toolkit helpers.
 ///

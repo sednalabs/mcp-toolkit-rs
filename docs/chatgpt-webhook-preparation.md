@@ -1,9 +1,10 @@
 # ChatGPT webhook preparation
 
 Enable `mcp-toolkit-http`'s optional `chatgpt-events` feature for I/O-free
-preparation of the documented ChatGPT webhook contract. Core subscription
-parsing, canonical identity and lifetime helpers remain in
-`mcp_toolkit_core::chatgpt_events`.
+preparation of the documented ChatGPT webhook contract. The independent core
+`webhook::validate_chatgpt_signing_secret` helper checks only the signing-secret
+format accepted by this integration. Subscription request parsing, identity and
+lifetime policy are outside this module.
 
 ## Delivery
 
@@ -12,7 +13,9 @@ parsing, canonical identity and lifetime helpers remain in
    object, and optional string cursor. `PreparedWebhook::event` serializes it
    once with a capped writer into owned immutable bytes, at most 256 KiB total.
 3. Construct `WebhookSigner` from the current secret and optionally one previous
-   secret. Core validation requires a `whsec_` prefix and 24–64 decoded bytes.
+   secret. The ChatGPT key profile requires a `whsec_` prefix and 24–64 decoded
+   bytes in canonical standard base64, bounded to 88 encoded bytes. These are
+   integration-specific limits, not universal Standard Webhooks requirements.
    The service, not this helper, decides whether the previous key is eligible.
 4. `PreparedWebhook::sign` takes the subscription ID and explicit current Unix
    seconds. It returns the exact borrowed body and Content-Type, webhook-id,
@@ -61,13 +64,15 @@ confers no application authority.
 ## Validation
 
 The standard hosted baseline includes exact-head `--locked` HTTP feature-enabled
-tests/doctests, core doctests, and an HTTP feature-disabled build. Workspace
-coverage and all-feature Clippy cover the new module as well. Tests include the
-official Standard Webhooks vector, UTF-8/escaping byte identity, body limit and
-limit-plus-one, rotations, redaction, malformed echoes, deadline boundaries,
-consuming ownership and deterministic mutation fuzzing. Existing CodeQL and
-dependency-governance gates remain in force; no paid Code Quality setting is
-required or enabled by this feature.
+tests/doctests, focused core validator tests and doctests, and an HTTP
+feature-disabled build. Workspace coverage and all-feature Clippy cover the new
+module as well. Tests include the official Standard Webhooks vector,
+UTF-8/escaping byte identity, body limit and limit-plus-one, rotations, redaction,
+malformed echoes, deadline boundaries,
+consuming ownership and deterministic JSON parser mutation fuzzing. Core tests
+cover key-profile boundaries, malformed encodings, safe errors and deterministic
+format fuzzing. Existing CodeQL and dependency-governance gates remain in force.
+Code Quality ingestion remains opt-in and is not enabled by this feature.
 
 References: [ChatGPT MCP Events](https://developers.openai.com/plugins/build/mcp-events)
 and [Standard Webhooks Rust](https://github.com/standard-webhooks/standard-webhooks/tree/main/libraries/rust).
