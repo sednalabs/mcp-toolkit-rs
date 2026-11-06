@@ -26,6 +26,7 @@
 //! handles, draining child streams, and interpreting child output. The
 //! [`supervisor`] module owns Tokio child waiting and reaping.
 
+pub mod capture;
 pub mod supervisor;
 
 /// Read-only resource evidence for the current process's Linux cgroup.
