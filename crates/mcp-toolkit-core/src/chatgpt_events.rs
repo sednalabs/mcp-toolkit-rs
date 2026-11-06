@@ -206,7 +206,11 @@ impl WebhookSubscribeRequest {
         }
         let key = SubscriptionKey::new(raw.name, raw.arguments, raw.delivery.url)?;
         validate_signing_secret(&raw.delivery.secret)?;
-        if raw.cursor.as_ref().is_some_and(|cursor| cursor.len() > 4096) {
+        if raw
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.len() > 4096)
+        {
             return Err(EventRequestError::InvalidRequest);
         }
         Ok(Self {
@@ -403,16 +407,25 @@ mod tests {
             "name": value["name"], "arguments": value["arguments"],
             "delivery": {"mode":"webhook", "url":value["delivery"]["url"]}
         });
-        let unsubscribe = SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&stop).unwrap())
-            .unwrap();
+        let unsubscribe =
+            SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&stop).unwrap()).unwrap();
         assert_eq!(
             subscribe.key().subscription_id("issuer:principal").unwrap(),
             unsubscribe.subscription_id("issuer:principal").unwrap()
         );
         assert_eq!(subscribe.key().name(), "item.changed");
-        assert_eq!(subscribe.key().arguments(), value["arguments"].as_object().unwrap());
-        assert_eq!(subscribe.key().callback_url(), value["delivery"]["url"].as_str().unwrap());
-        assert_eq!(subscribe.signing_secret(), value["delivery"]["secret"].as_str().unwrap());
+        assert_eq!(
+            subscribe.key().arguments(),
+            value["arguments"].as_object().unwrap()
+        );
+        assert_eq!(
+            subscribe.key().callback_url(),
+            value["delivery"]["url"].as_str().unwrap()
+        );
+        assert_eq!(
+            subscribe.signing_secret(),
+            value["delivery"]["secret"].as_str().unwrap()
+        );
         assert_eq!(subscribe.cursor(), None);
         assert_eq!(subscribe.max_age_ms(), None);
     }
@@ -420,14 +433,26 @@ mod tests {
     #[test]
     fn lifetime_distinguishes_missing_null_and_integer() {
         let mut value = request();
-        assert_eq!(parse(&value).unwrap().lifetime(), RequestedLifetime::ServerDefault);
+        assert_eq!(
+            parse(&value).unwrap().lifetime(),
+            RequestedLifetime::ServerDefault
+        );
         value["ttlMs"] = Value::Null;
-        assert_eq!(parse(&value).unwrap().lifetime(), RequestedLifetime::NoExpiry);
+        assert_eq!(
+            parse(&value).unwrap().lifetime(),
+            RequestedLifetime::NoExpiry
+        );
         value["ttlMs"] = json!(0);
-        assert_eq!(parse(&value).unwrap().lifetime(), RequestedLifetime::Milliseconds(0));
+        assert_eq!(
+            parse(&value).unwrap().lifetime(),
+            RequestedLifetime::Milliseconds(0)
+        );
         for invalid in [json!(-1), json!(1.5), json!("300"), json!(true)] {
             value["ttlMs"] = invalid;
-            assert!(matches!(parse(&value), Err(EventRequestError::InvalidRequest)));
+            assert!(matches!(
+                parse(&value),
+                Err(EventRequestError::InvalidRequest)
+            ));
         }
     }
 
@@ -443,14 +468,20 @@ mod tests {
             assert_eq!(request.grant_finite_ms(900, 100, 3600), Ok(expected));
         }
         for (default, min, max) in [(0, 0, 10), (10, 20, 30), (40, 20, 30), (5, 10, 1)] {
-            assert_eq!(RequestedLifetime::NoExpiry.grant_finite_ms(default, min, max),
-                Err(EventRequestError::InvalidLifetimePolicy));
+            assert_eq!(
+                RequestedLifetime::NoExpiry.grant_finite_ms(default, min, max),
+                Err(EventRequestError::InvalidLifetimePolicy)
+            );
         }
     }
 
     #[test]
     fn refresh_mutable_values_do_not_change_the_identity() {
-        let original = parse(&request()).unwrap().key().subscription_id("issuer:principal").unwrap();
+        let original = parse(&request())
+            .unwrap()
+            .key()
+            .subscription_id("issuer:principal")
+            .unwrap();
         let mut refreshed = request();
         refreshed["delivery"]["secret"] = json!(format!("whsec_{}", STANDARD.encode([9_u8; 64])));
         refreshed["ttlMs"] = json!(300_000);
@@ -458,7 +489,10 @@ mod tests {
         refreshed["maxAgeMs"] = json!(900_000);
         refreshed["_meta"] = json!({"request": "not-identity"});
         let refreshed = parse(&refreshed).unwrap();
-        assert_eq!(original, refreshed.key().subscription_id("issuer:principal").unwrap());
+        assert_eq!(
+            original,
+            refreshed.key().subscription_id("issuer:principal").unwrap()
+        );
         assert_eq!(refreshed.cursor(), Some("private-cursor"));
         assert_eq!(refreshed.max_age_ms(), Some(900_000));
     }
@@ -466,16 +500,44 @@ mod tests {
     #[test]
     fn every_identity_dimension_changes_the_id() {
         let value = request();
-        let original = parse(&value).unwrap().key().subscription_id("issuer:principal").unwrap();
-        assert_ne!(original, parse(&value).unwrap().key().subscription_id("other:principal").unwrap());
-        for (field, replacement) in [("name", json!("item.created")), ("arguments", json!({"item":"other"}))] {
+        let original = parse(&value)
+            .unwrap()
+            .key()
+            .subscription_id("issuer:principal")
+            .unwrap();
+        assert_ne!(
+            original,
+            parse(&value)
+                .unwrap()
+                .key()
+                .subscription_id("other:principal")
+                .unwrap()
+        );
+        for (field, replacement) in [
+            ("name", json!("item.created")),
+            ("arguments", json!({"item":"other"})),
+        ] {
             let mut changed = value.clone();
             changed[field] = replacement;
-            assert_ne!(original, parse(&changed).unwrap().key().subscription_id("issuer:principal").unwrap());
+            assert_ne!(
+                original,
+                parse(&changed)
+                    .unwrap()
+                    .key()
+                    .subscription_id("issuer:principal")
+                    .unwrap()
+            );
         }
         let mut changed = value;
         changed["delivery"]["url"] = json!("https://receiver.example/other");
-        assert_ne!(original, parse(&changed).unwrap().key().subscription_id("issuer:principal").unwrap());
+        assert_ne!(
+            original,
+            parse(&changed)
+                .unwrap()
+                .key()
+                .subscription_id("issuer:principal")
+                .unwrap()
+        );
     }
 
     #[test]
@@ -484,30 +546,47 @@ mod tests {
         let mut right = request();
         left["arguments"] = serde_json::from_str(r#"{"z":{"b":2,"a":1},"a":[1,2]}"#).unwrap();
         right["arguments"] = serde_json::from_str(r#"{"a":[1,2],"z":{"a":1,"b":2}}"#).unwrap();
-        assert_eq!(parse(&left).unwrap().key().subscription_id("p").unwrap(),
-            parse(&right).unwrap().key().subscription_id("p").unwrap());
+        assert_eq!(
+            parse(&left).unwrap().key().subscription_id("p").unwrap(),
+            parse(&right).unwrap().key().subscription_id("p").unwrap()
+        );
         right["arguments"]["a"] = json!([2, 1]);
-        assert_ne!(parse(&left).unwrap().key().subscription_id("p").unwrap(),
-            parse(&right).unwrap().key().subscription_id("p").unwrap());
+        assert_ne!(
+            parse(&left).unwrap().key().subscription_id("p").unwrap(),
+            parse(&right).unwrap().key().subscription_id("p").unwrap()
+        );
     }
 
     #[test]
     fn rejects_unsupported_and_malformed_contracts_without_echoing_values() {
         for value in [
-            json!(null), json!([]), json!({}),
+            json!(null),
+            json!([]),
+            json!({}),
             json!({"name":"x","arguments":[],"delivery":{"mode":"webhook","url":"x","secret":"x"}}),
-        ] { assert!(parse(&value).is_err()); }
+        ] {
+            assert!(parse(&value).is_err());
+        }
         for mode in ["poll", "push", "stream", "", "WEBHOOK"] {
             let mut value = request();
             value["delivery"]["mode"] = json!(mode);
-            assert!(matches!(parse(&value), Err(EventRequestError::InvalidRequest)));
+            assert!(matches!(
+                parse(&value),
+                Err(EventRequestError::InvalidRequest)
+            ));
         }
         let mut value = request();
         value["delivery"]["mode"] = json!({"webhook": null});
-        assert!(matches!(parse(&value), Err(EventRequestError::InvalidRequest)));
+        assert!(matches!(
+            parse(&value),
+            Err(EventRequestError::InvalidRequest)
+        ));
         value = request();
         value["actor"] = json!("untrusted");
-        assert!(matches!(parse(&value), Err(EventRequestError::InvalidRequest)));
+        assert!(matches!(
+            parse(&value),
+            Err(EventRequestError::InvalidRequest)
+        ));
         value.as_object_mut().unwrap().remove("actor");
         value["delivery"]["extra"] = json!("private-marker");
         let error = parse(&value).unwrap_err();
@@ -517,24 +596,42 @@ mod tests {
     #[test]
     fn signing_secret_format_and_decoded_size_are_checked() {
         for length in [24, 32, 64] {
-            assert_eq!(validate_signing_secret(&format!("whsec_{}", STANDARD.encode(vec![0; length]))), Ok(()));
+            assert_eq!(
+                validate_signing_secret(&format!("whsec_{}", STANDARD.encode(vec![0; length]))),
+                Ok(())
+            );
         }
-        for secret in ["", "whsec_bad", "whsec_!!!!", "other_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] {
-            assert_eq!(validate_signing_secret(secret), Err(EventRequestError::InvalidSigningSecret));
+        for secret in [
+            "",
+            "whsec_bad",
+            "whsec_!!!!",
+            "other_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            assert_eq!(
+                validate_signing_secret(secret),
+                Err(EventRequestError::InvalidSigningSecret)
+            );
         }
         for length in [0, 23, 65, 1000] {
-            assert_eq!(validate_signing_secret(&format!("whsec_{}", STANDARD.encode(vec![0; length]))),
-                Err(EventRequestError::InvalidSigningSecret));
+            assert_eq!(
+                validate_signing_secret(&format!("whsec_{}", STANDARD.encode(vec![0; length]))),
+                Err(EventRequestError::InvalidSigningSecret)
+            );
         }
     }
 
     #[test]
     fn input_bounds_are_utf8_bytes_and_errors_remain_safe() {
-        assert!(matches!(WebhookSubscribeRequest::parse(&vec![b' '; MAX_SUBSCRIPTION_REQUEST_BYTES + 1]),
-            Err(EventRequestError::RequestTooLarge)));
+        assert!(matches!(
+            WebhookSubscribeRequest::parse(&vec![b' '; MAX_SUBSCRIPTION_REQUEST_BYTES + 1]),
+            Err(EventRequestError::RequestTooLarge)
+        ));
         let mut value = request();
         value["name"] = json!("é".repeat(129));
-        assert!(matches!(parse(&value), Err(EventRequestError::InvalidRequest)));
+        assert!(matches!(
+            parse(&value),
+            Err(EventRequestError::InvalidRequest)
+        ));
         value["name"] = json!(" \n");
         assert!(parse(&value).is_err());
         value = request();
@@ -542,7 +639,10 @@ mod tests {
         assert!(parse(&value).is_err());
         let key = parse(&request()).unwrap().key().clone();
         for principal in ["".to_owned(), "  ".to_owned(), "x".repeat(1025)] {
-            assert_eq!(key.subscription_id(&principal), Err(EventRequestError::InvalidPrincipal));
+            assert_eq!(
+                key.subscription_id(&principal),
+                Err(EventRequestError::InvalidPrincipal)
+            );
         }
     }
 
@@ -555,6 +655,72 @@ mod tests {
         assert_eq!(format!("{:?}", parsed.key()), "SubscriptionKey { .. }");
         let stop = SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&value).unwrap());
         assert!(matches!(stop, Err(EventRequestError::InvalidRequest)));
+    }
+
+    #[test]
+    fn identity_profile_has_a_fixed_storage_compatibility_vector() {
+        let key = parse(&request()).unwrap().key().clone();
+        let expected = concat!(
+            "sub_",
+            "280466babb5cc578",
+            "ac24d45b4a030f90",
+            "743ffcfc1f2e296e",
+            "78e6f369524e3a57"
+        );
+        assert_eq!(key.subscription_id("issuer:principal").unwrap(), expected);
+    }
+
+    #[test]
+    fn unsubscribe_rejects_object_mode_and_unknown_fields() {
+        let valid = json!({
+            "name": "item.changed", "arguments": {"item": "one"},
+            "delivery": {"mode": "webhook", "url": "https://receiver.example/callback"}
+        });
+        for mode in [json!({"webhook": null}), json!(null), json!(["webhook"])] {
+            let mut value = valid.clone();
+            value["delivery"]["mode"] = mode;
+            assert!(matches!(
+                SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&value).unwrap()),
+                Err(EventRequestError::InvalidRequest)
+            ));
+        }
+        let mut value = valid;
+        value["id"] = json!("caller-selected-id");
+        assert!(SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn exact_callback_cursor_and_total_request_boundaries() {
+        let mut value = request();
+        value["delivery"]["url"] = json!("x".repeat(4096));
+        value["cursor"] = json!("x".repeat(4096));
+        assert!(parse(&value).is_ok());
+        value["delivery"]["url"] = json!("x".repeat(4097));
+        assert!(parse(&value).is_err());
+        let mut bytes = serde_json::to_vec(&request()).unwrap();
+        bytes.resize(MAX_SUBSCRIPTION_REQUEST_BYTES, b' ');
+        assert!(WebhookSubscribeRequest::parse(&bytes).is_ok());
+        bytes.push(b' ');
+        assert!(matches!(
+            WebhookSubscribeRequest::parse(&bytes),
+            Err(EventRequestError::RequestTooLarge)
+        ));
+    }
+
+    #[test]
+    fn duplicate_envelope_fields_and_excessive_nesting_are_rejected() {
+        let value = serde_json::to_string(&request()).unwrap();
+        let duplicate = value.replacen('{', "{\"name\":\"another-event\",", 1);
+        assert!(matches!(
+            WebhookSubscribeRequest::parse(duplicate.as_bytes()),
+            Err(EventRequestError::InvalidRequest)
+        ));
+        let nested = format!("{}0{}", "[".repeat(200), "]".repeat(200));
+        let nested = value.replace("\"arguments\":{", &format!("\"arguments\":{{\"deep\":{nested},"));
+        assert!(matches!(
+            WebhookSubscribeRequest::parse(nested.as_bytes()),
+            Err(EventRequestError::InvalidRequest)
+        ));
     }
 
     #[test]
