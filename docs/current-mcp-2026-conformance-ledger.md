@@ -1,9 +1,10 @@
 # MCP 2026-07-28 conformance evidence ledger (updated 6 November 2026)
 
 Reference: [stable 2026-07-28 changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
-Latest official Rust SDK release observed: **rmcp 3.8.0 (26 October 2026)**.
-The currently pinned toolkit source is **rmcp 3.8.0 with a project-maintained
-transport fork**, qualified in [PR #330](https://github.com/sednalabs/mcp-toolkit-rs/pull/330).
+Latest official Rust SDK release observed: **rmcp 3.9.0 (5 November 2026)**.
+The currently pinned toolkit source is **rmcp 3.9.0 with a project-maintained
+transport fork**, proposed in [SDK PR #8](https://github.com/sednalabs/rust-sdk/pull/8).
+The earlier 3.8 qualification in PR #330 does not qualify this candidate.
 See [the current baseline](current-mcp-baseline.md) for the exact source revision
 and retained hardening. This is not the unmodified official SDK.
 
@@ -21,7 +22,7 @@ specification certification or acceptance by any particular client.
 | Tasks / other extensions | Optional SDK extensions, not automatically advertised by toolkit | Do not claim compliance for unimplemented capabilities |
 | OAuth PRM, issuer, PKCE and scopes | AuthSurface and Apps contract tests; metadata and challenge helpers (landed PRs #327 and #328) | Exercise real issuer, token audience, scope increment and Client ID Metadata |
 | Result JSON Schema 2020-12 | Generic dialect validator and schema-snapshot helper | Validate consumer-specific refs/composition limits and actual tools |
-| RMCP SDK currency | Pinned 3.8.0 fork with transport hardening; landed PR #330 | Requalify dependent apps; remove the patch only after equivalent upstream fixes and tests are proven |
+| RMCP SDK currency | Pinned 3.9.0 fork candidate with transport hardening and optional Events model; SDK PR #8 | Requalify dependent apps; remove the patch only after equivalent upstream fixes and tests are proven |
 | Client compatibility | Hosted toolkit tests plus consumer CI | Run real ChatGPT, Codex and a current SDK client, including unsupported features |
 
 The test helper is intentionally transport-facing but test-only: it validates a
