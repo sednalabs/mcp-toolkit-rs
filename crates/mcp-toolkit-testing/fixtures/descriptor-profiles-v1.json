@@ -1,0 +1,1868 @@
+{
+  "format_version": 1,
+  "sources": {
+    "toolkit": "294b76bac3bb590e0f43bd07239543e9bc56eeaf",
+    "probe": "051f32b242953bb167a82484f26bfedf7df71775"
+  },
+  "cases": [
+    {
+      "id": "valid_explicit_tool_only",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "widget_omitted",
+      "note": "Probe accepts omitted false default; toolkit requires explicit false.",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "widget_true",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": true,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "widget_accessible_true_for_tool_only"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "widget_string",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": "false",
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "widget_accessible_not_boolean"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "visibility_omitted",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "visibility_string",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": "model"
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "visibility_model_app",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model",
+              "app"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": [
+            "tool_only_ui_visibility_includes_app"
+          ]
+        }
+      }
+    },
+    {
+      "id": "visibility_app",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "app"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "ui_visibility_excludes_model"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "visibility_invalid",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "modle"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "ui_visibility_invalid"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "template_present",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          },
+          "openai/outputTemplate": "ui://synthetic/widget.html"
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "tool_only_ui_template_present"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "resource_uri_present",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ],
+            "resourceUri": "ui://synthetic/widget.html"
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "tool_only_ui_template_present"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_boolean",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": true,
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "boolean_schema"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_array_root",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "input_schema_root_not_object"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_unspecified_type",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {},
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_nested_boolean",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "value": true
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "boolean_schema"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_array_boolean_items",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "values": {
+              "type": "array",
+              "items": true
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "array_items_not_object"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_array_missing_items",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "values": {
+              "type": "array"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "array_items_missing"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "input_nested_union",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                false
+              ]
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "boolean_schema"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "output_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "output_schema_missing"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "output_array",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "output_schema_root_not_object"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "output_unspecified_type",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {},
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "output_nested_boolean",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "value": true
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "boolean_schema"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "annotation_readOnlyHint_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "annotation_read_only_hint_missing"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "annotation_destructiveHint_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "annotation_destructive_hint_missing"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "annotation_idempotentHint_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "annotation_openWorldHint_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "security_top_level_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "security_mirror_mismatch",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "oauth2",
+            "scopes": [
+              "synthetic:read"
+            ]
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "security_meta_empty",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": false,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "security_schemes_empty"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoking_blank",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": " ",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "invocation_status_blank"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoking_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "invocation_status_missing"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoking_64_unicode",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoking_65_unicode",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+          "openai/toolInvocation/invoked": "Read items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "invocation_status_too_long"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoked_blank",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": " ",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "invocation_status_blank"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoked_missing",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "invocation_status_missing"
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoked_64_unicode",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "id": "invoked_65_unicode",
+      "note": "",
+      "descriptor": {
+        "name": "items_read",
+        "description": "Read synthetic items.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "_meta": {
+          "securitySchemes": [
+            {
+              "type": "noauth"
+            }
+          ],
+          "openai/toolInvocation/invoking": "Reading items",
+          "openai/toolInvocation/invoked": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+          "openai/widgetAccessible": false,
+          "ui": {
+            "visibility": [
+              "model"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "toolkit_tool_only_required_output": true,
+        "probe_chatgpt_tool": {
+          "errors": [
+            "invocation_status_too_long"
+          ],
+          "warnings": []
+        }
+      }
+    }
+  ]
+}
