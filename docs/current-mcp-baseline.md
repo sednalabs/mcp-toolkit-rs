@@ -2,15 +2,16 @@
 
 Baseline verified against the workspace manifests and lockfile: 2026-11-06.
 
-The workspace pins `rmcp` and `rmcp-macros` to `3.8.0`, with a maintained
-source override described below. See [the landed SDK migration](https://github.com/sednalabs/mcp-toolkit-rs/pull/330)
-for its qualification record. The protocol baseline remains
+The workspace pins `rmcp` and `rmcp-macros` to `3.9.0`, with a maintained
+source override described below. [SDK PR #8](https://github.com/sednalabs/rust-sdk/pull/8)
+is the new candidate; [PR #330](https://github.com/sednalabs/mcp-toolkit-rs/pull/330)
+records the previous 3.8 qualification, not proof for this source. The protocol baseline remains
 [`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning);
 an SDK release number does not change the protocol date.
 
 The workspace patches `rmcp` and `rmcp-macros` to maintained SDK revision
-[`5d5fe6a2482f4bb88a5f2d74b9a222d8ce518495`](https://github.com/sednalabs/rust-sdk/commit/5d5fe6a2482f4bb88a5f2d74b9a222d8ce518495)
-on top of the complete `3.8.0` release. The carry retains duplicate-`Origin`
+[`31e83f4f752001d2afc386254a4d17b5eab5f419`](https://github.com/sednalabs/rust-sdk/commit/31e83f4f752001d2afc386254a4d17b5eab5f419)
+on top of the complete `3.9.0` release. The carry retains duplicate-`Origin`
 rejection, strict serialized `Origin` parsing, and current-protocol no-SSE-replay
 behavior that the official release does not supply. This is not the unmodified
 official SDK.
@@ -59,3 +60,19 @@ The SDK's `initialize` handling remains on its legacy handshake path even when
 one of these hints recognizes a current-era declaration. Downstream callers
 must retain their session and actor checks for `initialize`; a current-era hint
 must not be used to bypass those checks or any normal authorization decision.
+
+## Optional extensions and client contracts
+
+The [official extension registry](https://modelcontextprotocol.io/extensions/overview)
+currently marks MCP Apps stable, and Tasks and Skills beta. They remain opt-in;
+upgrading RMCP does not advertise them or prove client support. RMCP 3.9 adds
+Skills types, manifest-boundary checks and negotiated handlers. Toolkit exposes
+those upstream types rather than introducing a parallel protocol model.
+
+The maintained SDK also carries the optional top-level ChatGPT `events`
+capability, absent by default. This is distinct from `resources/subscribe` and
+`subscriptions/listen`. The [ChatGPT Events contract](https://developers.openai.com/plugins/build/mcp-events)
+requires application event methods and secure webhook delivery; capability
+serialization alone implements neither. Consumer acceptance still needs actual
+ChatGPT end-to-end evidence. The candidate includes a downstream compile/wire
+regression test proving that Skills and Events remain independent opt-ins.

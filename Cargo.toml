@@ -27,12 +27,12 @@ members = [
 [workspace.package]
 rust-version = "1.99"
 
-# RMCP 3.8.0 release plus narrowly maintained transport hardening.
-# The official 3.8.0 source still lacks duplicate-Origin rejection,
+# RMCP 3.9.0 release plus narrowly maintained transport hardening.
+# The official 3.9.0 source still lacks duplicate-Origin rejection,
 # strict serialized Origin parsing, and the current-protocol no-SSE-replay carry.
 # Replace this patch only after equivalent upstream fixes and tests are proven.
 # Cargo patch tables do not propagate to downstream consumers. Consumers needing
 # this hardening must declare the same immutable override in their root manifest.
 [patch.crates-io]
-rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "5d5fe6a2482f4bb88a5f2d74b9a222d8ce518495" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
-rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "5d5fe6a2482f4bb88a5f2d74b9a222d8ce518495" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "31e83f4f752001d2afc386254a4d17b5eab5f419" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "31e83f4f752001d2afc386254a4d17b5eab5f419" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
