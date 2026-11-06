@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "profile": "toolkit-strict-bearer-v1",
+  "cases": [
+    {
+      "id": "single",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "token": "fixture-secret-one"
+    },
+    {
+      "id": "scheme-case",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [98, 69, 97, 82, 101, 82, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "token": "fixture-secret-one"
+    },
+    {
+      "id": "header-case",
+      "headers": [
+        {
+          "name": "AUTHORIZATION",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "token": "fixture-secret-one"
+    },
+    {
+      "id": "opaque-visible-token",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 111, 112, 97, 113, 117, 101, 46, 95, 126, 43, 47, 45, 61, 61]
+        }
+      ],
+      "token": "opaque._~+/-=="
+    },
+    {
+      "id": "missing",
+      "headers": [],
+      "error": "MissingAuthorization"
+    },
+    {
+      "id": "unrelated-header",
+      "headers": [
+        {
+          "name": "x-fixture",
+          "value_bytes": [102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "MissingAuthorization"
+    },
+    {
+      "id": "duplicate-different",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        },
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 116, 119, 111]
+        }
+      ],
+      "error": "MultipleAuthorizationHeaders"
+    },
+    {
+      "id": "duplicate-identical",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        },
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "MultipleAuthorizationHeaders"
+    },
+    {
+      "id": "duplicate-case",
+      "headers": [
+        {
+          "name": "Authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        },
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 116, 119, 111]
+        }
+      ],
+      "error": "MultipleAuthorizationHeaders"
+    },
+    {
+      "id": "duplicate-empty-first",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": []
+        },
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "MultipleAuthorizationHeaders"
+    },
+    {
+      "id": "duplicate-empty-last",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        },
+        {
+          "name": "authorization",
+          "value_bytes": []
+        }
+      ],
+      "error": "MultipleAuthorizationHeaders"
+    },
+    {
+      "id": "leading-space",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [32, 66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "LeadingOrTrailingWhitespace"
+    },
+    {
+      "id": "trailing-space",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101, 32]
+        }
+      ],
+      "error": "LeadingOrTrailingWhitespace"
+    },
+    {
+      "id": "tab-separator",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 9, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "ControlCharacter"
+    },
+    {
+      "id": "double-space",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "InvalidSeparator"
+    },
+    {
+      "id": "missing-space",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "InvalidSeparator"
+    },
+    {
+      "id": "unsupported-scheme",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 97, 115, 105, 99, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101]
+        }
+      ],
+      "error": "UnsupportedScheme"
+    },
+    {
+      "id": "empty-token",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32]
+        }
+      ],
+      "error": "LeadingOrTrailingWhitespace"
+    },
+    {
+      "id": "empty-value",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": []
+        }
+      ],
+      "error": "InvalidSeparator"
+    },
+    {
+      "id": "joined-values",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 111, 110, 101, 44, 32, 66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101, 45, 115, 101, 99, 114, 101, 116, 45, 116, 119, 111]
+        }
+      ],
+      "error": "InvalidSeparator"
+    },
+    {
+      "id": "non-visible-byte",
+      "headers": [
+        {
+          "name": "authorization",
+          "value_bytes": [66, 101, 97, 114, 101, 114, 32, 255]
+        }
+      ],
+      "error": "InvalidHeaderValue"
+    }
+  ]
+}
