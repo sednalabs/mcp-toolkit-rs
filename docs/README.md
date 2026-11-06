@@ -20,6 +20,8 @@ question at hand.
 - [Tool inventory migration](tool-inventory-migration.md), [tool schema snapshots](tool-schema-snapshots.md), and [contract testing](contract-testing.md) — stable tool contracts.
 - [Deferred loading and tool search](deferred-loading-and-tool-search.md) — large catalogues and discovery.
 - [Server composition layer](server-composition-layer.md), [SEP-2243 HTTP headers](sep-2243-http-headers.md), and [scratchpad](scratchpad.md) — reusable runtime composition, the current Streamable HTTP header contract, and bounded analytical state.
+- [Compact tool results](compact-tool-results.md) and [bounded process capture](bounded-process-capture.md) — opt-in result budgets and supervised subprocess output, with explicit safety limits.
+- [Canonical JSON identity](canonical-json-identity.md) and [resource invalidation](resource-invalidation.md) — deterministic bytes and SDK-owned notification composition.
 - [Legacy-system adapter pattern](legacy-system-adapter-pattern.md) — safe integration of partial or legacy APIs.
 
 ## Security and policy adopters
@@ -37,9 +39,9 @@ question at hand.
 
 ## Decision records and reference notes
 
-The `decision-0001` through `decision-0006` files, [scratchpad notes](scratchpad.md), [capability projections](capability-projections.md), [instant server generation](instant-server-generation.md), [provider auth](provider-auth-and-client-config.md), and [public landing policy](public-landing-policy.md) preserve design context. They are evidence and decision records, not a promise that every proposal is implemented.
+The [scratchpad notes](scratchpad.md), [capability projections](capability-projections.md), [instant server generation](instant-server-generation.md), [provider auth](provider-auth-and-client-config.md), and [public landing policy](public-landing-policy.md) preserve design context. They are evidence and decision records, not a promise that every proposal is implemented.
 
-Other focused references include [architecture](ARCHITECTURE.md), [tool guide](TOOL_GUIDE.md), [dependency governance](dependency-governance.md), [contract testing](contract-testing.md), [pattern manifests](pattern-manifests.md), [observability evolution](observability-evolution.md), [observability rollout](observability-rollout.md), [new-server CLI](new-server-cli-reference.md), [MCP/rmcp alignment](mcp-rmcp-alignment-review.md), [provider auth](provider-auth-and-client-config.md), [capability projections](capability-projections.md), and [toolkit boundary](toolkit-boundary.md).
+Other focused references include [dependency governance](dependency-governance.md), [contract testing](contract-testing.md), [pattern manifests](pattern-manifests.md), [observability evolution](observability-evolution.md), [observability rollout](observability-rollout.md), [new-server CLI](new-server-cli-reference.md), [MCP/rmcp alignment](mcp-rmcp-alignment-review.md), [provider auth](provider-auth-and-client-config.md), [capability projections](capability-projections.md), and [toolkit boundary](toolkit-boundary.md).
 
 ### Consumer-local evidence
 

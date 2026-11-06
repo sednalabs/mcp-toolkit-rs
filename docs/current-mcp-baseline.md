@@ -1,18 +1,19 @@
 # Current MCP Baseline
 
-Baseline date: 2026-10-19
+Baseline verified against the workspace manifests and lockfile: 2026-11-06.
 
-The workspace pins `rmcp` and `rmcp-macros` to `3.5.1`, the latest published
-stable SDK release checked on this date. Its upstream source is
-[`rmcp-v3.5.1`](https://github.com/modelcontextprotocol/rust-sdk/releases/tag/rmcp-v3.5.1),
-commit `79437f291b2c44053d00dcd5db969fd0cca7c887`. The protocol baseline remains
+The workspace pins `rmcp` and `rmcp-macros` to `3.8.0`, with a maintained
+source override described below. See [the landed SDK migration](https://github.com/sednalabs/mcp-toolkit-rs/pull/330)
+for its qualification record. The protocol baseline remains
 [`2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning);
-an SDK patch release does not change the protocol date.
+an SDK release number does not change the protocol date.
 
 The workspace patches `rmcp` and `rmcp-macros` to maintained SDK revision
-`1d2e6ffdaccc7711552154dd2c9d7af4913a8f1e` for the existing `Origin`/schema-cache and
-current-protocol disconnect corrections. Both corrections are retained on top
-of the complete `3.5.1` release; neither has an equivalent in that release.
+[`5d5fe6a2482f4bb88a5f2d74b9a222d8ce518495`](https://github.com/sednalabs/rust-sdk/commit/5d5fe6a2482f4bb88a5f2d74b9a222d8ce518495)
+on top of the complete `3.8.0` release. The carry retains duplicate-`Origin`
+rejection, strict serialized `Origin` parsing, and current-protocol no-SSE-replay
+behavior that the official release does not supply. This is not the unmodified
+official SDK.
 The toolkit workspace can therefore validate and consume that exact source
 revision. Cargo patch tables are root-workspace-local: a consumer of toolkit
 crates does not inherit this override. Consumers that need the correction must
@@ -20,8 +21,8 @@ add their own root-level override until a compatible RMCP release is available.
 This is a source-build contract, not a hosted-validation, landing, or
 crates.io-release promise.
 
-The `3.5.1` changes preserve discovery as a lifecycle-neutral bootstrap probe,
-return handler-generated invalid-parameter errors in-band, and supply missing
+The maintained baseline preserves discovery as a lifecycle-neutral bootstrap probe,
+returns handler-generated invalid-parameter errors in-band, and supplies missing
 cache hints for current-protocol peers. The maintained stdio templates test
 `server/discover` followed by current metadata-bearing requests and, separately,
 by legacy `initialize`/`notifications/initialized` requests. The current path
@@ -36,7 +37,7 @@ the current result discriminator is not added to legacy tool results.
 | HTTP lifecycle and headers | SDK owns lifecycle, header, `Origin`, and discovery behavior; toolkit remains deployment assembly. | Re-run toolkit current/legacy HTTP probes. Downstream discovery configurations require their own adoption tests. | `cloudflare-mcp` gets a stable header/auth deployment boundary without a second protocol parser. |
 | Session replay | Legacy `2025-11-25` sessions may use `SessionManager::event_store` for GET plus `Last-Event-ID` replay and persisted streams when the hook is wired. The current `2026-07-28` protocol removes the GET stream endpoint and resumable replay; Toolkit current GET/DELETE requests return 405. Toolkit recording managers do not forward the SDK event-store hook. | A consumer claiming legacy replay must wire and test the SDK hook, including ordering, dedupe, snapshots, and authorization. | Consumers can distinguish recording/observability from durable replay instead of relying on an unsafe blanket claim. |
 | Domain behavior | Toolkit contract and pattern manifests cover transport, schemas, and selected auth/release evidence. | Each downstream repository must retest its own domain contracts against the candidate revision. | `postgres-mcp` retains ownership of SQL policy and database behavior while consuming the shared transport baseline. |
-| Dependency follow-up | `rustls 0.23.45` is included; PostgreSQL floor is raised. | OpenTelemetry, `jsonschema 0.57`, and general dependency refreshes remain separately gated; no blind `reqwest`/`jsonwebtoken` refresh. | Downstreams receive a bounded SDK migration rather than unrelated policy or dependency churn. |
+| Dependency follow-up | `rustls 0.23.46` is included; PostgreSQL floor is raised. | Further OpenTelemetry, JSON Schema, and general dependency refreshes remain separately gated; no blind `reqwest`/`jsonwebtoken` refresh. | Downstreams receive a bounded SDK migration rather than unrelated policy or dependency churn. |
 
 No row above asserts that hosted checks have passed. Toolkit acceptance requires
 hosted evidence bound to its repository, exact head SHA, workflow/run identity,

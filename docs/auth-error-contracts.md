@@ -35,6 +35,7 @@ The bearer `error` parameter is limited to RFC 6750 values:
 | Wrong issuer or audience | 401 | `invalid_token` |
 | Insufficient scope | 403 | `insufficient_scope` |
 | Forbidden by policy | 403 | `insufficient_scope` |
+| JWKS request-send failure or provider HTTP 5xx | 503 | none |
 | Internal auth configuration failure | 500 | none |
 
 `error_description` is present only for low-leakage cases such as a missing
@@ -104,6 +105,18 @@ Unknown generic errors fall back by status:
 | 403 | `AUTH_POLICY_DENIED` | `insufficient_scope` |
 | 500-599 | `AUTH_INTERNAL_ERROR` | none |
 | Other | `AUTH_FAILURE` | none |
+
+## JWKS dependency failures
+
+A failure while sending the JWKS request or awaiting response headers (including
+timeout), or provider HTTP 5xx, fails
+closed with HTTP 503, fixed message `JWKS provider unavailable`, and internal
+reason `jwks_fetch_failed`. Its decision code follows the existing 5xx fallback,
+`AUTH_INTERNAL_ERROR`, and it does not become an `invalid_token` challenge.
+This does not reclassify every JWKS error: response-body read failures remain
+HTTP 502, while non-5xx HTTP failures and malformed responses retain their
+separate handling. Do not expose raw transport errors or
+provider bodies in a client-facing fallback.
 
 ## Compatibility Notes
 

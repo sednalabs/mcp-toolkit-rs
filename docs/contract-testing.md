@@ -224,6 +224,14 @@ assert_forbidden_without_bearer_challenge(response.status(), response.headers())
 
 ## OpenAI Apps Contracts
 
+The [portable descriptor-profile fixtures](../crates/mcp-toolkit-testing/fixtures/README.md)
+record intentional differences between a selected toolkit profile and
+mcp-probe's ChatgptTool profile. Toolkit expectations are executed by the Rust
+integration test; probe expectations are source-reviewed, not executed here.
+This is not client certification or a universal schema validator. Keep complete
+catalogue, authentication and page-byte checks separate.
+
+
 Use `openai_apps_contract::OpenAiAppsConformanceProfile` when a hosted HTTP
 server is exposed as an OpenAI Apps connector. This profile is stricter than the
 generic auth-surface contract: it checks protected-resource metadata,

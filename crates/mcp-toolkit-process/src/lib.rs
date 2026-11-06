@@ -23,8 +23,10 @@
 //!
 //! ## Caller Responsibility
 //! Callers are responsible for binding PIDs/PGIDs to authorized operation
-//! handles, draining child streams, and interpreting child output. The
-//! [`supervisor`] module owns Tokio child waiting and reaping.
+//! handles and interpreting child output. Low-level callers must drain child
+//! streams themselves; [`capture`] drains both pipes with explicit byte and time
+//! limits over [`supervisor`], which owns Tokio child waiting and reaping.
+//! Capture is not a sandbox or a whole-tree termination guarantee.
 
 pub mod capture;
 pub mod supervisor;

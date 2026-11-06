@@ -15,6 +15,10 @@ metadata. Replace only their final result conversion:
 use mcp_toolkit_server::response::{compact_result, ResponseLimits, ToolOutcome};
 
 // Select this variant from the same domain outcome that builds the envelope.
+let safe_error_envelope = serde_json::json!({
+    "ok": false,
+    "error": {"code": "RESOURCE_UNAVAILABLE"}
+});
 let outcome = ToolOutcome::Error(safe_error_envelope);
 let result = compact_result(
     outcome,
