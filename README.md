@@ -62,7 +62,7 @@ not part of this canonical Sedna Labs package family.
 | `mcp-toolkit-policy-conformance` / `mcp-toolkit-policy-ffi` / `mcp-toolkit-policy-kernel-adapters` | Policy conformance, optional FFI loading, and compatibility adapters. |
 | `mcp-toolkit-postgres` | PostgreSQL connection, TLS, and target-identity helpers. |
 | `mcp-toolkit-private-artifact` | Descriptor-bound, bounded reads of private local artifacts. |
-| `mcp-toolkit-process` | Process and signal helpers. |
+| `mcp-toolkit-process` | Process supervision, signals, and [bounded output capture](docs/bounded-process-capture.md). |
 | `mcp-toolkit-scratchpad` | Optional DuckDB-backed sessions and bounded read-only SQL. |
 | `mcp-toolkit-tasks` | Principal-bound authority and observation around RMCP's native Tasks implementation. |
 | `mcp-toolkit-server` | Optional stdio and hosted HTTP server composition. |
