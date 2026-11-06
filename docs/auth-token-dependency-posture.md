@@ -69,6 +69,7 @@ Auth/token mechanics must follow these rules:
 | Outbound DPoP P-256 key generation | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Narrow `p256` production boundary | Generate P-256 key material only; use `jsonwebtoken` for JWK extraction, thumbprints, compact JWS encoding, and ES256 signing. Do not expand this boundary into proof verification or bespoke JOSE parsing. |
 | Test-only P-256 proof fixtures | `crates/mcp-toolkit-auth/src/internal_tests.rs` and integration tests | `p256` test use | Real signed DPoP fixtures only; production verification remains exclusively in `dpop-verifier`. |
 | RFC 8693 token exchange client | `crates/mcp-toolkit-auth/src/outbound_dpop.rs` | Crate-backed HTTP, JOSE, URL, and typed local glue | Use the explicit exact-endpoint trust policy, typed bearer subject, no-redirect/no-ambient-proxy client, bounded nonce stores, one nonce retry, and provider-backed binding metadata documented in `docs/design/outbound-dpop-token-exchange.md`. |
+| ChatGPT webhook signing and JSON callback verification | `crates/mcp-toolkit-http/src/chatgpt_events.rs` | Crate-backed signing and bounded local wire glue | Use `standardwebhooks` for Standard Webhooks signatures and `subtle` for fixed-length nonce echo comparison. Reuse core secret validation. No network, clock reads, key custody, dispatch, rotation policy, durable single-use state or activation. |
 
 ## No-Go Patterns
 

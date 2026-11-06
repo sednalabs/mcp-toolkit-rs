@@ -74,7 +74,8 @@ jobs:
             needs_build_cache: true
             verify_cmd: |
               cargo package --package mcp-toolkit-http --list
-              cargo package --package mcp-toolkit-http
+              # Cargo stages the unpublished workspace dependency in this invocation.
+              cargo package --package mcp-toolkit-core --package mcp-toolkit-http --features mcp-toolkit-http/chatgpt-events
           - name: mcp-toolkit-scratchpad
             needs_build_cache: false
             verify_cmd: cargo package --package mcp-toolkit-scratchpad --list

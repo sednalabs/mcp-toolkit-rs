@@ -36,6 +36,9 @@
 //! ## References
 //! * [Model Context Protocol Specification](https://modelcontextprotocol.io/specification)
 
+#[cfg(feature = "chatgpt-events")]
+pub mod chatgpt_events;
+
 pub mod host;
 pub mod oauth;
 
