@@ -878,11 +878,12 @@ fn parse_uri_dsn(dsn: &str) -> Result<ParsedDsn, PostgresTransportError> {
         None => PgTlsMode::Disable,
     };
 
-    let ssl_root_cert = unique_param_value_from_pairs(&params, "sslrootcert")?
-        .and_then(|value| (!value.trim().is_empty()).then_some(value));
+    let raw_root_cert = unique_param_value_from_pairs(&params, "sslrootcert")?;
+    let has_root_cert = raw_root_cert.is_some();
+    let ssl_root_cert = raw_root_cert.and_then(|value| (!value.trim().is_empty()).then_some(value));
 
-    let connect_dsn = if matches!(tls_mode, PgTlsMode::Verified) {
-        rewrite_uri_sslmode_to_require(dsn, &params)?
+    let connect_dsn = if matches!(tls_mode, PgTlsMode::Verified) || has_root_cert {
+        rewrite_uri_transport_params(dsn, &params, tls_mode)?
     } else {
         dsn.to_string()
     };
@@ -894,9 +895,10 @@ fn parse_uri_dsn(dsn: &str) -> Result<ParsedDsn, PostgresTransportError> {
     })
 }
 
-fn rewrite_uri_sslmode_to_require(
+fn rewrite_uri_transport_params(
     dsn: &str,
     params: &[(String, String)],
+    tls_mode: PgTlsMode,
 ) -> Result<String, PostgresTransportError> {
     let (base, _) = dsn.split_once('?').ok_or_else(|| {
         PostgresTransportError::invalid_dsn(
@@ -908,7 +910,12 @@ fn rewrite_uri_sslmode_to_require(
     let mut replaced_sslmode = false;
 
     for (name, value) in params {
-        if name.eq_ignore_ascii_case("sslmode") {
+        // The TLS connector consumes this option; tokio-postgres rejects it.
+        // Uniqueness was validated before removing it from the driver DSN.
+        if name.eq_ignore_ascii_case("sslrootcert") {
+            continue;
+        }
+        if name.eq_ignore_ascii_case("sslmode") && matches!(tls_mode, PgTlsMode::Verified) {
             serializer.append_pair(name, "require");
             replaced_sslmode = true;
         } else {
@@ -916,7 +923,7 @@ fn rewrite_uri_sslmode_to_require(
         }
     }
 
-    if !replaced_sslmode {
+    if matches!(tls_mode, PgTlsMode::Verified) && !replaced_sslmode {
         return Err(PostgresTransportError::invalid_dsn(
             "verified sslmode is missing from URI query",
         ));
@@ -946,13 +953,19 @@ fn parse_keyword_dsn(dsn: &str) -> Result<ParsedDsn, PostgresTransportError> {
         None => PgTlsMode::Disable,
     };
 
-    let ssl_root_cert = unique_param_value_from_conninfo(&params, "sslrootcert")?
-        .and_then(|value| (!value.trim().is_empty()).then_some(value));
+    let raw_root_cert = unique_param_value_from_conninfo(&params, "sslrootcert")?;
+    let has_root_cert = raw_root_cert.is_some();
+    let ssl_root_cert = raw_root_cert.and_then(|value| (!value.trim().is_empty()).then_some(value));
 
-    let connect_dsn = if matches!(tls_mode, PgTlsMode::Verified) {
-        for param in &mut params {
-            if param.key.eq_ignore_ascii_case("sslmode") {
-                param.value = "require".to_string();
+    // Preserve the validated root path for the TLS connector, but never pass
+    // toolkit-only options to the tokio-postgres connection-string parser.
+    params.retain(|param| !param.key.eq_ignore_ascii_case("sslrootcert"));
+    let connect_dsn = if matches!(tls_mode, PgTlsMode::Verified) || has_root_cert {
+        if matches!(tls_mode, PgTlsMode::Verified) {
+            for param in &mut params {
+                if param.key.eq_ignore_ascii_case("sslmode") {
+                    param.value = "require".to_string();
+                }
             }
         }
         serialize_keyword_conninfo(&params)
@@ -1521,6 +1534,58 @@ mod tests {
             config.ssl_root_cert.as_deref(),
             Some("/etc/ssl/certs/ca.pem")
         );
+    }
+
+    #[test]
+    fn root_cert_is_retained_for_tls_but_removed_from_driver_dsn_in_every_mode() {
+        for mode in ["disable", "require", "prefer", "verify-ca", "verify-full"] {
+            for dsn in [
+                format!("postgresql://user@localhost/example?sslmode={mode}&sslrootcert=%2Ftmp%2Fcustom%20ca.pem&application_name=rootcert-test"),
+                format!("host=localhost user=user dbname=example sslmode={mode} sslrootcert='/tmp/custom ca.pem' application_name=rootcert-test"),
+            ] {
+                let config = PgConnectionConfig::from_dsn(&dsn).expect("valid DSN");
+                assert_eq!(config.ssl_root_cert.as_deref(), Some("/tmp/custom ca.pem"));
+                assert_eq!(config.normalized_dsn(), dsn);
+                let driver = config.connect_dsn.parse::<tokio_postgres::Config>()
+                    .expect("toolkit-only sslrootcert must not reach the driver parser");
+                assert_eq!(driver.get_application_name(), Some("rootcert-test"));
+                let expected_mode = match mode {
+                    "disable" => tokio_postgres::config::SslMode::Disable,
+                    "prefer" => tokio_postgres::config::SslMode::Prefer,
+                    _ => tokio_postgres::config::SslMode::Require,
+                };
+                assert_eq!(driver.get_ssl_mode(), expected_mode);
+            }
+        }
+    }
+
+    #[test]
+    fn root_cert_removal_preserves_default_mode_and_handles_empty_or_mixed_case_option() {
+        for dsn in [
+            "postgresql://localhost/example?sslrootcert=",
+            "postgresql://localhost/example?SSLROOTCERT=%2Ftmp%2Fca.pem",
+            "host=localhost dbname=example sslrootcert=''",
+            "host=localhost dbname=example SSLROOTCERT='/tmp/ca.pem'",
+        ] {
+            let config = PgConnectionConfig::from_dsn(dsn).expect("valid DSN");
+            assert_eq!(config.tls_mode(), PgTlsMode::Disable);
+            config
+                .connect_dsn
+                .parse::<tokio_postgres::Config>()
+                .expect("driver DSN does not contain toolkit-only options");
+        }
+    }
+
+    #[test]
+    fn duplicate_root_cert_is_rejected_before_driver_parameter_removal() {
+        for mode in ["disable", "require", "prefer", "verify-ca", "verify-full"] {
+            for dsn in [
+                format!("postgresql://localhost/example?sslmode={mode}&sslrootcert=%2Ftmp%2Fa.pem&SSLROOTCERT=%2Ftmp%2Fb.pem"),
+                format!("host=localhost dbname=example sslmode={mode} sslrootcert=/tmp/a.pem SSLROOTCERT=/tmp/b.pem"),
+            ] {
+                assert!(PgConnectionConfig::from_dsn(&dsn).is_err(), "ambiguous roots must fail closed");
+            }
+        }
     }
 
     #[test]
