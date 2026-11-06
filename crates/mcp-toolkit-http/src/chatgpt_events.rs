@@ -570,12 +570,23 @@ mod tests {
         })
     }
 
-    fn pending() -> PendingChallenge {
-        PendingChallenge::new("verify_1", [7; CHALLENGE_NONCE_BYTES], NOW, NOW + 30).unwrap()
+    fn fresh_nonce() -> [u8; CHALLENGE_NONCE_BYTES] {
+        let mut bytes = [0; CHALLENGE_NONCE_BYTES];
+        getrandom::fill(&mut bytes).unwrap();
+        bytes
     }
 
-    fn echo() -> Vec<u8> {
-        serde_json::to_vec(&json!({"challenge": URL_SAFE_NO_PAD.encode([7; 32])})).unwrap()
+    fn pending(nonce: [u8; CHALLENGE_NONCE_BYTES]) -> PendingChallenge {
+        PendingChallenge::new("verify_1", nonce, NOW, NOW + 30).unwrap()
+    }
+
+    fn echo(nonce: &[u8; CHALLENGE_NONCE_BYTES]) -> Vec<u8> {
+        serde_json::to_vec(&json!({"challenge": URL_SAFE_NO_PAD.encode(nonce)})).unwrap()
+    }
+
+    fn verify_echo(status: StatusCode, time: i64) -> Result<(), WebhookPreparationError> {
+        let nonce = fresh_nonce();
+        pending(nonce).verify(status, &echo(&nonce), time)
     }
 
     #[test]
@@ -762,7 +773,7 @@ mod tests {
                 Err(WebhookPreparationError::InvalidIdentifier)
             ));
             assert!(matches!(
-                PendingChallenge::new(id, [7; 32], NOW, NOW + 1),
+                PendingChallenge::new(id, fresh_nonce(), NOW, NOW + 1),
                 Err(WebhookPreparationError::InvalidIdentifier)
             ));
         }
@@ -842,20 +853,21 @@ mod tests {
         assert_eq!(format!("{signer:?}"), "WebhookSigner { .. }");
         assert_eq!(format!("{body:?}"), "PreparedWebhook { .. }");
         assert_eq!(format!("{signed:?}"), "SignedWebhook { .. }");
-        assert_eq!(format!("{:?}", pending()), "PendingChallenge { .. }");
+        assert_eq!(format!("{:?}", pending(fresh_nonce())), "PendingChallenge { .. }");
         assert!(!format!("{:?}", signed.headers())
             .contains(signed.headers()["webhook-signature"].to_str().unwrap()));
     }
 
     #[test]
     fn challenge_body_has_json_verification_contract_and_valid_signature() {
-        let pending = pending();
+        let nonce = fresh_nonce();
+        let pending = pending(nonce);
         let signer = WebhookSigner::new(SECRET, None).unwrap();
         let signed = pending.sign(&signer, "sub_1", NOW + 1).unwrap();
         let decoded: Value = serde_json::from_slice(signed.body()).unwrap();
         assert_eq!(
             decoded,
-            json!({"type": "verification", "challenge": URL_SAFE_NO_PAD.encode([7; 32])})
+            json!({"type": "verification", "challenge": URL_SAFE_NO_PAD.encode(nonce)})
         );
         assert_eq!(signed.headers()["webhook-id"], "verify_1");
         assert_eq!(
@@ -865,43 +877,41 @@ mod tests {
                 .sign("verify_1", NOW + 1, signed.body())
                 .unwrap()
         );
-        pending.verify(StatusCode::OK, &echo(), NOW + 1).unwrap();
+        pending.verify(StatusCode::OK, &echo(&nonce), NOW + 1).unwrap();
     }
 
     #[test]
     fn challenge_accepts_only_success_and_explicit_validity_interval() {
         for status in [200, 201, 204, 299] {
-            assert!(pending()
-                .verify(StatusCode::from_u16(status).unwrap(), &echo(), NOW)
-                .is_ok());
+            assert!(verify_echo(StatusCode::from_u16(status).unwrap(), NOW).is_ok());
         }
         for status in [100, 199, 300, 302, 400, 401, 500] {
             assert_eq!(
-                pending().verify(StatusCode::from_u16(status).unwrap(), &echo(), NOW),
+                verify_echo(StatusCode::from_u16(status).unwrap(), NOW),
                 Err(WebhookPreparationError::UnsuccessfulResponse)
             );
         }
-        assert!(pending().verify(StatusCode::OK, &echo(), NOW + 29).is_ok());
+        assert!(verify_echo(StatusCode::OK, NOW + 29).is_ok());
         let signer = WebhookSigner::new(SECRET, None).unwrap();
         for time in [NOW - 1, NOW + 30, i64::MIN, i64::MAX] {
             assert_eq!(
-                pending().verify(StatusCode::OK, &echo(), time),
+                verify_echo(StatusCode::OK, time),
                 Err(WebhookPreparationError::ChallengeExpired)
             );
             assert!(matches!(
-                pending().sign(&signer, "sub_1", time),
+                pending(fresh_nonce()).sign(&signer, "sub_1", time),
                 Err(WebhookPreparationError::ChallengeExpired)
             ));
         }
         for deadline in [NOW - 1, NOW] {
             assert!(matches!(
-                PendingChallenge::new("v_1", [7; 32], NOW, deadline),
+                PendingChallenge::new("v_1", fresh_nonce(), NOW, deadline),
                 Err(WebhookPreparationError::InvalidChallengeLifetime)
             ));
         }
         for (issued, deadline) in [(-1, NOW), (NOW, i64::MAX)] {
             assert!(matches!(
-                PendingChallenge::new("v_1", [7; 32], issued, deadline),
+                PendingChallenge::new("v_1", fresh_nonce(), issued, deadline),
                 Err(WebhookPreparationError::InvalidTimestamp)
             ));
         }
@@ -909,7 +919,10 @@ mod tests {
 
     #[test]
     fn challenge_rejects_bad_shape_duplicate_trailing_and_wrong_values() {
-        let challenge = URL_SAFE_NO_PAD.encode([7; 32]);
+        let nonce = fresh_nonce();
+        let challenge = URL_SAFE_NO_PAD.encode(nonce);
+        let mut wrong = nonce;
+        wrong[0] ^= 1;
         for response in [
             "null".to_owned(),
             "{}".to_owned(),
@@ -924,50 +937,58 @@ mod tests {
             format!("{{\"challenge\":\"{challenge}\",\"challenge\":\"{challenge}\"}}"),
             format!("{{\"challenge\":\"{challenge}\",\"extra\":true}}"),
             format!("{{\"challenge\":\"{challenge}\"}} {{}}"),
-            format!("{{\"challenge\":\"{}\"}}", URL_SAFE_NO_PAD.encode([8; 32])),
+            format!("{{\"challenge\":\"{}\"}}", URL_SAFE_NO_PAD.encode(wrong)),
             format!("{{\"challenge\":\"{challenge}x\"}}"),
         ] {
             assert_eq!(
-                pending().verify(StatusCode::OK, response.as_bytes(), NOW),
+                pending(nonce).verify(StatusCode::OK, response.as_bytes(), NOW),
                 Err(WebhookPreparationError::InvalidChallengeResponse)
             );
         }
         assert_eq!(
-            pending().verify(StatusCode::OK, &[0xff], NOW),
+            pending(fresh_nonce()).verify(StatusCode::OK, &[0xff], NOW),
             Err(WebhookPreparationError::InvalidChallengeResponse)
         );
     }
 
     #[test]
     fn response_budget_accepts_exact_boundary_and_rejects_one_over() {
-        let mut response = echo();
-        response.resize(MAX_CHALLENGE_RESPONSE_BYTES, b' ');
-        assert!(pending().verify(StatusCode::OK, &response, NOW).is_ok());
-        response.push(b' ');
-        assert_eq!(
-            pending().verify(StatusCode::OK, &response, NOW),
-            Err(WebhookPreparationError::InvalidChallengeResponse)
-        );
+        for length in [MAX_CHALLENGE_RESPONSE_BYTES, MAX_CHALLENGE_RESPONSE_BYTES + 1] {
+            let nonce = fresh_nonce();
+            let mut response = echo(&nonce);
+            response.resize(length, b' ');
+            let result = pending(nonce).verify(StatusCode::OK, &response, NOW);
+            if length == MAX_CHALLENGE_RESPONSE_BYTES {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result, Err(WebhookPreparationError::InvalidChallengeResponse));
+            }
+        }
     }
 
     #[test]
-    fn deterministic_fuzz_of_challenge_parser_and_consuming_verifier() {
+    fn deterministic_fuzz_of_challenge_json_parser() {
         let mut state = 13_u64;
         let mut next = || {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
             (state >> 32) as usize
         };
         let check = |bytes: &[u8]| {
-            if pending().verify(StatusCode::OK, bytes, NOW).is_ok() {
+            if let Ok(parsed) = parse_echo(bytes) {
                 let value: Value = serde_json::from_slice(bytes).unwrap();
-                assert_eq!(value, json!({"challenge": URL_SAFE_NO_PAD.encode([7; 32])}));
-                assert!(bytes.len() <= MAX_CHALLENGE_RESPONSE_BYTES);
+                assert_eq!(value, json!({"challenge": parsed.challenge}));
             }
         };
         for length in 0..512 {
             check(&(0..length).map(|_| next() as u8).collect::<Vec<_>>());
         }
-        let seed = echo();
+        // Fixed parser corpus only; public challenge construction above uses
+        // fresh OS entropy and verifies echoes derived from that same nonce.
+        let seed = serde_json::to_vec(&json!({
+            "challenge": URL_SAFE_NO_PAD.encode([7; CHALLENGE_NONCE_BYTES])
+        }))
+        .unwrap();
+        assert!(parse_echo(&seed).is_ok());
         check(&seed);
         for _ in 0..4096 {
             let mut bytes = seed.clone();
