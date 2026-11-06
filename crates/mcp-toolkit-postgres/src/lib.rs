@@ -878,12 +878,10 @@ fn parse_uri_dsn(dsn: &str) -> Result<ParsedDsn, PostgresTransportError> {
         None => PgTlsMode::Disable,
     };
 
-    let ssl_root_cert = unique_param_value_from_pairs(&params, "sslrootcert")?
-        .and_then(|value| (!value.trim().is_empty()).then_some(value));
+    let raw_root_cert = unique_param_value_from_pairs(&params, "sslrootcert")?;
+    let has_root_cert = raw_root_cert.is_some();
+    let ssl_root_cert = raw_root_cert.and_then(|value| (!value.trim().is_empty()).then_some(value));
 
-    let has_root_cert = params
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("sslrootcert"));
     let connect_dsn = if matches!(tls_mode, PgTlsMode::Verified) || has_root_cert {
         rewrite_uri_transport_params(dsn, &params, tls_mode)?
     } else {
@@ -955,14 +953,12 @@ fn parse_keyword_dsn(dsn: &str) -> Result<ParsedDsn, PostgresTransportError> {
         None => PgTlsMode::Disable,
     };
 
-    let ssl_root_cert = unique_param_value_from_conninfo(&params, "sslrootcert")?
-        .and_then(|value| (!value.trim().is_empty()).then_some(value));
+    let raw_root_cert = unique_param_value_from_conninfo(&params, "sslrootcert")?;
+    let has_root_cert = raw_root_cert.is_some();
+    let ssl_root_cert = raw_root_cert.and_then(|value| (!value.trim().is_empty()).then_some(value));
 
     // Preserve the validated root path for the TLS connector, but never pass
     // toolkit-only options to the tokio-postgres connection-string parser.
-    let has_root_cert = params
-        .iter()
-        .any(|param| param.key.eq_ignore_ascii_case("sslrootcert"));
     params.retain(|param| !param.key.eq_ignore_ascii_case("sslrootcert"));
     let connect_dsn = if matches!(tls_mode, PgTlsMode::Verified) || has_root_cert {
         if matches!(tls_mode, PgTlsMode::Verified) {
