@@ -866,7 +866,9 @@ mod tests {
             check(&bytes);
         }
         let mut stop = request();
+        stop.as_object_mut().unwrap().remove("cursor");
         stop["delivery"].as_object_mut().unwrap().remove("secret");
+        assert!(SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&stop).unwrap()).is_ok());
         let seeds = [
             serde_json::to_vec(&request()).unwrap(),
             serde_json::to_vec(&stop).unwrap(),
