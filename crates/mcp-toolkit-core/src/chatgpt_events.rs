@@ -402,7 +402,23 @@ fn bounded_nonblank(value: &str, maximum: usize) -> bool {
     !value.trim().is_empty() && value.len() <= maximum
 }
 
-fn validate_signing_secret(secret: &str) -> Result<(), EventRequestError> {
+/// Validates the shared Standard Webhooks secret format without retaining it.
+///
+/// # Errors
+/// Rejects a missing `whsec_` prefix, malformed standard Base64, or decoded keys
+/// outside 24..=64 bytes. Errors never include secret contents.
+///
+/// # Security
+/// This checks format only, not entropy, ownership, authorization or custody.
+/// Do not log the input. The temporary decoded key is not guaranteed zeroized.
+///
+/// ```
+/// use mcp_toolkit_core::chatgpt_events::validate_signing_secret;
+/// validate_signing_secret("whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")?;
+/// assert!(validate_signing_secret("whsec_").is_err());
+/// # Ok::<(), mcp_toolkit_core::chatgpt_events::EventRequestError>(())
+/// ```
+pub fn validate_signing_secret(secret: &str) -> Result<(), EventRequestError> {
     let encoded = secret
         .strip_prefix("whsec_")
         .filter(|value| value.len() <= 88)
@@ -893,3 +909,4 @@ mod tests {
         }
     }
 }
+

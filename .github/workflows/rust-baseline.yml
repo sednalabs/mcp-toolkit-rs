@@ -74,6 +74,16 @@ jobs:
             workspaces: |
               . -> target
             command: cargo clippy --workspace --all-targets --all-features -- -D warnings
+          - target_name: chatgpt-events
+            phase_name: contracts
+            cache_key: chatgpt-events
+            workspaces: |
+              . -> target
+            command: |
+              cargo test --locked -p mcp-toolkit-http --no-default-features --features chatgpt-events --all-targets
+              cargo test --locked -p mcp-toolkit-http --no-default-features --features chatgpt-events --doc
+              cargo test --locked -p mcp-toolkit-core --doc
+              cargo check --locked -p mcp-toolkit-http --no-default-features
           - target_name: generated-servers
             phase_name: tests
             cache_key: generated-servers
@@ -139,6 +149,7 @@ jobs:
         # actions/checkout v6
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ matrix.lane.target_name == 'chatgpt-events' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -278,3 +289,4 @@ jobs:
             exit 1
           fi
           echo "Workflow runner policy, Rust baseline lanes and Git consumer passed."
+
