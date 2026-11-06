@@ -177,7 +177,10 @@ impl PreparedWebhook {
         )
     }
 
-    fn serialize(message_id: &str, value: &impl Serialize) -> Result<Self, WebhookPreparationError> {
+    fn serialize(
+        message_id: &str,
+        value: &impl Serialize,
+    ) -> Result<Self, WebhookPreparationError> {
         validate_identifier(message_id)?;
         let mut writer = BoundedBody::new();
         if serde_json::to_writer(&mut writer, value).is_err() {
@@ -220,7 +223,10 @@ impl PreparedWebhook {
         let mut headers = HeaderMap::with_capacity(5);
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert("webhook-id", header_value(&self.message_id)?);
-        headers.insert("webhook-timestamp", header_value(&unix_timestamp.to_string())?);
+        headers.insert(
+            "webhook-timestamp",
+            header_value(&unix_timestamp.to_string())?,
+        );
         let mut signature = header_value(&signature)?;
         signature.set_sensitive(true);
         headers.insert("webhook-signature", signature);
@@ -606,10 +612,13 @@ mod tests {
         assert_eq!(signed.headers()["webhook-timestamp"], NOW.to_string());
         assert_eq!(signed.headers()["x-mcp-subscription-id"], "sub_1");
         assert!(signed.headers()["webhook-signature"].is_sensitive());
-        Webhook::new(SECRET)
-            .unwrap()
-            .verify_with_timestamp(expected.as_bytes(), signed.headers(), NOW)
-            .unwrap();
+        assert_eq!(
+            signed.headers()["webhook-signature"],
+            Webhook::new(SECRET)
+                .unwrap()
+                .sign("evt_1", NOW, expected.as_bytes())
+                .unwrap()
+        );
         let decoded: Value = serde_json::from_slice(body.body()).unwrap();
         assert_eq!(decoded.as_object().unwrap().len(), 5);
         assert!(decoded.get("type").is_none());
@@ -624,20 +633,32 @@ mod tests {
         let retry = body.sign(&signer, "sub_1", NOW + 10).unwrap();
         assert!(std::ptr::eq(first.body(), retry.body()));
         assert_eq!(first.headers()["webhook-id"], retry.headers()["webhook-id"]);
-        assert_ne!(first.headers()["webhook-signature"], retry.headers()["webhook-signature"]);
-        assert_ne!(first.headers()["webhook-timestamp"], retry.headers()["webhook-timestamp"]);
-        Webhook::new(SECRET)
-            .unwrap()
-            .verify_with_timestamp(retry.body(), retry.headers(), NOW + 10)
-            .unwrap();
+        assert_ne!(
+            first.headers()["webhook-signature"],
+            retry.headers()["webhook-signature"]
+        );
+        assert_ne!(
+            first.headers()["webhook-timestamp"],
+            retry.headers()["webhook-timestamp"]
+        );
+        assert_eq!(
+            retry.headers()["webhook-signature"],
+            Webhook::new(SECRET)
+                .unwrap()
+                .sign("evt_1", NOW + 10, retry.body())
+                .unwrap()
+        );
     }
 
     #[test]
     fn rotation_signatures_each_verify_the_same_body() {
+        // The published verifier reads a clock. Only this interoperability test
+        // uses wall time; every toolkit preparation API takes explicit time.
+        let now = OffsetDateTime::now_utc().unix_timestamp();
         let previous = format!("whsec_{}", STANDARD.encode([9; 32]));
         let signer = WebhookSigner::new(SECRET, Some(&previous)).unwrap();
         let body = event(&Map::new()).unwrap();
-        let signed = body.sign(&signer, "sub_1", NOW).unwrap();
+        let signed = body.sign(&signer, "sub_1", now).unwrap();
         let signatures: Vec<_> = signed.headers()["webhook-signature"]
             .to_str()
             .unwrap()
@@ -646,10 +667,13 @@ mod tests {
         assert_eq!(signatures.len(), 2);
         for (secret, signature) in [SECRET, previous.as_str()].into_iter().zip(signatures) {
             let mut headers = signed.headers().clone();
-            headers.insert("webhook-signature", HeaderValue::from_str(signature).unwrap());
+            headers.insert(
+                "webhook-signature",
+                HeaderValue::from_str(signature).unwrap(),
+            );
             Webhook::new(secret)
                 .unwrap()
-                .verify_with_timestamp(signed.body(), &headers, NOW)
+                .verify(signed.body(), &headers)
                 .unwrap();
         }
     }
@@ -662,7 +686,9 @@ mod tests {
         assert_eq!(writer.bytes.len(), MAX_EVENT_BODY_BYTES);
         assert!(writer.exceeded);
         let mut writer = BoundedBody::new();
-        assert!(writer.write_all(&vec![0; MAX_EVENT_BODY_BYTES + 1]).is_err());
+        assert!(writer
+            .write_all(&vec![0; MAX_EVENT_BODY_BYTES + 1])
+            .is_err());
         assert!(writer.bytes.is_empty());
     }
 
@@ -670,12 +696,21 @@ mod tests {
     fn serialized_complete_body_limit_and_one_byte_over() {
         let mut data = json!({"text": ""}).as_object().unwrap().clone();
         let overhead = event(&data).unwrap().body().len();
-        data.insert("text".into(), json!("x".repeat(MAX_EVENT_BODY_BYTES - overhead)));
+        data.insert(
+            "text".into(),
+            json!("x".repeat(MAX_EVENT_BODY_BYTES - overhead)),
+        );
         assert_eq!(event(&data).unwrap().body().len(), MAX_EVENT_BODY_BYTES);
         data["text"] = json!("x".repeat(MAX_EVENT_BODY_BYTES - overhead + 1));
-        assert!(matches!(event(&data), Err(WebhookPreparationError::BodyTooLarge)));
+        assert!(matches!(
+            event(&data),
+            Err(WebhookPreparationError::BodyTooLarge)
+        ));
         data["text"] = json!("\n".repeat(MAX_EVENT_BODY_BYTES / 2));
-        assert!(matches!(event(&data), Err(WebhookPreparationError::BodyTooLarge)));
+        assert!(matches!(
+            event(&data),
+            Err(WebhookPreparationError::BodyTooLarge)
+        ));
     }
 
     #[test]
@@ -685,12 +720,18 @@ mod tests {
             assert!(WebhookSigner::new(&secret, Some(&secret)).is_ok());
         }
         for secret in [
-            "".to_owned(), "whsec_".to_owned(), "AAAA".to_owned(),
-            "whsec_!!!!".to_owned(), "whsec_private-marker".to_owned(),
+            "".to_owned(),
+            "whsec_".to_owned(),
+            "AAAA".to_owned(),
+            "whsec_!!!!".to_owned(),
+            "whsec_private-marker".to_owned(),
             format!("whsec_{}", STANDARD.encode([7; 23])),
             format!("whsec_{}", STANDARD.encode([7; 65])),
         ] {
-            for result in [WebhookSigner::new(&secret, None), WebhookSigner::new(SECRET, Some(&secret))] {
+            for result in [
+                WebhookSigner::new(&secret, None),
+                WebhookSigner::new(SECRET, Some(&secret)),
+            ] {
                 let error = result.unwrap_err();
                 assert_eq!(error, WebhookPreparationError::InvalidSigningSecret);
                 assert!(!error.to_string().contains("private-marker"));
@@ -702,16 +743,40 @@ mod tests {
     fn header_ids_reject_injection_whitespace_unicode_and_oversize() {
         let signer = WebhookSigner::new(SECRET, None).unwrap();
         let body = event(&Map::new()).unwrap();
-        for id in ["", " ", "foo bar", "a\r\nwebhook-id:x", "é", "a\t", "a\0", "a,b"] {
-            assert_eq!(validate_identifier(id), Err(WebhookPreparationError::InvalidIdentifier));
-            assert!(matches!(body.sign(&signer, id, NOW), Err(WebhookPreparationError::InvalidIdentifier)));
-            assert!(matches!(PendingChallenge::new(id, [7; 32], NOW, NOW + 1), Err(WebhookPreparationError::InvalidIdentifier)));
+        for id in [
+            "",
+            " ",
+            "foo bar",
+            "a\r\nwebhook-id:x",
+            "é",
+            "a\t",
+            "a\0",
+            "a,b",
+        ] {
+            assert_eq!(
+                validate_identifier(id),
+                Err(WebhookPreparationError::InvalidIdentifier)
+            );
+            assert!(matches!(
+                body.sign(&signer, id, NOW),
+                Err(WebhookPreparationError::InvalidIdentifier)
+            ));
+            assert!(matches!(
+                PendingChallenge::new(id, [7; 32], NOW, NOW + 1),
+                Err(WebhookPreparationError::InvalidIdentifier)
+            ));
         }
         assert!(validate_identifier("AZaz09-_.:").is_ok());
         assert!(validate_identifier(&"x".repeat(MAX_HEADER_ID_BYTES)).is_ok());
-        assert_eq!(validate_identifier(&"x".repeat(MAX_HEADER_ID_BYTES + 1)), Err(WebhookPreparationError::InvalidIdentifier));
+        assert_eq!(
+            validate_identifier(&"x".repeat(MAX_HEADER_ID_BYTES + 1)),
+            Err(WebhookPreparationError::InvalidIdentifier)
+        );
         for timestamp in [-1, i64::MIN, i64::MAX] {
-            assert!(matches!(body.sign(&signer, "sub_1", timestamp), Err(WebhookPreparationError::InvalidTimestamp)));
+            assert!(matches!(
+                body.sign(&signer, "sub_1", timestamp),
+                Err(WebhookPreparationError::InvalidTimestamp)
+            ));
         }
     }
 
@@ -719,27 +784,45 @@ mod tests {
     fn typed_event_validates_name_cursor_timestamp_and_id() {
         let data = Map::new();
         let valid = || EventEnvelope {
-            event_id: "evt_1", name: "item.changed",
+            event_id: "evt_1",
+            name: "item.changed",
             timestamp: OffsetDateTime::from_unix_timestamp(NOW).unwrap(),
-            data: &data, cursor: Some("opaque-cursor"),
+            data: &data,
+            cursor: Some("opaque-cursor"),
         };
         let mut input = valid();
         input.event_id = "invalid id";
-        assert!(matches!(PreparedWebhook::event(input), Err(WebhookPreparationError::InvalidIdentifier)));
+        assert!(matches!(
+            PreparedWebhook::event(input),
+            Err(WebhookPreparationError::InvalidIdentifier)
+        ));
         for name in ["".to_owned(), " \n".to_owned(), "é".repeat(129)] {
             let mut input = valid();
             input.name = &name;
-            assert!(matches!(PreparedWebhook::event(input), Err(WebhookPreparationError::InvalidEvent)));
+            assert!(matches!(
+                PreparedWebhook::event(input),
+                Err(WebhookPreparationError::InvalidEvent)
+            ));
         }
         let cursor = "x".repeat(4097);
         let mut input = valid();
         input.cursor = Some(&cursor);
-        assert!(matches!(PreparedWebhook::event(input), Err(WebhookPreparationError::InvalidEvent)));
+        assert!(matches!(
+            PreparedWebhook::event(input),
+            Err(WebhookPreparationError::InvalidEvent)
+        ));
         let mut input = valid();
-        input.timestamp = input.timestamp.to_offset(time::UtcOffset::from_hms(1, 2, 3).unwrap());
-        assert!(matches!(PreparedWebhook::event(input), Err(WebhookPreparationError::InvalidTimestamp)));
+        input.timestamp = input
+            .timestamp
+            .to_offset(time::UtcOffset::from_hms(1, 2, 3).unwrap());
+        assert!(matches!(
+            PreparedWebhook::event(input),
+            Err(WebhookPreparationError::InvalidTimestamp)
+        ));
         let mut input = valid();
-        input.timestamp = input.timestamp.to_offset(time::UtcOffset::from_hms(2, 0, 0).unwrap());
+        input.timestamp = input
+            .timestamp
+            .to_offset(time::UtcOffset::from_hms(2, 0, 0).unwrap());
         let body = PreparedWebhook::event(input).unwrap();
         let json: Value = serde_json::from_slice(body.body()).unwrap();
         assert!(json["timestamp"].as_str().unwrap().ends_with("+02:00"));
@@ -749,13 +832,19 @@ mod tests {
     #[test]
     fn debug_redacts_every_sensitive_wrapper() {
         let signer = WebhookSigner::new(SECRET, None).unwrap();
-        let body = event(json!({"private-marker":"private-body"}).as_object().unwrap()).unwrap();
+        let body = event(
+            json!({"private-marker":"private-body"})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
         let signed = body.sign(&signer, "sub_1", NOW).unwrap();
         assert_eq!(format!("{signer:?}"), "WebhookSigner { .. }");
         assert_eq!(format!("{body:?}"), "PreparedWebhook { .. }");
         assert_eq!(format!("{signed:?}"), "SignedWebhook { .. }");
         assert_eq!(format!("{:?}", pending()), "PendingChallenge { .. }");
-        assert!(!format!("{:?}", signed.headers()).contains(signed.headers()["webhook-signature"].to_str().unwrap()));
+        assert!(!format!("{:?}", signed.headers())
+            .contains(signed.headers()["webhook-signature"].to_str().unwrap()));
     }
 
     #[test]
@@ -764,31 +853,57 @@ mod tests {
         let signer = WebhookSigner::new(SECRET, None).unwrap();
         let signed = pending.sign(&signer, "sub_1", NOW + 1).unwrap();
         let decoded: Value = serde_json::from_slice(signed.body()).unwrap();
-        assert_eq!(decoded, json!({"type": "verification", "challenge": URL_SAFE_NO_PAD.encode([7; 32])}));
+        assert_eq!(
+            decoded,
+            json!({"type": "verification", "challenge": URL_SAFE_NO_PAD.encode([7; 32])})
+        );
         assert_eq!(signed.headers()["webhook-id"], "verify_1");
-        Webhook::new(SECRET).unwrap().verify_with_timestamp(signed.body(), signed.headers(), NOW + 1).unwrap();
+        assert_eq!(
+            signed.headers()["webhook-signature"],
+            Webhook::new(SECRET)
+                .unwrap()
+                .sign("verify_1", NOW + 1, signed.body())
+                .unwrap()
+        );
         pending.verify(StatusCode::OK, &echo(), NOW + 1).unwrap();
     }
 
     #[test]
     fn challenge_accepts_only_success_and_explicit_validity_interval() {
         for status in [200, 201, 204, 299] {
-            assert!(pending().verify(StatusCode::from_u16(status).unwrap(), &echo(), NOW).is_ok());
+            assert!(pending()
+                .verify(StatusCode::from_u16(status).unwrap(), &echo(), NOW)
+                .is_ok());
         }
         for status in [100, 199, 300, 302, 400, 401, 500] {
-            assert_eq!(pending().verify(StatusCode::from_u16(status).unwrap(), &echo(), NOW), Err(WebhookPreparationError::UnsuccessfulResponse));
+            assert_eq!(
+                pending().verify(StatusCode::from_u16(status).unwrap(), &echo(), NOW),
+                Err(WebhookPreparationError::UnsuccessfulResponse)
+            );
         }
         assert!(pending().verify(StatusCode::OK, &echo(), NOW + 29).is_ok());
         let signer = WebhookSigner::new(SECRET, None).unwrap();
         for time in [NOW - 1, NOW + 30, i64::MIN, i64::MAX] {
-            assert_eq!(pending().verify(StatusCode::OK, &echo(), time), Err(WebhookPreparationError::ChallengeExpired));
-            assert!(matches!(pending().sign(&signer, "sub_1", time), Err(WebhookPreparationError::ChallengeExpired)));
+            assert_eq!(
+                pending().verify(StatusCode::OK, &echo(), time),
+                Err(WebhookPreparationError::ChallengeExpired)
+            );
+            assert!(matches!(
+                pending().sign(&signer, "sub_1", time),
+                Err(WebhookPreparationError::ChallengeExpired)
+            ));
         }
         for deadline in [NOW - 1, NOW] {
-            assert!(matches!(PendingChallenge::new("v_1", [7; 32], NOW, deadline), Err(WebhookPreparationError::InvalidChallengeLifetime)));
+            assert!(matches!(
+                PendingChallenge::new("v_1", [7; 32], NOW, deadline),
+                Err(WebhookPreparationError::InvalidChallengeLifetime)
+            ));
         }
         for (issued, deadline) in [(-1, NOW), (NOW, i64::MAX)] {
-            assert!(matches!(PendingChallenge::new("v_1", [7; 32], issued, deadline), Err(WebhookPreparationError::InvalidTimestamp)));
+            assert!(matches!(
+                PendingChallenge::new("v_1", [7; 32], issued, deadline),
+                Err(WebhookPreparationError::InvalidTimestamp)
+            ));
         }
     }
 
@@ -796,10 +911,15 @@ mod tests {
     fn challenge_rejects_bad_shape_duplicate_trailing_and_wrong_values() {
         let challenge = URL_SAFE_NO_PAD.encode([7; 32]);
         for response in [
-            "null".to_owned(), "{}".to_owned(), "[]".to_owned(),
-            format!("[\"{challenge}\"]"), format!("\"{challenge}\""),
-            "{\"challenge\":null}".to_owned(), "{\"challenge\":42}".to_owned(),
-            "{\"challenge\":{}}".to_owned(), "{\"challenge\":[]}".to_owned(),
+            "null".to_owned(),
+            "{}".to_owned(),
+            "[]".to_owned(),
+            format!("[\"{challenge}\"]"),
+            format!("\"{challenge}\""),
+            "{\"challenge\":null}".to_owned(),
+            "{\"challenge\":42}".to_owned(),
+            "{\"challenge\":{}}".to_owned(),
+            "{\"challenge\":[]}".to_owned(),
             "{\"challenge\":\"short\"}".to_owned(),
             format!("{{\"challenge\":\"{challenge}\",\"challenge\":\"{challenge}\"}}"),
             format!("{{\"challenge\":\"{challenge}\",\"extra\":true}}"),
@@ -807,9 +927,15 @@ mod tests {
             format!("{{\"challenge\":\"{}\"}}", URL_SAFE_NO_PAD.encode([8; 32])),
             format!("{{\"challenge\":\"{challenge}x\"}}"),
         ] {
-            assert_eq!(pending().verify(StatusCode::OK, response.as_bytes(), NOW), Err(WebhookPreparationError::InvalidChallengeResponse));
+            assert_eq!(
+                pending().verify(StatusCode::OK, response.as_bytes(), NOW),
+                Err(WebhookPreparationError::InvalidChallengeResponse)
+            );
         }
-        assert_eq!(pending().verify(StatusCode::OK, &[0xff], NOW), Err(WebhookPreparationError::InvalidChallengeResponse));
+        assert_eq!(
+            pending().verify(StatusCode::OK, &[0xff], NOW),
+            Err(WebhookPreparationError::InvalidChallengeResponse)
+        );
     }
 
     #[test]
@@ -818,7 +944,10 @@ mod tests {
         response.resize(MAX_CHALLENGE_RESPONSE_BYTES, b' ');
         assert!(pending().verify(StatusCode::OK, &response, NOW).is_ok());
         response.push(b' ');
-        assert_eq!(pending().verify(StatusCode::OK, &response, NOW), Err(WebhookPreparationError::InvalidChallengeResponse));
+        assert_eq!(
+            pending().verify(StatusCode::OK, &response, NOW),
+            Err(WebhookPreparationError::InvalidChallengeResponse)
+        );
     }
 
     #[test]
@@ -846,7 +975,9 @@ mod tests {
                 let index = next() % (bytes.len() + 1);
                 match next() % 4 {
                     0 if index < bytes.len() => bytes[index] = next() as u8,
-                    1 if index < bytes.len() => { bytes.remove(index); }
+                    1 if index < bytes.len() => {
+                        bytes.remove(index);
+                    }
                     2 => bytes.insert(index, next() as u8),
                     _ => bytes.truncate(index),
                 }

@@ -17,6 +17,8 @@ server can grant finite lifetimes to all three without accidentally treating
 null as the default at parse time. The request budget is a local policy limit,
 not the separate 256 KiB event delivery limit.
 
+The optional HTTP `chatgpt-events` feature adds [bounded webhook preparation](chatgpt-webhook-preparation.md): immutable event bytes, Standard Webhooks signing and a consuming JSON callback challenge verifier. It reuses core secret validation and keeps all I/O and lifecycle authority in the application.
+
 ## Server responsibilities
 
 The module performs no I/O or persistence. The server still must:
