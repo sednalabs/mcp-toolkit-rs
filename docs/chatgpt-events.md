@@ -46,3 +46,10 @@ This helper does not register `events/list`, `events/subscribe` or
 live ChatGPT acceptance. The [OpenAI integration guide](https://developers.openai.com/plugins/build/mcp-events)
 is the current integration contract. Its webhook subset is distinct from MCP
 resource subscriptions and the broader experimental Events proposal.
+
+## Qualification
+
+The request parser tests include reproducible arbitrary-byte and valid-corpus
+mutation fuzzing for both subscribe and unsubscribe paths, plus explicit budget,
+nesting, field-shape, identity and lifetime boundary cases. This bounded fuzz pass
+runs in ordinary cargo tests; it is not a sustained coverage-guided campaign.

@@ -727,16 +727,56 @@ mod tests {
     }
 
     #[test]
-    fn bounded_arbitrary_bytes_do_not_panic_or_echo_input() {
-        let mut state = 7_u64;
-        for length in 0..512 {
-            let mut bytes = Vec::with_capacity(length);
-            for _ in 0..length {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                bytes.push((state >> 32) as u8);
+    fn deterministic_mutation_fuzz_keeps_both_parsers_bounded() {
+        fn check(bytes: &[u8]) {
+            if let Ok(parsed) = WebhookSubscribeRequest::parse(bytes) {
+                assert_eq!(format!("{parsed:?}"), "WebhookSubscribeRequest { .. }");
+                assert_eq!(
+                    parsed.key().subscription_id("issuer:principal"),
+                    parsed.clone().key().subscription_id("issuer:principal")
+                );
             }
-            let _ = WebhookSubscribeRequest::parse(&bytes);
-            let _ = SubscriptionKey::parse_unsubscribe(&bytes);
+            if let Ok(parsed) = SubscriptionKey::parse_unsubscribe(bytes) {
+                assert_eq!(format!("{parsed:?}"), "SubscriptionKey { .. }");
+                assert_eq!(
+                    parsed.subscription_id("issuer:principal"),
+                    parsed.clone().subscription_id("issuer:principal")
+                );
+            }
+        }
+
+        let mut state = 7_u64;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 32) as usize
+        };
+        for length in 0..512 {
+            let bytes: Vec<u8> = (0..length).map(|_| next() as u8).collect();
+            check(&bytes);
+        }
+        let mut stop = request();
+        stop["delivery"].as_object_mut().unwrap().remove("secret");
+        let seeds = [
+            serde_json::to_vec(&request()).unwrap(),
+            serde_json::to_vec(&stop).unwrap(),
+        ];
+        for seed in seeds {
+            check(&seed);
+            for _ in 0..4096 {
+                let mut bytes = seed.clone();
+                for _ in 0..1 + next() % 8 {
+                    let index = next() % (bytes.len() + 1);
+                    match next() % 4 {
+                        0 if index < bytes.len() => bytes[index] = next() as u8,
+                        1 if index < bytes.len() => {
+                            bytes.remove(index);
+                        }
+                        2 => bytes.insert(index, next() as u8),
+                        _ => bytes.truncate(index),
+                    }
+                }
+                check(&bytes);
+            }
         }
     }
 }
