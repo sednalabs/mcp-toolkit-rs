@@ -2349,6 +2349,7 @@ dependencies = [
 name = "mcp-toolkit-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "rmcp",
  "serde",
  "serde_json",
