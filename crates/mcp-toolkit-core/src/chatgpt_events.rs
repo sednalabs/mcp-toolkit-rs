@@ -767,11 +767,7 @@ mod tests {
     fn requests_and_delivery_require_objects_not_positional_arrays() {
         let subscribe = request();
         let delivery = &subscribe["delivery"];
-        let subscribe_delivery = json!([
-            delivery["mode"],
-            delivery["url"],
-            delivery["secret"]
-        ]);
+        let subscribe_delivery = json!([delivery["mode"], delivery["url"], delivery["secret"]]);
         let stop_delivery = json!([delivery["mode"], delivery["url"]]);
         let mut malformed = subscribe.clone();
         malformed["delivery"] = subscribe_delivery.clone();
@@ -807,12 +803,7 @@ mod tests {
             Err(EventRequestError::InvalidRequest)
         ));
         for delivery_value in [stop["delivery"].clone(), stop_delivery] {
-            let positional = json!([
-                stop["name"],
-                stop["arguments"],
-                delivery_value,
-                null
-            ]);
+            let positional = json!([stop["name"], stop["arguments"], delivery_value, null]);
             assert!(matches!(
                 SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&positional).unwrap()),
                 Err(EventRequestError::InvalidRequest)
@@ -822,19 +813,27 @@ mod tests {
 
     #[test]
     fn object_decoding_rejects_trailing_values_and_duplicate_delivery_fields() {
-        let valid = serde_json::to_string(&request()).unwrap();
-        for malformed in [
-            format!("{valid} {{}}"),
-            valid.replacen(
-                "\"mode\":\"webhook\"",
-                "\"mode\":\"webhook\",\"mode\":\"webhook\"",
-                1,
-            ),
-        ] {
-            assert!(matches!(
-                WebhookSubscribeRequest::parse(malformed.as_bytes()),
-                Err(EventRequestError::InvalidRequest)
-            ));
+        let mut stop = request();
+        stop.as_object_mut().unwrap().remove("cursor");
+        stop["delivery"].as_object_mut().unwrap().remove("secret");
+        assert!(SubscriptionKey::parse_unsubscribe(&serde_json::to_vec(&stop).unwrap()).is_ok());
+        for (value, is_subscribe) in [(request(), true), (stop, false)] {
+            let valid = serde_json::to_string(&value).unwrap();
+            for malformed in [
+                format!("{valid} {{}}"),
+                valid.replacen(
+                    "\"mode\":\"webhook\"",
+                    "\"mode\":\"webhook\",\"mode\":\"webhook\"",
+                    1,
+                ),
+            ] {
+                let error = if is_subscribe {
+                    WebhookSubscribeRequest::parse(malformed.as_bytes()).err()
+                } else {
+                    SubscriptionKey::parse_unsubscribe(malformed.as_bytes()).err()
+                };
+                assert_eq!(error, Some(EventRequestError::InvalidRequest));
+            }
         }
     }
 
