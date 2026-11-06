@@ -716,7 +716,10 @@ mod tests {
             Err(EventRequestError::InvalidRequest)
         ));
         let nested = format!("{}0{}", "[".repeat(200), "]".repeat(200));
-        let nested = value.replace("\"arguments\":{", &format!("\"arguments\":{{\"deep\":{nested},"));
+        let nested = value.replace(
+            "\"arguments\":{",
+            &format!("\"arguments\":{{\"deep\":{nested},"),
+        );
         assert!(matches!(
             WebhookSubscribeRequest::parse(nested.as_bytes()),
             Err(EventRequestError::InvalidRequest)
