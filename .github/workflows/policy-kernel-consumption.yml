@@ -241,7 +241,7 @@ jobs:
       - name: Cache cargo artifacts
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
         # swatinem/rust-cache v2
-        uses: swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16
+        uses: swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31
         with:
           shared-key: policy-kernel-consumption-${{ runner.os }}
           cache-targets: true
@@ -349,7 +349,7 @@ jobs:
       - name: Upload consumption artifact
         if: ${{ always() }}
         # actions/upload-artifact v4
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: policy-kernel-consumption-${{ github.run_id }}
           if-no-files-found: warn
