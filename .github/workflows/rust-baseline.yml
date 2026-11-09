@@ -54,6 +54,9 @@ jobs:
       - name: Test dependency custody guards
         run: python3 -m unittest discover -s scripts -p "test_dependency_custody.py"
 
+      - name: Test webhook feature graph guard
+        run: python3 -m unittest discover -s scripts -p "test_webhook_unified_graph.py"
+
   rust-baseline-lane:
     name: Rust baseline / ${{ matrix.lane.target_name }} / ${{ matrix.lane.phase_name }}
     runs-on: ubuntu-24.04
@@ -94,6 +97,40 @@ jobs:
               cargo test --locked -p mcp-toolkit-http --no-default-features --features session-sqlite --all-targets
               cargo test --locked -p mcp-toolkit-http --no-default-features --features session-sqlite --doc
               cargo check --locked -p mcp-toolkit-http --no-default-features
+          - target_name: webhook-egress
+            phase_name: contracts
+            cache_key: webhook-egress
+            workspaces: |
+              . -> target
+            command: |
+              cargo test --locked -p mcp-toolkit-http --no-default-features --features webhook-egress --all-targets
+              cargo test --locked -p mcp-toolkit-http --no-default-features --features webhook-egress --doc
+              cargo check --locked -p mcp-toolkit-http --no-default-features
+          - target_name: webhook-egress-unified
+            phase_name: contracts
+            cache_key: webhook-egress-unified
+            workspaces: |
+              . -> target
+            command: |
+              git rev-parse HEAD > webhook-unified-source.txt
+              git ls-files -z -- crates/mcp-toolkit-http/src | xargs -0 sha256sum > webhook-unified-source-files.sha256
+              fixture="$RUNNER_TEMP/webhook-egress-unified"
+              mkdir -p "$fixture"
+              git archive HEAD | tar -x -C "$fixture"
+              cp "$fixture/crates/mcp-toolkit-http/Cargo.toml" webhook-unified-original-manifest.toml
+              python3 -c 'import sys; from pathlib import Path; p = Path(sys.argv[1]); s = p.read_text(); p.write_text(s.replace("[dev-dependencies]", "[dev-dependencies]\nreqwest = { version = \"0.13.5\", default-features = false, features = [\"gzip\", \"brotli\", \"zstd\", \"deflate\", \"native-tls\"] }"))' "$fixture/crates/mcp-toolkit-http/Cargo.toml"
+              cp "$fixture/crates/mcp-toolkit-http/Cargo.toml" webhook-unified-fixture-manifest.toml
+              (
+                cd "$fixture"
+                export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+                sha256sum --check "$GITHUB_WORKSPACE/webhook-unified-source-files.sha256"
+                cargo metadata --format-version 1 --manifest-path crates/mcp-toolkit-http/Cargo.toml --no-default-features --features webhook-egress > "$GITHUB_WORKSPACE/webhook-unified-metadata.json"
+                cp Cargo.lock "$GITHUB_WORKSPACE/webhook-unified-Cargo.lock"
+                cargo tree --locked --manifest-path crates/mcp-toolkit-http/Cargo.toml --no-default-features --features webhook-egress -e features > "$GITHUB_WORKSPACE/webhook-unified-features.txt"
+                python3 scripts/check_webhook_unified_graph.py --metadata "$GITHUB_WORKSPACE/webhook-unified-metadata.json" --lock Cargo.lock > "$GITHUB_WORKSPACE/webhook-unified-graph-proof.json"
+                cargo test --locked -p mcp-toolkit-http --no-default-features --features webhook-egress --lib webhook_egress
+              )
+              git diff --exit-code
           - target_name: generated-servers
             phase_name: tests
             cache_key: generated-servers
@@ -159,7 +196,7 @@ jobs:
         # actions/checkout v6
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ (matrix.lane.target_name == 'chatgpt-events' || matrix.lane.target_name == 'session-sqlite') && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ (matrix.lane.target_name == 'chatgpt-events' || matrix.lane.target_name == 'session-sqlite' || startsWith(matrix.lane.target_name, 'webhook-egress')) && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -235,6 +272,14 @@ jobs:
 
       - name: Run baseline lane
         run: ${{ matrix.lane.command }}
+
+      - name: Upload isolated feature-unification lock
+        if: ${{ always() && matrix.lane.target_name == 'webhook-egress-unified' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: webhook-egress-unified-lock
+          path: webhook-unified-*
+          if-no-files-found: error
 
   dpop-git-consumer:
     name: DPoP fresh Git consumer

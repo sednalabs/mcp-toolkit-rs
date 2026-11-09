@@ -39,6 +39,9 @@
 #[cfg(feature = "chatgpt-events")]
 pub mod chatgpt_events;
 
+#[cfg(feature = "webhook-egress")]
+pub mod webhook_egress;
+
 pub mod host;
 pub mod oauth;
 

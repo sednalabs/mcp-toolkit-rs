@@ -46,7 +46,9 @@ within `[issued_at, deadline)`, and a JSON object containing only the echoed
 wrong types/lengths and mismatches fail closed. Fixed-length comparison uses
 `subtle`. This is not Standard Webhooks' separate header-MAC verification flow.
 
-The caller must cap actual network reads, bind each response to the precise
+The optional [guarded HTTPS transport](webhook-egress.md) can send the signed
+attempt and cap actual network reads. The caller must still bind each response
+to the precise
 callback/principal/generation, consume durable single-use state, and authorize
 activation. The non-Clone pending value protects only one in-memory ownership
 flow. It cannot prevent a caller from recreating a challenge with reused entropy.
@@ -54,9 +56,10 @@ flow. It cannot prevent a caller from recreating a challenge with reused entropy
 ## Application boundary
 
 These helpers never connect, resolve DNS, read a clock, store secrets or state,
-activate subscriptions, acknowledge source events, dispatch or retry. The
-application owns HTTPS/public-address egress validation, connection-time DNS
-binding, redirect rejection, bounded network I/O, current access checks,
+activate subscriptions, acknowledge source events, dispatch or retry. Use the
+optional [guarded HTTPS transport](webhook-egress.md) for public-address
+egress checks, connection-time DNS binding, redirect rejection and bounded I/O.
+The application still owns current access checks,
 callback/principal binding, secure entropy, key custody, rotation eligibility,
 durable generations and checkpoints. A signature or successful echo alone
 confers no application authority.
