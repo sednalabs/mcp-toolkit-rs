@@ -445,7 +445,9 @@ mod tests {
         fn new() -> Self {
             let mut random = [0u8; 16];
             getrandom::fill(&mut random).expect("test database identifier");
-            let dir = std::env::temp_dir().join(format!(
+            // Keep fixture paths inside the checkout instead of trusting TMPDIR.
+            std::fs::create_dir_all(".tmp").expect("create test database root");
+            let dir = PathBuf::from(".tmp").join(format!(
                 "mcp-toolkit-sqlite-{:032x}",
                 u128::from_le_bytes(random)
             ));
