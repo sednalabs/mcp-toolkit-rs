@@ -23,6 +23,7 @@ question at hand.
 - [Compact tool results](compact-tool-results.md) and [bounded process capture](bounded-process-capture.md) — opt-in result budgets and supervised subprocess output, with explicit safety limits.
 - [Canonical JSON identity](canonical-json-identity.md) and [resource invalidation](resource-invalidation.md) — deterministic bytes and SDK-owned notification composition.
 - [Legacy-system adapter pattern](legacy-system-adapter-pattern.md) — safe integration of partial or legacy APIs.
+- [Container hardening](container-hardening.md) — optional consumer-owned multi-stage Docker, secret-exclusion and non-root hosted-smoke recipe; not a toolkit runtime or release gate.
 
 ## Security and policy adopters
 
