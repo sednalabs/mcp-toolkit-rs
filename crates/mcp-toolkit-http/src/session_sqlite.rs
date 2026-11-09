@@ -423,10 +423,10 @@ mod tests {
         configure_db, current_epoch_seconds, maybe_decrypt_payload, maybe_encrypt_payload,
         replay_events_sync, store_event_sync, ENC_PREFIX,
     };
+    use crate::session::{EventStoreConfig, EventStoreEncryption};
     use rusqlite::Connection;
     use std::path::PathBuf;
     use std::time::Duration;
-    use crate::session::{EventStoreConfig, EventStoreEncryption};
 
     fn config(encryption: Option<EventStoreEncryption>) -> EventStoreConfig {
         EventStoreConfig {
@@ -436,7 +436,6 @@ mod tests {
             encryption,
         }
     }
-
 
     // Each test owns its directory; dropping connections before this guard also
     // removes SQLite's WAL and shared-memory sidecars without racing other tests.
@@ -489,17 +488,42 @@ mod tests {
             let mut conn = database.open();
             configure_db(&mut conn).expect("configure database");
             for (seq, payload) in [(2, Some("second")), (1, Some("first")), (3, None)] {
-                store_event_sync(&mut conn, &config, "session|common", seq,
-                    &seq.to_string(), payload, 100).expect("persist event");
+                store_event_sync(
+                    &mut conn,
+                    &config,
+                    "session|common",
+                    seq,
+                    &seq.to_string(),
+                    payload,
+                    100,
+                )
+                .expect("persist event");
             }
-            store_event_sync(&mut conn, &config, "session|common", 2, "duplicate",
-                Some("replacement"), 101).expect("ignore duplicate event");
-            store_event_sync(&mut conn, &config, "other|common", 1, "other",
-                Some("isolated"), 102).expect("persist separate stream");
+            store_event_sync(
+                &mut conn,
+                &config,
+                "session|common",
+                2,
+                "duplicate",
+                Some("replacement"),
+                101,
+            )
+            .expect("ignore duplicate event");
+            store_event_sync(
+                &mut conn,
+                &config,
+                "other|common",
+                1,
+                "other",
+                Some("isolated"),
+                102,
+            )
+            .expect("persist separate stream");
         }
         let mut conn = database.open();
         configure_db(&mut conn).expect("reopen existing schema without migration");
-        let mode: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0))
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .expect("journal mode");
         assert_eq!(mode, "wal");
         let rows = replay_events_sync(&mut conn, &config, "session|common", 1)
@@ -520,19 +544,38 @@ mod tests {
         config.max_streams = 2;
         let now = current_epoch_seconds() as i64;
         for seq in 1..=3 {
-            store_event_sync(&mut conn, &config, "first", seq, &seq.to_string(),
-                Some("payload"), now - 120).expect("store event");
+            store_event_sync(
+                &mut conn,
+                &config,
+                "first",
+                seq,
+                &seq.to_string(),
+                Some("payload"),
+                now - 120,
+            )
+            .expect("store event");
         }
-        let rows = replay_events_sync(&mut conn, &config, "first", 0).expect("replay retained events");
-        assert_eq!(rows.iter().map(|row| row.event_id.as_str()).collect::<Vec<_>>(), ["2", "3"]);
+        let rows =
+            replay_events_sync(&mut conn, &config, "first", 0).expect("replay retained events");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["2", "3"]
+        );
         store_event_sync(&mut conn, &config, "second", 1, "second", None, now - 60)
             .expect("store second stream");
         store_event_sync(&mut conn, &config, "third", 1, "third", None, now)
             .expect("store third stream");
-        assert!(replay_events_sync(&mut conn, &config, "first", 0).expect("oldest stream evicted").is_empty());
+        assert!(replay_events_sync(&mut conn, &config, "first", 0)
+            .expect("oldest stream evicted")
+            .is_empty());
         config.ttl = Some(Duration::from_secs(30));
-        assert!(replay_events_sync(&mut conn, &config, "second", 0).expect("expired event pruned").is_empty());
-        let rows = replay_events_sync(&mut conn, &config, "third", 0).expect("fresh event retained");
+        assert!(replay_events_sync(&mut conn, &config, "second", 0)
+            .expect("expired event pruned")
+            .is_empty());
+        let rows =
+            replay_events_sync(&mut conn, &config, "third", 0).expect("fresh event retained");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].event_id, "third");
     }
@@ -540,13 +583,24 @@ mod tests {
     #[test]
     fn sqlite_encrypted_replay_survives_reopen_and_rejects_wrong_key() {
         let database = TestDatabase::new();
-        let config = config(Some(EventStoreEncryption::from_bytes(&[9u8; 32]).expect("valid key")));
+        let config = config(Some(
+            EventStoreEncryption::from_bytes(&[9u8; 32]).expect("valid key"),
+        ));
         {
             let mut conn = database.open();
             configure_db(&mut conn).expect("configure database");
-            store_event_sync(&mut conn, &config, "encrypted", 1, "1", Some("secret payload"), 100)
-                .expect("persist encrypted event");
-            let stored: String = conn.query_row("SELECT payload FROM mcp_events", [], |row| row.get(0))
+            store_event_sync(
+                &mut conn,
+                &config,
+                "encrypted",
+                1,
+                "1",
+                Some("secret payload"),
+                100,
+            )
+            .expect("persist encrypted event");
+            let stored: String = conn
+                .query_row("SELECT payload FROM mcp_events", [], |row| row.get(0))
                 .expect("read stored ciphertext");
             assert!(stored.starts_with(ENC_PREFIX));
             assert!(!stored.contains("secret payload"));
@@ -557,7 +611,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].payload.as_deref(), Some("secret payload"));
         let wrong_key = EventStoreConfig {
-            encryption: Some(EventStoreEncryption::from_bytes(&[7u8; 32]).expect("valid wrong key")),
+            encryption: Some(
+                EventStoreEncryption::from_bytes(&[7u8; 32]).expect("valid wrong key"),
+            ),
             ..config
         };
         assert!(replay_events_sync(&mut conn, &wrong_key, "encrypted", 0).is_err());
