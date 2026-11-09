@@ -1,0 +1,50 @@
+name: sqlite-lockfile-generation
+on:
+  push:
+    branches: [codex/refresh-bundled-sqlite]
+permissions:
+  contents: read
+jobs:
+  generate:
+    name: Generate exact-source SQLite lockfile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - name: Generate narrowly updated lockfile and formatting
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p generated
+          git rev-parse HEAD > generated/source-sha.txt
+          sha256sum Cargo.lock crates/mcp-toolkit-http/Cargo.toml crates/mcp-toolkit-http/src/session_sqlite.rs > generated/before.sha256
+          cargo update --package rusqlite --precise 0.41.1
+          cargo fmt --all
+          git diff --binary > generated/generated.patch
+          sha256sum Cargo.lock crates/mcp-toolkit-http/Cargo.toml crates/mcp-toolkit-http/src/session_sqlite.rs > generated/after.sha256
+          cp Cargo.lock generated/Cargo.lock
+          echo 'BEGIN_GENERATED_PATCH_BASE64'
+          base64 -w 0 generated/generated.patch
+          echo
+          echo 'END_GENERATED_PATCH_BASE64'
+          cat generated/source-sha.txt generated/before.sha256 generated/after.sha256
+      - name: Upload source-bound generated inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sqlite-generated-${{ github.sha }}
+          path: generated/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Check focused SQLite compatibility
+        run: |
+          cargo test --locked -p mcp-toolkit-http --no-default-features --features session-sqlite --lib
+          cargo test --locked -p mcp-toolkit-http --no-default-features --features session-sqlite --doc

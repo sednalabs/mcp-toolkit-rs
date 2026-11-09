@@ -419,7 +419,13 @@ fn current_epoch_seconds() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{maybe_decrypt_payload, maybe_encrypt_payload, ENC_PREFIX};
+    use super::{
+        configure_db, current_epoch_seconds, maybe_decrypt_payload, maybe_encrypt_payload,
+        replay_events_sync, store_event_sync, ENC_PREFIX,
+    };
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+    use std::time::Duration;
     use crate::session::{EventStoreConfig, EventStoreEncryption};
 
     fn config(encryption: Option<EventStoreEncryption>) -> EventStoreConfig {
@@ -429,6 +435,132 @@ mod tests {
             ttl: None,
             encryption,
         }
+    }
+
+
+    // Each test owns its directory; dropping connections before this guard also
+    // removes SQLite's WAL and shared-memory sidecars without racing other tests.
+    struct TestDatabase(PathBuf);
+
+    impl TestDatabase {
+        fn new() -> Self {
+            let mut random = [0u8; 16];
+            getrandom::fill(&mut random).expect("test database identifier");
+            let dir = std::env::temp_dir().join(format!(
+                "mcp-toolkit-sqlite-{:032x}",
+                u128::from_le_bytes(random)
+            ));
+            std::fs::create_dir(&dir).expect("create test database directory");
+            Self(dir)
+        }
+
+        fn open(&self) -> Connection {
+            Connection::open(self.0.join("events.db")).expect("open test database")
+        }
+    }
+
+    impl Drop for TestDatabase {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn bundled_sqlite_meets_security_floor() {
+        // RUSTSEC-2026-0459 is fixed in SQLite 3.54.0. Test the linked runtime,
+        // not merely Cargo metadata; the committed lock selects SQLite 3.54.1.
+        assert!(
+            rusqlite::version_number() >= 3_054_000,
+            "SQLite {} is below the patched 3.54.0 floor",
+            rusqlite::version()
+        );
+        let conn = Connection::open_in_memory().expect("open database");
+        let sql_version: String = conn
+            .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+            .expect("query linked SQLite version");
+        assert_eq!(sql_version, rusqlite::version());
+    }
+
+    #[test]
+    fn sqlite_reopen_preserves_wal_schema_replay_and_duplicate_semantics() {
+        let database = TestDatabase::new();
+        let config = config(None);
+        {
+            let mut conn = database.open();
+            configure_db(&mut conn).expect("configure database");
+            for (seq, payload) in [(2, Some("second")), (1, Some("first")), (3, None)] {
+                store_event_sync(&mut conn, &config, "session|common", seq,
+                    &seq.to_string(), payload, 100).expect("persist event");
+            }
+            store_event_sync(&mut conn, &config, "session|common", 2, "duplicate",
+                Some("replacement"), 101).expect("ignore duplicate event");
+            store_event_sync(&mut conn, &config, "other|common", 1, "other",
+                Some("isolated"), 102).expect("persist separate stream");
+        }
+        let mut conn = database.open();
+        configure_db(&mut conn).expect("reopen existing schema without migration");
+        let mode: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .expect("journal mode");
+        assert_eq!(mode, "wal");
+        let rows = replay_events_sync(&mut conn, &config, "session|common", 1)
+            .expect("replay strictly after cursor");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].event_id, "2");
+        assert_eq!(rows[0].payload.as_deref(), Some("second"));
+        assert_eq!(rows[1].event_id, "3");
+        assert_eq!(rows[1].payload, None);
+    }
+
+    #[test]
+    fn sqlite_retains_event_stream_and_ttl_limits() {
+        let mut conn = Connection::open_in_memory().expect("open database");
+        configure_db(&mut conn).expect("configure database");
+        let mut config = config(None);
+        config.max_events = 2;
+        config.max_streams = 2;
+        let now = current_epoch_seconds() as i64;
+        for seq in 1..=3 {
+            store_event_sync(&mut conn, &config, "first", seq, &seq.to_string(),
+                Some("payload"), now - 120).expect("store event");
+        }
+        let rows = replay_events_sync(&mut conn, &config, "first", 0).expect("replay retained events");
+        assert_eq!(rows.iter().map(|row| row.event_id.as_str()).collect::<Vec<_>>(), ["2", "3"]);
+        store_event_sync(&mut conn, &config, "second", 1, "second", None, now - 60)
+            .expect("store second stream");
+        store_event_sync(&mut conn, &config, "third", 1, "third", None, now)
+            .expect("store third stream");
+        assert!(replay_events_sync(&mut conn, &config, "first", 0).expect("oldest stream evicted").is_empty());
+        config.ttl = Some(Duration::from_secs(30));
+        assert!(replay_events_sync(&mut conn, &config, "second", 0).expect("expired event pruned").is_empty());
+        let rows = replay_events_sync(&mut conn, &config, "third", 0).expect("fresh event retained");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_id, "third");
+    }
+
+    #[test]
+    fn sqlite_encrypted_replay_survives_reopen_and_rejects_wrong_key() {
+        let database = TestDatabase::new();
+        let config = config(Some(EventStoreEncryption::from_bytes(&[9u8; 32]).expect("valid key")));
+        {
+            let mut conn = database.open();
+            configure_db(&mut conn).expect("configure database");
+            store_event_sync(&mut conn, &config, "encrypted", 1, "1", Some("secret payload"), 100)
+                .expect("persist encrypted event");
+            let stored: String = conn.query_row("SELECT payload FROM mcp_events", [], |row| row.get(0))
+                .expect("read stored ciphertext");
+            assert!(stored.starts_with(ENC_PREFIX));
+            assert!(!stored.contains("secret payload"));
+        }
+        let mut conn = database.open();
+        configure_db(&mut conn).expect("reopen encrypted database");
+        let rows = replay_events_sync(&mut conn, &config, "encrypted", 0).expect("decrypt replay");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payload.as_deref(), Some("secret payload"));
+        let wrong_key = EventStoreConfig {
+            encryption: Some(EventStoreEncryption::from_bytes(&[7u8; 32]).expect("valid wrong key")),
+            ..config
+        };
+        assert!(replay_events_sync(&mut conn, &wrong_key, "encrypted", 0).is_err());
     }
 
     #[test]
