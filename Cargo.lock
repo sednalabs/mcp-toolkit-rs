@@ -2388,16 +2388,20 @@ dependencies = [
  "http 1.5.0",
  "http-body-util",
  "mcp-toolkit-core",
+ "reqwest",
  "rmcp",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "standardwebhooks",
  "subtle",
  "time",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]

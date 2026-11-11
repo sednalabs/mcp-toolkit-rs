@@ -24,8 +24,9 @@ The module performs no I/O or persistence. The server still must:
 - Authenticate the principal and validate the selected event's argument schema.
 - Apply current domain/project rights on create, refresh and every send/retry.
 - Protect durable subscription state and secret custody for the granted lifetime.
-- Validate HTTPS callbacks and every DNS-to-socket connection, block non-public
-  destinations and redirects, and bound challenge and delivery requests.
+- Use the optional [guarded HTTPS transport](webhook-egress.md), or an equally
+  qualified transport, to validate every DNS-to-socket connection, block
+  non-public destinations and redirects, and bound challenge/delivery requests.
 - Verify the callback, sign exact body bytes using Standard Webhooks, and implement
   expiry, refresh, rotation, idempotent unsubscribe and bounded delivery outcomes.
 - Preserve source identity and honest replay/cursor semantics using its authoritative
