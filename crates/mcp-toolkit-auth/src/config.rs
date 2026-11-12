@@ -37,7 +37,7 @@ use mcp_toolkit_http::oauth::authorization_server_discovery_urls;
 
 const OIDC_DISCOVERY_MAX_BYTES: usize = 1024 * 1024;
 const DISCOVERY_MAX_ATTEMPTS: u32 = 3;
-const DISCOVERY_MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
+const DISCOVERY_MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
 
 /// Defines the authentication validation strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,7 +272,7 @@ async fn fetch_oidc_metadata(
                 let transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
                     || status == reqwest::StatusCode::REQUEST_TIMEOUT
                     || matches!(status.as_u16(), 500 | 502 | 503 | 504);
-                if !transient || attempt == DISCOVERY_MAX_ATTEMPTS {
+                if !transient {
                     break response;
                 }
                 let retry_after = response
@@ -282,6 +282,11 @@ async fn fetch_oidc_metadata(
                     .and_then(parse_retry_after)
                     .unwrap_or(Duration::ZERO);
                 if retry_after > DISCOVERY_MAX_RETRY_AFTER {
+                    break response;
+                }
+                if attempt == DISCOVERY_MAX_ATTEMPTS {
+                    // Keep a supervisor from retrying before the server's minimum.
+                    tokio::time::sleep(retry_after).await;
                     break response;
                 }
                 tokio::time::sleep(discovery_wait(attempt, retry_after)).await;
@@ -678,14 +683,14 @@ mod profile_tests {
             .await
             .expect("transient discovery failures should recover");
         assert_eq!(metadata.issuer.as_deref(), Some(issuer.as_str()));
-        assert_eq!(*attempts.lock().await, 3);
+        assert_eq!(attempts.lock().await.len(), 3);
         server.abort();
 
         let (issuer, url, attempts, server) = retry_fixture(vec![429, 200], false, "invalid").await;
         assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
             .await
             .is_ok());
-        assert_eq!(*attempts.lock().await, 2);
+        assert_eq!(attempts.lock().await.len(), 2);
         server.abort();
     }
 
@@ -694,7 +699,7 @@ mod profile_tests {
         for (statuses, invalid_issuer, retry_after, expected_attempts) in [
             (vec![503, 503, 503, 200], false, "0", 3),
             (vec![403, 200], false, "0", 1),
-            (vec![429, 200], false, "11", 1),
+            (vec![429, 200], false, "121", 1),
             (vec![200], true, "0", 1),
         ] {
             let (issuer, url, attempts, server) =
@@ -702,7 +707,7 @@ mod profile_tests {
             assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
                 .await
                 .is_err());
-            assert_eq!(*attempts.lock().await, expected_attempts);
+            assert_eq!(attempts.lock().await.len(), expected_attempts);
             server.abort();
         }
     }
@@ -722,7 +727,19 @@ mod profile_tests {
                 ..
             }
         ));
-        assert_eq!(*attempts.lock().await, 3);
+        assert_eq!(attempts.lock().await.len(), 3);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn final_rate_limit_waits_for_server_minimum_before_returning() {
+        let (issuer, url, attempts, server) = retry_fixture(vec![429, 429, 429], false, "1").await;
+        assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
+            .await
+            .is_err());
+        assert_eq!(attempts.lock().await.len(), 3);
+        let final_request = *attempts.lock().await.last().expect("final request");
+        assert!(final_request.elapsed() >= std::time::Duration::from_secs(1));
         server.abort();
     }
 
@@ -738,7 +755,8 @@ mod profile_tests {
         );
         assert!(super::parse_retry_after("nonsense").is_none());
         assert!(
-            super::parse_retry_after("11").expect("valid delta") > super::DISCOVERY_MAX_RETRY_AFTER
+            super::parse_retry_after("121").expect("valid delta")
+                > super::DISCOVERY_MAX_RETRY_AFTER
         );
         for attempt in 1..=2 {
             let delay = super::discovery_retry_delay(attempt);
@@ -753,7 +771,12 @@ mod profile_tests {
         statuses: Vec<u16>,
         invalid_issuer: bool,
         retry_after: &'static str,
-    ) -> (String, String, Arc<Mutex<usize>>, JoinHandle<()>) {
+    ) -> (
+        String,
+        String,
+        Arc<Mutex<Vec<std::time::Instant>>>,
+        JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind fixture");
@@ -763,7 +786,7 @@ mod profile_tests {
         } else {
             issuer.clone()
         };
-        let attempts = Arc::new(Mutex::new(0));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
         let fixture_attempts = attempts.clone();
         let app = Router::new().route(
             "/{*path}",
@@ -773,8 +796,8 @@ mod profile_tests {
                 let issuer = metadata_issuer.clone();
                 async move {
                     let mut count = attempts.lock().await;
-                    let status = statuses.get(*count).copied().unwrap_or(500);
-                    *count += 1;
+                    let status = statuses.get(count.len()).copied().unwrap_or(500);
+                    count.push(std::time::Instant::now());
                     if status != 200 {
                         return (
                             StatusCode::from_u16(status).expect("status"),
