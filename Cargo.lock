@@ -2336,6 +2336,7 @@ dependencies = [
  "dpop-verifier",
  "futures-util",
  "http 1.5.0",
+ "httpdate",
  "iri-string",
  "jsonwebtoken",
  "libc",
