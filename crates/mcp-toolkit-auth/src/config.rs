@@ -261,12 +261,12 @@ async fn fetch_oidc_metadata(
     let mut attempt = 0;
     let response = loop {
         attempt += 1;
-        match http
+        let result = http
             .get(discovery_url)
             .timeout(Duration::from_secs(5))
             .send()
-            .await
-        {
+            .await;
+        match result {
             Ok(response) => {
                 let status = response.status();
                 let transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -751,7 +751,7 @@ mod profile_tests {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind fixture");
-        let issuer = format!("http://{}", listener.local_addr().expect("address"));
+        let issuer = format!("http://{}", listener.local_addr().expect("address")); // DevSkim: ignore DS137138 loopback test fixture
         let metadata_issuer = if invalid_issuer {
             "https://wrong.example".to_string()
         } else {
