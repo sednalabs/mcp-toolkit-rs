@@ -680,6 +680,13 @@ mod profile_tests {
         assert_eq!(metadata.issuer.as_deref(), Some(issuer.as_str()));
         assert_eq!(*attempts.lock().await, 3);
         server.abort();
+
+        let (issuer, url, attempts, server) = retry_fixture(vec![429, 200], false, "invalid").await;
+        assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
+            .await
+            .is_ok());
+        assert_eq!(*attempts.lock().await, 2);
+        server.abort();
     }
 
     #[tokio::test]
@@ -688,7 +695,6 @@ mod profile_tests {
             (vec![503, 503, 503, 200], false, "0", 3),
             (vec![403, 200], false, "0", 1),
             (vec![429, 200], false, "11", 1),
-            (vec![429, 200], false, "invalid", 2),
             (vec![200], true, "0", 1),
         ] {
             let (issuer, url, attempts, server) =
