@@ -192,7 +192,18 @@ pub async fn discover_oidc_metadata(
     for discovery_url in discovery_urls {
         match fetch_oidc_metadata(&http, issuer, &discovery_url).await {
             Ok(metadata) => return Ok(metadata),
-            Err(err) => failures.push(format!("{discovery_url}: {err}")),
+            Err(err) => {
+                if matches!(
+                    &err,
+                    AuthError::Generic {
+                        reason: Some("discovery_unavailable"),
+                        ..
+                    }
+                ) {
+                    return Err(err);
+                }
+                failures.push(format!("{discovery_url}: {err}"));
+            }
         }
     }
 
@@ -259,23 +270,33 @@ async fn fetch_oidc_metadata(
             Ok(response) => {
                 let status = response.status();
                 let transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status == reqwest::StatusCode::REQUEST_TIMEOUT
                     || matches!(status.as_u16(), 500 | 502 | 503 | 504);
                 if !transient || attempt == DISCOVERY_MAX_ATTEMPTS {
                     break response;
                 }
-                let retry_after = match response.headers().get(reqwest::header::RETRY_AFTER) {
-                    Some(value) => match value.to_str().ok().and_then(parse_retry_after) {
-                        Some(delay) if delay <= DISCOVERY_MAX_RETRY_AFTER => delay,
-                        _ => break response,
-                    },
-                    None => Duration::ZERO,
-                };
-                tokio::time::sleep(discovery_retry_delay(attempt).max(retry_after)).await;
+                let retry_after = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_retry_after)
+                    .unwrap_or(Duration::ZERO);
+                if retry_after > DISCOVERY_MAX_RETRY_AFTER {
+                    break response;
+                }
+                tokio::time::sleep(discovery_wait(attempt, retry_after)).await;
             }
             Err(error) => {
                 if attempt == DISCOVERY_MAX_ATTEMPTS || !(error.is_connect() || error.is_timeout())
                 {
-                    return Err(AuthError::new(format!("Discovery fetch failed: {error}")));
+                    let failure = AuthError::new(format!("Discovery fetch failed: {error}"));
+                    return Err(if error.is_connect() || error.is_timeout() {
+                        failure
+                            .with_reason("discovery_unavailable")
+                            .with_status(503)
+                    } else {
+                        failure
+                    });
                 }
                 tokio::time::sleep(discovery_retry_delay(attempt)).await;
             }
@@ -283,10 +304,20 @@ async fn fetch_oidc_metadata(
     };
 
     if !response.status().is_success() {
-        return Err(AuthError::new(format!(
-            "Discovery failed: status {}",
-            response.status()
-        )));
+        let status = response.status();
+        let failure = AuthError::new(format!("Discovery failed: status {status}"));
+        return Err(
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || matches!(status.as_u16(), 500 | 502 | 503 | 504)
+            {
+                failure
+                    .with_reason("discovery_unavailable")
+                    .with_status(503)
+            } else {
+                failure
+            },
+        );
     }
     if response.content_length().unwrap_or(0) > OIDC_DISCOVERY_MAX_BYTES as u64 {
         return Err(AuthError::new("Discovery response too large").with_status(502));
@@ -304,6 +335,10 @@ fn discovery_retry_delay(attempt: u32) -> Duration {
     let base_ms = 250_u64 << (attempt.saturating_sub(1).min(2));
     let random = uuid::Uuid::new_v4().as_u128() as u64;
     Duration::from_millis(base_ms + random % (base_ms + 1))
+}
+
+fn discovery_wait(attempt: u32, retry_after: Duration) -> Duration {
+    retry_after + discovery_retry_delay(attempt)
 }
 
 fn parse_retry_after(value: &str) -> Option<Duration> {
@@ -638,7 +673,7 @@ mod profile_tests {
 
     #[tokio::test]
     async fn explicit_discovery_retries_rate_limit_and_server_error_then_succeeds() {
-        let (issuer, url, attempts, server) = retry_fixture(vec![429, 503, 200], false, "0").await;
+        let (issuer, url, attempts, server) = retry_fixture(vec![429, 408, 200], false, "0").await;
         let metadata = discover_oidc_metadata_from_url(&issuer, &url, None)
             .await
             .expect("transient discovery failures should recover");
@@ -653,7 +688,7 @@ mod profile_tests {
             (vec![503, 503, 503, 200], false, "0", 3),
             (vec![403, 200], false, "0", 1),
             (vec![429, 200], false, "11", 1),
-            (vec![429, 200], false, "invalid", 1),
+            (vec![429, 200], false, "invalid", 2),
             (vec![200], true, "0", 1),
         ] {
             let (issuer, url, attempts, server) =
@@ -664,6 +699,25 @@ mod profile_tests {
             assert_eq!(*attempts.lock().await, expected_attempts);
             server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn rate_limit_exhaustion_does_not_probe_other_metadata_paths() {
+        let (issuer, _, attempts, server) =
+            retry_fixture(vec![429, 429, 429, 200], false, "0").await;
+        let error = discover_oidc_metadata(&issuer, None)
+            .await
+            .expect_err("rate limit must stop discovery");
+        assert!(matches!(
+            error,
+            crate::AuthError::Generic {
+                status_code: 503,
+                reason: Some("discovery_unavailable"),
+                ..
+            }
+        ));
+        assert_eq!(*attempts.lock().await, 3);
+        server.abort();
     }
 
     #[test]
@@ -684,6 +738,8 @@ mod profile_tests {
             let delay = super::discovery_retry_delay(attempt);
             let base = std::time::Duration::from_millis(250 << (attempt - 1));
             assert!(delay >= base && delay <= base * 2);
+            let advertised = std::time::Duration::from_secs(3);
+            assert!(super::discovery_wait(attempt, advertised) > advertised);
         }
     }
 
@@ -704,7 +760,7 @@ mod profile_tests {
         let attempts = Arc::new(Mutex::new(0));
         let fixture_attempts = attempts.clone();
         let app = Router::new().route(
-            "/discovery",
+            "/{*path}",
             any(move || {
                 let statuses = statuses.clone();
                 let attempts = fixture_attempts.clone();
