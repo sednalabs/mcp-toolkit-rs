@@ -37,7 +37,7 @@ use mcp_toolkit_http::oauth::authorization_server_discovery_urls;
 
 const OIDC_DISCOVERY_MAX_BYTES: usize = 1024 * 1024;
 const DISCOVERY_MAX_ATTEMPTS: u32 = 3;
-const DISCOVERY_MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
+const DISCOVERY_MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
 
 /// Defines the authentication validation strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,7 +272,7 @@ async fn fetch_oidc_metadata(
                 let transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
                     || status == reqwest::StatusCode::REQUEST_TIMEOUT
                     || matches!(status.as_u16(), 500 | 502 | 503 | 504);
-                if !transient || attempt == DISCOVERY_MAX_ATTEMPTS {
+                if !transient {
                     break response;
                 }
                 let retry_after = response
@@ -282,6 +282,11 @@ async fn fetch_oidc_metadata(
                     .and_then(parse_retry_after)
                     .unwrap_or(Duration::ZERO);
                 if retry_after > DISCOVERY_MAX_RETRY_AFTER {
+                    break response;
+                }
+                if attempt == DISCOVERY_MAX_ATTEMPTS {
+                    // Keep a supervisor from retrying before the server's minimum.
+                    tokio::time::sleep(retry_after).await;
                     break response;
                 }
                 tokio::time::sleep(discovery_wait(attempt, retry_after)).await;
@@ -694,7 +699,7 @@ mod profile_tests {
         for (statuses, invalid_issuer, retry_after, expected_attempts) in [
             (vec![503, 503, 503, 200], false, "0", 3),
             (vec![403, 200], false, "0", 1),
-            (vec![429, 200], false, "11", 1),
+            (vec![429, 200], false, "121", 1),
             (vec![200], true, "0", 1),
         ] {
             let (issuer, url, attempts, server) =
@@ -726,6 +731,18 @@ mod profile_tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn final_rate_limit_waits_for_server_minimum_before_returning() {
+        let (issuer, url, attempts, server) = retry_fixture(vec![429, 429, 429], false, "1").await;
+        let started = std::time::Instant::now();
+        assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
+            .await
+            .is_err());
+        assert_eq!(*attempts.lock().await, 3);
+        assert!(started.elapsed() >= std::time::Duration::from_secs(3));
+        server.abort();
+    }
+
     #[test]
     fn retry_after_accepts_delta_and_http_date_and_bounds_waits() {
         assert_eq!(
@@ -738,7 +755,8 @@ mod profile_tests {
         );
         assert!(super::parse_retry_after("nonsense").is_none());
         assert!(
-            super::parse_retry_after("11").expect("valid delta") > super::DISCOVERY_MAX_RETRY_AFTER
+            super::parse_retry_after("121").expect("valid delta")
+                > super::DISCOVERY_MAX_RETRY_AFTER
         );
         for attempt in 1..=2 {
             let delay = super::discovery_retry_delay(attempt);
