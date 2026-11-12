@@ -683,14 +683,14 @@ mod profile_tests {
             .await
             .expect("transient discovery failures should recover");
         assert_eq!(metadata.issuer.as_deref(), Some(issuer.as_str()));
-        assert_eq!(*attempts.lock().await, 3);
+        assert_eq!(attempts.lock().await.len(), 3);
         server.abort();
 
         let (issuer, url, attempts, server) = retry_fixture(vec![429, 200], false, "invalid").await;
         assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
             .await
             .is_ok());
-        assert_eq!(*attempts.lock().await, 2);
+        assert_eq!(attempts.lock().await.len(), 2);
         server.abort();
     }
 
@@ -707,7 +707,7 @@ mod profile_tests {
             assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
                 .await
                 .is_err());
-            assert_eq!(*attempts.lock().await, expected_attempts);
+            assert_eq!(attempts.lock().await.len(), expected_attempts);
             server.abort();
         }
     }
@@ -727,19 +727,19 @@ mod profile_tests {
                 ..
             }
         ));
-        assert_eq!(*attempts.lock().await, 3);
+        assert_eq!(attempts.lock().await.len(), 3);
         server.abort();
     }
 
     #[tokio::test]
     async fn final_rate_limit_waits_for_server_minimum_before_returning() {
         let (issuer, url, attempts, server) = retry_fixture(vec![429, 429, 429], false, "1").await;
-        let started = std::time::Instant::now();
         assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
             .await
             .is_err());
-        assert_eq!(*attempts.lock().await, 3);
-        assert!(started.elapsed() >= std::time::Duration::from_secs(3));
+        assert_eq!(attempts.lock().await.len(), 3);
+        let final_request = *attempts.lock().await.last().expect("final request");
+        assert!(final_request.elapsed() >= std::time::Duration::from_secs(1));
         server.abort();
     }
 
@@ -771,7 +771,12 @@ mod profile_tests {
         statuses: Vec<u16>,
         invalid_issuer: bool,
         retry_after: &'static str,
-    ) -> (String, String, Arc<Mutex<usize>>, JoinHandle<()>) {
+    ) -> (
+        String,
+        String,
+        Arc<Mutex<Vec<std::time::Instant>>>,
+        JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind fixture");
@@ -781,7 +786,7 @@ mod profile_tests {
         } else {
             issuer.clone()
         };
-        let attempts = Arc::new(Mutex::new(0));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
         let fixture_attempts = attempts.clone();
         let app = Router::new().route(
             "/{*path}",
@@ -791,8 +796,8 @@ mod profile_tests {
                 let issuer = metadata_issuer.clone();
                 async move {
                     let mut count = attempts.lock().await;
-                    let status = statuses.get(*count).copied().unwrap_or(500);
-                    *count += 1;
+                    let status = statuses.get(count.len()).copied().unwrap_or(500);
+                    count.push(std::time::Instant::now());
                     if status != 200 {
                         return (
                             StatusCode::from_u16(status).expect("status"),
