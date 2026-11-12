@@ -26,7 +26,7 @@
 //! * RFC 6749: OAuth 2.0 Authorization Framework.
 //! * [OpenID Connect Core 1.0].
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,8 @@ use crate::AuthError;
 use mcp_toolkit_http::oauth::authorization_server_discovery_urls;
 
 const OIDC_DISCOVERY_MAX_BYTES: usize = 1024 * 1024;
+const DISCOVERY_MAX_ATTEMPTS: u32 = 3;
+const DISCOVERY_MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
 
 /// Defines the authentication validation strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,12 +247,40 @@ async fn fetch_oidc_metadata(
     issuer: &str,
     discovery_url: &str,
 ) -> Result<OidcDiscovery, AuthError> {
-    let response = http
-        .get(discovery_url)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-        .map_err(|e| AuthError::new(format!("Discovery fetch failed: {e}")))?;
+    let mut attempt = 0;
+    let response = loop {
+        attempt += 1;
+        match http
+            .get(discovery_url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status();
+                let transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || matches!(status.as_u16(), 500 | 502 | 503 | 504);
+                if !transient || attempt == DISCOVERY_MAX_ATTEMPTS {
+                    break response;
+                }
+                let retry_after = match response.headers().get(reqwest::header::RETRY_AFTER) {
+                    Some(value) => match value.to_str().ok().and_then(parse_retry_after) {
+                        Some(delay) if delay <= DISCOVERY_MAX_RETRY_AFTER => delay,
+                        _ => break response,
+                    },
+                    None => Duration::ZERO,
+                };
+                tokio::time::sleep(discovery_retry_delay(attempt).max(retry_after)).await;
+            }
+            Err(error) => {
+                if attempt == DISCOVERY_MAX_ATTEMPTS || !(error.is_connect() || error.is_timeout())
+                {
+                    return Err(AuthError::new(format!("Discovery fetch failed: {error}")));
+                }
+                tokio::time::sleep(discovery_retry_delay(attempt)).await;
+            }
+        }
+    };
 
     if !response.status().is_success() {
         return Err(AuthError::new(format!(
@@ -267,6 +297,24 @@ async fn fetch_oidc_metadata(
 
     validate_oidc_metadata(issuer, &metadata)?;
     Ok(metadata)
+}
+
+// Bound retries per endpoint and decorrelate service restarts without shared state.
+fn discovery_retry_delay(attempt: u32) -> Duration {
+    let base_ms = 250_u64 << (attempt.saturating_sub(1).min(2));
+    let random = uuid::Uuid::new_v4().as_u128() as u64;
+    Duration::from_millis(base_ms + random % (base_ms + 1))
+}
+
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let date = httpdate::parse_http_date(value).ok()?;
+    Some(
+        date.duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 fn validate_oidc_metadata(
@@ -586,6 +634,107 @@ mod profile_tests {
             err.to_string(),
             "Authentication failed: Discovery metadata has unsupported discovery_url scheme"
         );
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_retries_rate_limit_and_server_error_then_succeeds() {
+        let (issuer, url, attempts, server) = retry_fixture(vec![429, 503, 200], false, "0").await;
+        let metadata = discover_oidc_metadata_from_url(&issuer, &url, None)
+            .await
+            .expect("transient discovery failures should recover");
+        assert_eq!(metadata.issuer.as_deref(), Some(issuer.as_str()));
+        assert_eq!(*attempts.lock().await, 3);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_bounds_retries_and_does_not_retry_permanent_or_invalid_data() {
+        for (statuses, invalid_issuer, retry_after, expected_attempts) in [
+            (vec![503, 503, 503, 200], false, "0", 3),
+            (vec![403, 200], false, "0", 1),
+            (vec![429, 200], false, "11", 1),
+            (vec![429, 200], false, "invalid", 1),
+            (vec![200], true, "0", 1),
+        ] {
+            let (issuer, url, attempts, server) =
+                retry_fixture(statuses, invalid_issuer, retry_after).await;
+            assert!(discover_oidc_metadata_from_url(&issuer, &url, None)
+                .await
+                .is_err());
+            assert_eq!(*attempts.lock().await, expected_attempts);
+            server.abort();
+        }
+    }
+
+    #[test]
+    fn retry_after_accepts_delta_and_http_date_and_bounds_waits() {
+        assert_eq!(
+            super::parse_retry_after("3"),
+            Some(std::time::Duration::from_secs(3))
+        );
+        assert_eq!(
+            super::parse_retry_after("Thu, 01 Jan 1970 00:00:00 GMT"),
+            Some(std::time::Duration::ZERO)
+        );
+        assert!(super::parse_retry_after("nonsense").is_none());
+        assert!(
+            super::parse_retry_after("11").expect("valid delta") > super::DISCOVERY_MAX_RETRY_AFTER
+        );
+        for attempt in 1..=2 {
+            let delay = super::discovery_retry_delay(attempt);
+            let base = std::time::Duration::from_millis(250 << (attempt - 1));
+            assert!(delay >= base && delay <= base * 2);
+        }
+    }
+
+    async fn retry_fixture(
+        statuses: Vec<u16>,
+        invalid_issuer: bool,
+        retry_after: &'static str,
+    ) -> (String, String, Arc<Mutex<usize>>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let issuer = format!("http://{}", listener.local_addr().expect("address"));
+        let metadata_issuer = if invalid_issuer {
+            "https://wrong.example".to_string()
+        } else {
+            issuer.clone()
+        };
+        let attempts = Arc::new(Mutex::new(0));
+        let fixture_attempts = attempts.clone();
+        let app = Router::new().route(
+            "/discovery",
+            any(move || {
+                let statuses = statuses.clone();
+                let attempts = fixture_attempts.clone();
+                let issuer = metadata_issuer.clone();
+                async move {
+                    let mut count = attempts.lock().await;
+                    let status = statuses.get(*count).copied().unwrap_or(500);
+                    *count += 1;
+                    if status != 200 {
+                        return (
+                            StatusCode::from_u16(status).expect("status"),
+                            [("retry-after", retry_after)],
+                        )
+                            .into_response();
+                    }
+                    Json(serde_json::json!({
+                        "issuer": issuer,
+                        "authorization_endpoint": format!("{issuer}/authorize"),
+                        "token_endpoint": format!("{issuer}/token"),
+                        "jwks_uri": format!("{issuer}/jwks")
+                    }))
+                    .into_response()
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let url = format!("{issuer}/discovery");
+        (issuer, url, attempts, server)
     }
 
     struct DiscoveryFixture {
