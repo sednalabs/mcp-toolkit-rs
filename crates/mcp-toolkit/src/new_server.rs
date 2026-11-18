@@ -8,7 +8,7 @@
 //! while keeping the existing templates as the single source of scaffold truth.
 //!
 //! ## Security Boundaries
-//! * Embeds only files from the repository's `templates/` directory.
+//! * Embeds template files and package versions from the toolkit source tree.
 //! * Refuses to overwrite changed files unless the caller explicitly allows it.
 //! * Validates generated relative paths before writing under a relative output
 //!   directory rooted at the caller's current working directory.
@@ -678,13 +678,20 @@ fn rewrite_toolkit_dependencies(
     toolkit_dependency: &ToolkitDependencySource,
 ) -> String {
     let mut rewritten = text.to_string();
+    let packages = toolkit_path_dependencies(text);
 
-    for package in toolkit_path_dependencies(text) {
+    // Versions come from each crate's manifest when the generator is built. Git
+    // source selection alone leaves Cargo's version requirement as `*`, which
+    // conflicts with the generated dependency policy's wildcard prohibition.
+    for (package, version) in embedded_templates::TOOLKIT_PACKAGE_VERSIONS {
+        if !packages.iter().any(|candidate| candidate == package) {
+            continue;
+        }
         rewritten = rewritten.replace(
             &format!("{package} = {{ path = \"../../crates/{package}\""),
             &format!(
                 "{package} = {{ {}",
-                dependency_prefix(&package, toolkit_dependency)
+                dependency_prefix(package, version, toolkit_dependency)
             ),
         );
     }
@@ -695,10 +702,8 @@ fn rewrite_toolkit_dependencies(
 fn toolkit_path_dependencies(text: &str) -> Vec<String> {
     let mut packages = Vec::new();
     let dependency_prefix = " = { path = \"../../crates/";
-
     for line in text.lines() {
-        let line = line.trim_start();
-        let Some((package, path_suffix)) = line.split_once(dependency_prefix) else {
+        let Some((package, path_suffix)) = line.trim_start().split_once(dependency_prefix) else {
             continue;
         };
         let Some(path_package) = path_suffix.split('"').next() else {
@@ -708,27 +713,32 @@ fn toolkit_path_dependencies(text: &str) -> Vec<String> {
             packages.push(package.to_string());
         }
     }
-
     packages.sort();
     packages.dedup();
     packages
 }
 
-fn dependency_prefix(package: &str, toolkit_dependency: &ToolkitDependencySource) -> String {
+fn dependency_prefix(
+    package: &str,
+    version: &str,
+    toolkit_dependency: &ToolkitDependencySource,
+) -> String {
     match toolkit_dependency {
         ToolkitDependencySource::LocalPath(root) => {
             format!("path = {}", toml_path(&root.join("crates").join(package)))
         }
         ToolkitDependencySource::Git(url) => {
             format!(
-                "git = \"{}\"",
-                url.replace('\\', "\\\\").replace('"', "\\\"")
+                "git = {}, version = {}",
+                toml_edit::Value::from(url.as_str()),
+                toml_edit::Value::from(format!("={version}")),
             )
         }
         ToolkitDependencySource::GitRevision { url, rev } => format!(
-            "git = {}, rev = {}",
+            "git = {}, rev = {}, version = {}",
             toml_edit::Value::from(url.as_str()),
             toml_edit::Value::from(rev.to_ascii_lowercase()),
+            toml_edit::Value::from(format!("={version}")),
         ),
     }
 }
@@ -913,11 +923,11 @@ mod tests {
         assert_eq!(
             String::from_utf8(rewritten).expect("utf8"),
             concat!(
-                r#"mcp-toolkit = { git = "https://example.com/toolkit.git", features = ["server-stdio"] }"#,
+                r#"mcp-toolkit = { git = "https://example.com/toolkit.git", version = "=0.1.0", features = ["server-stdio"] }"#,
                 "\n",
-                r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git" }"#,
+                r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git", version = "=0.1.0" }"#,
                 "\n",
-                r#"mcp-toolkit-http = { git = "https://example.com/toolkit.git", features = ["auth"] }"#,
+                r#"mcp-toolkit-http = { git = "https://example.com/toolkit.git", version = "=0.1.0", features = ["auth"] }"#,
             )
         );
     }
@@ -933,7 +943,7 @@ mod tests {
             let source = ToolkitDependencySource::LocalPath(root);
             let manifest = format!(
                 "[dependencies]\nmcp-toolkit = {{ {} }}\n",
-                dependency_prefix("mcp-toolkit", &source)
+                dependency_prefix("mcp-toolkit", "0.1.0", &source)
             )
             .parse::<toml_edit::DocumentMut>()
             .expect("local dependency path must remain valid TOML");
@@ -976,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_rewrite_discovers_only_matching_toolkit_path_dependencies() {
+    fn dependency_rewrite_changes_only_matching_toolkit_path_dependencies() {
         let manifest = concat!(
             r#"mcp-toolkit-server = { path = "../../crates/mcp-toolkit-server" }"#,
             "\n",
@@ -984,10 +994,15 @@ mod tests {
             "\n",
             r#"other-toolkit = { path = "../../crates/other-toolkit" }"#,
         );
-        assert_eq!(
-            toolkit_path_dependencies(manifest),
-            vec!["mcp-toolkit-server".to_string()]
+        let source = ToolkitDependencySource::Git("https://example.com/toolkit.git".to_owned());
+        let rewritten = rewrite_toolkit_dependencies(manifest, &source);
+        assert!(rewritten.contains(
+            r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git", version = "=0.1.0" }"#
+        ));
+        assert!(
+            rewritten.contains(r#"mcp-toolkit-http = { path = "../../crates/mcp-toolkit-core" }"#)
         );
+        assert!(rewritten.contains(r#"other-toolkit = { path = "../../crates/other-toolkit" }"#));
     }
 
     #[test]

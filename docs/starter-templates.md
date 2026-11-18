@@ -72,6 +72,11 @@ dependency governance, coverage, release metadata, and public-ready docs. The
 checked-in templates use local path dependencies for toolkit development and
 are not the public-portability proof surface.
 
+The public starter always generates coverage and uploads its Cobertura artifact.
+Optional ingestion by GitHub Code Quality runs only when the repository Actions
+variable `ENABLE_GITHUB_CODE_QUALITY` is `true`; enable the service before setting
+that variable. Coverage generation remains a required gate in a fresh repository.
+
 ## Curated Stdio Intent Server
 
 Use the [`curated-stdio-intent-server`](../templates/curated-stdio-intent-server) when the server should run as a

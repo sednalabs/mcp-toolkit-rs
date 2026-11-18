@@ -101,3 +101,4 @@ server-auth = [
 
 [build-dependencies]
 serde_json = "1.0.149"
+toml_edit = "0.25.12"

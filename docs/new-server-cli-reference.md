@@ -111,8 +111,12 @@ mcp-toolkit client-config . --format kiro
 
 Set `TOOLKIT_REV` to the full reviewed commit before running the command. The
 generator validates its shape without fetching or checking remote existence.
-Every toolkit dependency receives the same `rev`; commit `Cargo.lock` to lock
-registry dependencies too. All templates carry the toolkit's immutable RMCP
+Every toolkit dependency receives the same `rev` and an explicit exact version
+read from its package manifest when this generator was built. This satisfies
+the generated policy that rejects wildcard version requirements. Use a generator
+built from compatible toolkit package versions; generation does not inspect the
+remote revision. Commit `Cargo.lock` to lock registry dependencies too.
+All templates carry the toolkit's immutable RMCP
 and macro override explicitly because Cargo does not inherit dependency root
 patches. The public template's Git source allowlist follows the selected
 toolkit URL and includes the RMCP fork.

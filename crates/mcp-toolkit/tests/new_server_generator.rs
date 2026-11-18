@@ -1580,11 +1580,11 @@ fn release_preflight_rejects_multiline_and_renamed_local_toolkit_paths() {
     let manifest_path = output.join("Cargo.toml");
     let manifest = read(&manifest_path)
         .replace(
-            "mcp-toolkit = { git = \"https://github.com/sednalabs/mcp-toolkit-rs\", features = [\"server-stdio\"] }",
+            "mcp-toolkit = { git = \"https://github.com/sednalabs/mcp-toolkit-rs\", version = \"=0.1.0\", features = [\"server-stdio\"] }",
             "mcp-toolkit = {\n  path = \"../mcp-toolkit\",\n  features = [\"server-stdio\"],\n}",
         )
         .replace(
-            "mcp-toolkit-core = { git = \"https://github.com/sednalabs/mcp-toolkit-rs\" }",
+            "mcp-toolkit-core = { git = \"https://github.com/sednalabs/mcp-toolkit-rs\", version = \"=0.1.0\" }",
             "toolkit_core = { package = \"mcp-toolkit-core\", path = \"../mcp-toolkit-core\" }",
         );
     fs::write(&manifest_path, manifest).expect("write local toolkit dependency forms");

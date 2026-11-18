@@ -19,12 +19,54 @@ fn main() {
     println!("cargo:rerun-if-changed={}", templates_root.display());
     println!("cargo:rerun-if-changed={}", manifests_root.display());
 
-    let generated = generate_templates_module(&templates_root).expect("generate template module");
+    let mut generated =
+        generate_templates_module(&templates_root).expect("generate template module");
+    generated.push_str(
+        &generate_toolkit_versions_module(&repo_root).expect("embed toolkit package versions"),
+    );
     fs::write(templates_out_file, generated).expect("write generated template module");
 
     let generated =
         generate_pattern_registry_module(&manifests_root).expect("generate pattern registry");
     fs::write(pattern_registry_out_file, generated).expect("write generated pattern registry");
+}
+
+fn generate_toolkit_versions_module(repo_root: &Path) -> Result<String, Box<dyn Error>> {
+    let mut module =
+        String::from("\npub(crate) static TOOLKIT_PACKAGE_VERSIONS: &[(&str, &str)] = &[\n");
+    for entry in sorted_entries(&repo_root.join("crates"))? {
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("Cargo.toml");
+        if !path.is_file() {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", path.display());
+        let manifest = fs::read_to_string(&path)?.parse::<toml_edit::DocumentMut>()?;
+        let package = manifest
+            .get("package")
+            .ok_or_else(|| manifest_error(format!("{} has no package table", path.display())))?;
+        let name = package
+            .get("name")
+            .and_then(toml_edit::Item::as_str)
+            .ok_or_else(|| manifest_error(format!("{} has no package name", path.display())))?;
+        if !name.starts_with("mcp-toolkit") {
+            continue;
+        }
+        let version = package
+            .get("version")
+            .and_then(toml_edit::Item::as_str)
+            .ok_or_else(|| {
+                manifest_error(format!(
+                    "{} requires an explicit package version",
+                    path.display()
+                ))
+            })?;
+        module.push_str(&format!("    ({name:?}, {version:?}),\n"));
+    }
+    module.push_str("];\n");
+    Ok(module)
 }
 
 fn generate_templates_module(templates_root: &Path) -> io::Result<String> {

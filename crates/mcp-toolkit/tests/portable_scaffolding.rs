@@ -116,6 +116,93 @@ fn manifest_at_toolkit_root() -> toml_edit::DocumentMut {
 }
 
 #[test]
+fn every_git_dependency_uses_its_actual_package_version_for_wildcard_policy() {
+    let toolkit_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for template in [
+        "single-crate-public-stdio",
+        "curated-stdio-intent",
+        "hosted-http-auth",
+    ] {
+        for pinned in [false, true] {
+            let project = Project::new();
+            let mut options = vec![
+                "--template",
+                template,
+                "--toolkit-git",
+                "https://github.com/sednalabs/mcp-toolkit-rs",
+            ];
+            if pinned {
+                options.extend(["--toolkit-rev", REVISION]);
+            }
+            successful(project.generate(&options));
+            let generated = manifest(&project.0);
+            let mut found = 0;
+            for section in ["dependencies", "dev-dependencies"] {
+                let Some(dependencies) = generated.get(section).and_then(toml_edit::Item::as_table)
+                else {
+                    continue;
+                };
+                for (name, dependency) in dependencies {
+                    if !name.starts_with("mcp-toolkit") {
+                        continue;
+                    }
+                    let source = manifest(&toolkit_root.join("crates").join(name));
+                    let version = source["package"]["version"].as_str().unwrap();
+                    assert_eq!(
+                        dependency["version"].as_str(),
+                        Some(format!("={version}").as_str()),
+                        "{template}: {name} must satisfy the generated no-wildcard policy"
+                    );
+                    assert!(dependency.get("path").is_none());
+                    found += 1;
+                }
+            }
+            assert!(found > 0);
+            if template == "single-crate-public-stdio" {
+                let deny: toml_edit::DocumentMut = fs::read_to_string(project.0.join("deny.toml"))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(deny["bans"]["wildcards"].as_str(), Some("deny"));
+                assert!(deny["advisories"]["ignore"].as_array().unwrap().is_empty());
+                assert!(!project.0.join(".cargo/advisory-exceptions.toml").exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn fresh_public_repositories_require_coverage_without_external_service_setup() {
+    let project = Project::new();
+    successful(project.generate(&["--toolkit-rev", REVISION]));
+    let workflow: serde_json::Value = noyalib_serde_yaml::from_str(
+        &fs::read_to_string(project.0.join(".github/workflows/code-coverage.yml")).unwrap(),
+    )
+    .unwrap();
+    let steps = workflow["jobs"]["rust-coverage"]["steps"]
+        .as_array()
+        .unwrap();
+    let step = |name| steps.iter().find(|step| step["name"] == name).unwrap();
+    let generation = step("Generate coverage");
+    assert!(generation.get("if").is_none());
+    assert!(generation.get("continue-on-error").is_none());
+    assert!(generation["run"]
+        .as_str()
+        .unwrap()
+        .contains("cargo llvm-cov"));
+    let artifact = step("Upload Cobertura report");
+    assert!(artifact.get("if").is_none());
+    assert!(artifact.get("continue-on-error").is_none());
+    assert_eq!(artifact["with"]["if-no-files-found"], "error");
+    let service = step("Upload coverage to GitHub Code Quality");
+    assert_eq!(
+        service["if"],
+        "${{ vars.ENABLE_GITHUB_CODE_QUALITY == 'true' }}"
+    );
+    assert!(service.get("continue-on-error").is_none());
+}
+
+#[test]
 fn keep_license_does_not_relax_other_collisions_or_partially_generate() {
     let project = Project::new();
     fs::write(project.0.join("LICENSE"), "existing license\n").unwrap();

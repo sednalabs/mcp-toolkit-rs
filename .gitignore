@@ -1,4 +1,6 @@
 target/
 Cargo.lock
+# The audited workspace lockfile must remain visible to dependency scanners.
+!/Cargo.lock
 .tmp/
 .build-helper/
