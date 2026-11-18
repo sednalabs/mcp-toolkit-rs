@@ -37,6 +37,7 @@ def validate(root: Path, today: date | None = None) -> list[str]:
         audit = read_toml(root / ".cargo/audit.toml", optional=True).get(
             "advisories", {}
         ).get("ignore", [])
+        osv = read_toml(root / "osv-scanner.toml", optional=True)
         packages = read_toml(root / "Cargo.lock").get("package", [])
     except (OSError, ValueError, AttributeError) as error:
         return [f"cannot read advisory exception inputs: {error}"]
@@ -44,7 +45,7 @@ def validate(root: Path, today: date | None = None) -> list[str]:
     if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
         return ["advisory exceptions must be an array of tables"]
 
-    approved: set[str] = set()
+    approved: dict[str, dict] = {}
     for record in records:
         advisory = record.get("advisory")
         if not isinstance(advisory, str) or not re.fullmatch(r"RUSTSEC-\d{4}-\d{4}", advisory):
@@ -52,7 +53,7 @@ def validate(root: Path, today: date | None = None) -> list[str]:
             continue
         if advisory in approved:
             errors.append(f"{advisory}: duplicate exception")
-        approved.add(advisory)
+        approved[advisory] = record
 
         if record.get("kind") != "unmaintained":
             errors.append(f"{advisory}: only reviewed informational maintenance exceptions are supported")
@@ -86,10 +87,33 @@ def validate(root: Path, today: date | None = None) -> list[str]:
             if locked != set(versions):
                 errors.append(f"{advisory}: locked package versions differ; reassess or remove the exception")
 
-    for label, ignored in (("deny.toml", deny), (".cargo/audit.toml", audit)):
+    ignored_sets = [("deny.toml", deny), (".cargo/audit.toml", audit)]
+    if (root / "osv-scanner.toml").exists():
+        # Repository-specific OSV configuration supports exact advisory ignores
+        # only. Package-wide suppression would hide future unrelated advisories.
+        if set(osv) - {"IgnoredVulns"}:
+            errors.append("osv-scanner.toml: only exact advisory exceptions are supported")
+        osv_entries = osv.get("IgnoredVulns", [])
+        if not isinstance(osv_entries, list) or not all(
+            isinstance(entry, dict) for entry in osv_entries
+        ):
+            errors.append("osv-scanner.toml: IgnoredVulns must be an array of tables")
+        else:
+            ignored_sets.append(("osv-scanner.toml", [entry.get("id") for entry in osv_entries]))
+            for entry in osv_entries:
+                advisory = entry.get("id")
+                if set(entry) != {"id", "reason", "effectiveUntil"}:
+                    errors.append("osv-scanner.toml: each exception needs only ID, reason and expiry")
+                record = approved.get(advisory) if isinstance(advisory, str) else None
+                if record is None or entry.get("effectiveUntil") != record.get("expires"):
+                    errors.append("osv-scanner.toml: expiry must match the reviewed exception record")
+                if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
+                    errors.append("osv-scanner.toml: an exception reason is required")
+
+    for label, ignored in ignored_sets:
         if not isinstance(ignored, list) or not all(isinstance(item, str) for item in ignored):
             errors.append(f"{label}: ignored advisories must be explicit advisory IDs")
-        elif len(ignored) != len(set(ignored)) or set(ignored) != approved:
+        elif len(ignored) != len(set(ignored)) or set(ignored) != set(approved):
             errors.append(f"{label}: ignored advisories must exactly match the reviewed exception records")
     return errors
 

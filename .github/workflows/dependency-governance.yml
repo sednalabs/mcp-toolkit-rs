@@ -61,6 +61,7 @@ jobs:
               "**/Cargo.toml",
               "**/Cargo.lock",
               "deny.toml",
+              "osv-scanner.toml",
               ".cargo/audit.toml",
               ".cargo/advisory-exceptions.toml",
               "scripts/advisory_exception_check.py",

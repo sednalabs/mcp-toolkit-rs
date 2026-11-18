@@ -21,6 +21,11 @@ source = "https://rustsec.org/advisories/RUSTSEC-2026-0543.html"
 rationale = "Coordinated migration to maintained upstream dependencies."
 '''
 IGNORE = '[advisories]\nignore = ["RUSTSEC-2026-0543"]\n'
+OSV = '''[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+effectiveUntil = 2026-12-18
+reason = "Maintainers track the coordinated maintenance migration in Ops w19008."
+'''
 
 
 class AdvisoryExceptionChecks(unittest.TestCase):
@@ -33,6 +38,8 @@ class AdvisoryExceptionChecks(unittest.TestCase):
         self.record.write_text(RECORD)
         (self.root / "deny.toml").write_text(IGNORE)
         (self.root / ".cargo/audit.toml").write_text(IGNORE)
+        self.osv = self.root / "osv-scanner.toml"
+        self.osv.write_text(OSV)
         (self.root / "Cargo.lock").write_text(
             '[[package]]\nname = "chrono"\nversion = "0.4.45"\n'
         )
@@ -49,6 +56,7 @@ class AdvisoryExceptionChecks(unittest.TestCase):
     def test_future_or_overlong_approval_fails(self):
         self.assertTrue(self.check(date(2026, 11, 17)))
         self.record.write_text(RECORD.replace("2026-12-18", "2026-12-19"))
+        self.osv.write_text(OSV.replace("2026-12-18", "2026-12-19"))
         self.assertTrue(self.check())
 
     def test_missing_ownership_tracking_or_primary_source_fails(self):
@@ -80,6 +88,23 @@ class AdvisoryExceptionChecks(unittest.TestCase):
             (self.root / "Cargo.lock").write_text(content)
             self.assertTrue(self.check())
 
+    def test_osv_scope_expiry_and_package_wide_suppression_are_checked(self):
+        for content in (
+            OSV.replace("RUSTSEC-2026-0543", "RUSTSEC-2026-0553"),
+            OSV.replace("2026-12-18", "2026-12-19"),
+            OSV.replace("effectiveUntil = 2026-12-18", 'effectiveUntil = "2026-12-18"'),
+            OSV + '\n[[PackageOverrides]]\nname = "chrono"\nignore = true\n',
+            OSV + OSV,
+            "IgnoredVulns = []\n",
+        ):
+            with self.subTest(content=content):
+                self.osv.write_text(content)
+                self.assertTrue(self.check())
+
+    def test_repositories_without_osv_can_reuse_the_other_scanner_guards(self):
+        self.osv.unlink()
+        self.assertEqual(self.check(), [])
+
     def test_malformed_records_fail_closed(self):
         for content in ("[[", 'exception = "invalid"', RECORD.replace(
             "expires = 2026-12-18", 'expires = "2026-12-18"'
@@ -92,6 +117,7 @@ class AdvisoryExceptionChecks(unittest.TestCase):
         self.record.unlink()
         (self.root / "deny.toml").write_text('[advisories]\nignore = []\n')
         (self.root / ".cargo/audit.toml").unlink()
+        self.osv.unlink()
         self.assertEqual(self.check(), [])
 
 

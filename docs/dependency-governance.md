@@ -70,7 +70,7 @@ Run:
 ```
 
 Before dependency tooling runs, `scripts/advisory_exception_check.py` verifies
-exception ownership, tracking, exact locked versions, matching audit/deny IDs,
+exception ownership, tracking, exact locked versions, matching scanner IDs,
 and UTC expiry. CI runs this check on every PR, including changes that otherwise
 skip the dependency lanes.
 
@@ -126,7 +126,15 @@ would add source and maintenance risk without completing that migration.
 - Follow-up: **Ops w19008**, parent w19007, due 2026-12-18. Track maintained
   upstream replacements and remove the exception.
 - Scope: the exact advisory and locked package version in
-  `.cargo/advisory-exceptions.toml`; `.cargo/audit.toml` and `deny.toml` must match.
+  `.cargo/advisory-exceptions.toml`; `.cargo/audit.toml`, `deny.toml` and the
+  repository-only `osv-scanner.toml` must match. OSV's `effectiveUntil` uses the
+  same date, and the UTC gate enforces expiry at the start of that day.
+
+OSV scans the tracked root `Cargo.lock`; its observed Chrono notice is covered
+by the same exception. The policy checker rejects package-wide OSV suppression,
+additional ignored IDs and mismatched expiry. The
+[OSV configuration format](https://google.github.io/osv-scanner/configuration/)
+applies this file to the root lockfile only.
 
 `cargo audit --deny warnings`, cargo-deny vulnerability checks, and the other
 dependency gates remain enabled. The independent Actix HTTP vulnerabilities are
