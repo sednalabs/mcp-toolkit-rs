@@ -3,27 +3,24 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 const REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; // DevSkim: ignore DS173237 because this repeated-character revision is a test fixture, not a credential.
 
-struct Project(PathBuf);
+struct Project(tempfile::TempDir);
 
 impl Project {
     fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "mcp-portable-scaffold-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        fs::create_dir_all(&root).expect("create isolated project");
-        Self(root)
+        Self(
+            tempfile::Builder::new()
+                .prefix("mcp-portable-scaffold-")
+                .tempdir()
+                .expect("create owned isolated project"),
+        )
     }
 
     fn cli(&self, arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_mcp-toolkit"))
-            .current_dir(&self.0)
+            .current_dir(self.0.path())
             .args(arguments)
             .output()
             .expect("run toolkit CLI")
@@ -40,12 +37,6 @@ impl Project {
         ];
         args.extend_from_slice(additional);
         self.cli(&args)
-    }
-}
-
-impl Drop for Project {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -69,25 +60,25 @@ fn manifest(root: &Path) -> toml_edit::DocumentMut {
 #[test]
 fn current_clone_preserves_license_and_git_while_pinning_every_toolkit_dependency() {
     let project = Project::new();
-    fs::create_dir(project.0.join(".git")).unwrap();
-    fs::write(project.0.join(".git/marker"), "keep git metadata\n").unwrap();
+    fs::create_dir(project.0.path().join(".git")).unwrap();
+    fs::write(project.0.path().join(".git/marker"), "keep git metadata\n").unwrap();
     fs::write(
-        project.0.join("LICENSE"),
+        project.0.path().join("LICENSE"),
         "Existing Apache license and attribution\n",
     )
     .unwrap();
 
     successful(project.generate(&["--keep-license", "--toolkit-rev", REVISION]));
     assert_eq!(
-        fs::read_to_string(project.0.join("LICENSE")).unwrap(),
+        fs::read_to_string(project.0.path().join("LICENSE")).unwrap(),
         "Existing Apache license and attribution\n"
     );
     assert_eq!(
-        fs::read_to_string(project.0.join(".git/marker")).unwrap(),
+        fs::read_to_string(project.0.path().join(".git/marker")).unwrap(),
         "keep git metadata\n"
     );
 
-    let manifest = manifest(&project.0);
+    let manifest = manifest(project.0.path());
     for section in ["dependencies", "dev-dependencies"] {
         for (name, dependency) in manifest[section].as_table().unwrap() {
             if name.starts_with("mcp-toolkit") {
@@ -135,7 +126,7 @@ fn every_git_dependency_uses_its_actual_package_version_for_wildcard_policy() {
                 options.extend(["--toolkit-rev", REVISION]);
             }
             successful(project.generate(&options));
-            let generated = manifest(&project.0);
+            let generated = manifest(project.0.path());
             let mut found = 0;
             for section in ["dependencies", "dev-dependencies"] {
                 let Some(dependencies) = generated.get(section).and_then(toml_edit::Item::as_table)
@@ -159,13 +150,18 @@ fn every_git_dependency_uses_its_actual_package_version_for_wildcard_policy() {
             }
             assert!(found > 0);
             if template == "single-crate-public-stdio" {
-                let deny: toml_edit::DocumentMut = fs::read_to_string(project.0.join("deny.toml"))
-                    .unwrap()
-                    .parse()
-                    .unwrap();
+                let deny: toml_edit::DocumentMut =
+                    fs::read_to_string(project.0.path().join("deny.toml"))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
                 assert_eq!(deny["bans"]["wildcards"].as_str(), Some("deny"));
                 assert!(deny["advisories"]["ignore"].as_array().unwrap().is_empty());
-                assert!(!project.0.join(".cargo/advisory-exceptions.toml").exists());
+                assert!(!project
+                    .0
+                    .path()
+                    .join(".cargo/advisory-exceptions.toml")
+                    .exists());
             }
         }
     }
@@ -176,7 +172,7 @@ fn fresh_public_repositories_require_coverage_without_external_service_setup() {
     let project = Project::new();
     successful(project.generate(&["--toolkit-rev", REVISION]));
     let workflow: serde_json::Value = noyalib_serde_yaml::from_str(
-        &fs::read_to_string(project.0.join(".github/workflows/code-coverage.yml")).unwrap(),
+        &fs::read_to_string(project.0.path().join(".github/workflows/code-coverage.yml")).unwrap(),
     )
     .unwrap();
     let steps = workflow["jobs"]["rust-coverage"]["steps"]
@@ -205,14 +201,18 @@ fn fresh_public_repositories_require_coverage_without_external_service_setup() {
 #[test]
 fn keep_license_does_not_relax_other_collisions_or_partially_generate() {
     let project = Project::new();
-    fs::write(project.0.join("LICENSE"), "existing license\n").unwrap();
-    fs::write(project.0.join("README.md"), "existing documentation\n").unwrap();
+    fs::write(project.0.path().join("LICENSE"), "existing license\n").unwrap();
+    fs::write(
+        project.0.path().join("README.md"),
+        "existing documentation\n",
+    )
+    .unwrap();
     let output = project.generate(&["--keep-license"]);
     assert!(!output.status.success());
-    assert!(!project.0.join("Cargo.toml").exists());
-    assert!(!project.0.join(".github").exists());
+    assert!(!project.0.path().join("Cargo.toml").exists());
+    assert!(!project.0.path().join(".github").exists());
     assert_eq!(
-        fs::read_to_string(project.0.join("README.md")).unwrap(),
+        fs::read_to_string(project.0.path().join("README.md")).unwrap(),
         "existing documentation\n"
     );
 }
@@ -220,12 +220,12 @@ fn keep_license_does_not_relax_other_collisions_or_partially_generate() {
 #[test]
 fn an_existing_license_still_requires_explicit_preservation() {
     let project = Project::new();
-    fs::write(project.0.join("LICENSE"), "existing license\n").unwrap();
+    fs::write(project.0.path().join("LICENSE"), "existing license\n").unwrap();
     let output = project.generate(&[]);
     assert!(!output.status.success());
-    assert!(!project.0.join("Cargo.toml").exists());
+    assert!(!project.0.path().join("Cargo.toml").exists());
     assert_eq!(
-        fs::read_to_string(project.0.join("LICENSE")).unwrap(),
+        fs::read_to_string(project.0.path().join("LICENSE")).unwrap(),
         "existing license\n"
     );
 }
@@ -234,11 +234,11 @@ fn an_existing_license_still_requires_explicit_preservation() {
 fn keep_license_writes_missing_license_and_wins_over_force() {
     let project = Project::new();
     successful(project.generate(&["--keep-license"]));
-    assert!(project.0.join("LICENSE").is_file());
-    fs::write(project.0.join("LICENSE"), "retained license\n").unwrap();
+    assert!(project.0.path().join("LICENSE").is_file());
+    fs::write(project.0.path().join("LICENSE"), "retained license\n").unwrap();
     successful(project.generate(&["--keep-license", "--force"]));
     assert_eq!(
-        fs::read_to_string(project.0.join("LICENSE")).unwrap(),
+        fs::read_to_string(project.0.path().join("LICENSE")).unwrap(),
         "retained license\n"
     );
 }
@@ -248,13 +248,17 @@ fn keep_license_writes_missing_license_and_wins_over_force() {
 fn keep_license_rejects_a_symlink_before_writing_anything() {
     let project = Project::new();
     let external = Project::new();
-    fs::write(external.0.join("LICENSE"), "external license\n").unwrap();
-    std::os::unix::fs::symlink(external.0.join("LICENSE"), project.0.join("LICENSE")).unwrap();
+    fs::write(external.0.path().join("LICENSE"), "external license\n").unwrap();
+    std::os::unix::fs::symlink(
+        external.0.path().join("LICENSE"),
+        project.0.path().join("LICENSE"),
+    )
+    .unwrap();
     let output = project.generate(&["--keep-license", "--force"]);
     assert!(!output.status.success());
-    assert!(!project.0.join("Cargo.toml").exists());
+    assert!(!project.0.path().join("Cargo.toml").exists());
     assert_eq!(
-        fs::read_to_string(external.0.join("LICENSE")).unwrap(),
+        fs::read_to_string(external.0.path().join("LICENSE")).unwrap(),
         "external license\n"
     );
 }
@@ -272,7 +276,7 @@ fn mutable_or_malformed_revisions_are_rejected_before_creating_output() {
         let project = Project::new();
         let output = project.generate(&["--toolkit-rev", revision]);
         assert!(!output.status.success(), "accepted {revision:?}");
-        assert!(fs::read_dir(&project.0).unwrap().next().is_none());
+        assert!(fs::read_dir(project.0.path()).unwrap().next().is_none());
     }
 }
 
@@ -281,7 +285,7 @@ fn custom_git_url_is_pinned_and_used_by_dependency_governance() {
     let project = Project::new();
     let url = "https://github.com/example/mcp-toolkit-rs";
     successful(project.generate(&["--toolkit-git", url, "--toolkit-rev", REVISION]));
-    let manifest = manifest(&project.0);
+    let manifest = manifest(project.0.path());
     assert_eq!(
         manifest["dependencies"]["mcp-toolkit"]["git"].as_str(),
         Some(url)
@@ -290,7 +294,7 @@ fn custom_git_url_is_pinned_and_used_by_dependency_governance() {
         manifest["dependencies"]["mcp-toolkit"]["rev"].as_str(),
         Some(REVISION)
     );
-    let governance = fs::read_to_string(project.0.join("deny.toml"))
+    let governance = fs::read_to_string(project.0.path().join("deny.toml"))
         .unwrap()
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
@@ -306,7 +310,7 @@ fn revision_cannot_claim_to_pin_a_local_path_dependency() {
     let project = Project::new();
     let output = project.generate(&["--toolkit-root", ".", "--toolkit-rev", REVISION]);
     assert!(!output.status.success());
-    assert!(!project.0.join("Cargo.toml").exists());
+    assert!(!project.0.path().join("Cargo.toml").exists());
 }
 
 #[test]

@@ -2323,6 +2323,7 @@ dependencies = [
  "noyalib-serde-yaml",
  "rmcp",
  "serde_json",
+ "tempfile",
  "toml_edit",
 ]
 

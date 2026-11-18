@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    // Bind repository inputs to the package Cargo compiled, rather than a mutable
+    // runtime environment variable when the build script is executed.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.join("../..");
     let templates_root = repo_root.join("templates");
     let manifests_root = repo_root.join("docs/pattern-manifests");
