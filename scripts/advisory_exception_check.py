@@ -102,10 +102,10 @@ def validate(root: Path, today: date | None = None) -> list[str]:
             ignored_sets.append(("osv-scanner.toml", [entry.get("id") for entry in osv_entries]))
             for entry in osv_entries:
                 advisory = entry.get("id")
-                if set(entry) != {"id", "reason", "effectiveUntil"}:
+                if set(entry) != {"id", "reason", "ignoreUntil"}:
                     errors.append("osv-scanner.toml: each exception needs only ID, reason and expiry")
                 record = approved.get(advisory) if isinstance(advisory, str) else None
-                if record is None or entry.get("effectiveUntil") != record.get("expires"):
+                if record is None or entry.get("ignoreUntil") != record.get("expires"):
                     errors.append("osv-scanner.toml: expiry must match the reviewed exception record")
                 if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
                     errors.append("osv-scanner.toml: an exception reason is required")

@@ -23,7 +23,7 @@ rationale = "Coordinated migration to maintained upstream dependencies."
 IGNORE = '[advisories]\nignore = ["RUSTSEC-2026-0543"]\n'
 OSV = '''[[IgnoredVulns]]
 id = "RUSTSEC-2026-0543"
-effectiveUntil = 2026-12-18
+ignoreUntil = 2026-12-18
 reason = "Maintainers track the coordinated maintenance migration in Ops w19008."
 '''
 
@@ -92,7 +92,7 @@ class AdvisoryExceptionChecks(unittest.TestCase):
         for content in (
             OSV.replace("RUSTSEC-2026-0543", "RUSTSEC-2026-0553"),
             OSV.replace("2026-12-18", "2026-12-19"),
-            OSV.replace("effectiveUntil = 2026-12-18", 'effectiveUntil = "2026-12-18"'),
+            OSV.replace("ignoreUntil = 2026-12-18", 'ignoreUntil = "2026-12-18"'),
             OSV + '\n[[PackageOverrides]]\nname = "chrono"\nignore = true\n',
             OSV + OSV,
             "IgnoredVulns = []\n",

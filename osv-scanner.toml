@@ -2,5 +2,5 @@
 # The UTC expiry and exact advisory scope are enforced by dependency governance.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0543"
-effectiveUntil = 2026-12-18
+ignoreUntil = 2026-12-18
 reason = "Chrono 0.4.45 maintenance notice; no patched release. Owner: SednaLabs maintainers. Follow-up: Ops w19008 (parent w19007). Expires 2026-12-18 00:00 UTC; see .cargo/advisory-exceptions.toml."
