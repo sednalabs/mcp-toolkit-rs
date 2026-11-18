@@ -69,6 +69,11 @@ Run:
 ./scripts/dependency_governance_check.sh
 ```
 
+Before dependency tooling runs, `scripts/advisory_exception_check.py` verifies
+exception ownership, tracking, exact locked versions, matching audit/deny IDs,
+and UTC expiry. CI runs this check on every PR, including changes that otherwise
+skip the dependency lanes.
+
 The script enforces:
 
 0. auth/token dependency posture via `scripts/auth_dependency_posture_check.py`
@@ -103,6 +108,34 @@ Exception requirements:
 1. Documented in PR with rationale, owner, and explicit expiry date.
 2. Bounded duration (target <= 30 days).
 3. Follow-up issue/work item created before merge.
+
+### Temporary Chrono maintenance exception
+
+The current exception covers only the informational unmaintained notice
+[RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html), issued
+2026-11-17, for the existing transitive dependency `chrono` 0.4.45. The advisory
+has no patched version. Upstream recommends migration to `jiff` or `time` in its
+[maintenance announcement](https://github.com/chronotope/chrono/issues/1768).
+RMCP, oauth2, Arrow and schemars currently use Chrono APIs, so replacing it
+requires coordinated dependency/API changes. Introducing an unreviewed fork
+would add source and maintenance risk without completing that migration.
+
+- Owner: SednaLabs maintainers.
+- Recorded: 2026-11-18 under this repository's delivery-exception policy.
+- Expiry: **2026-12-18 at 00:00 UTC**; the governance gate fails from that instant.
+- Follow-up: **Ops w19008**, parent w19007, due 2026-12-18. Track maintained
+  upstream replacements and remove the exception.
+- Scope: the exact advisory and locked package version in
+  `.cargo/advisory-exceptions.toml`; `.cargo/audit.toml` and `deny.toml` must match.
+
+`cargo audit --deny warnings`, cargo-deny vulnerability checks, and the other
+dependency gates remain enabled. The independent Actix HTTP vulnerabilities are
+addressed by upgrading `actix-http` to the
+[patched 3.21.3 release](https://rustsec.org/advisories/RUSTSEC-2026-0553.html).
+New vulnerabilities in Chrono still
+fail the audit under their own advisory IDs. Any change to the locked Chrono
+version requires reassessment; removing Chrono requires removing its exception.
+Generated repositories receive no advisory exception from the templates.
 
 ## Auth/token mechanics
 

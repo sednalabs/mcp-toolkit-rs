@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const REVISION: &str = "1234567890abcdef1234567890abcdef12345678";
+const REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 struct Project(PathBuf);
 
@@ -179,8 +179,8 @@ fn mutable_or_malformed_revisions_are_rejected_before_creating_output() {
         "v1.0.0",
         "1234567",
         "",
-        "1234567890abcdef1234567890abcdef1234567g",
-        "1234567890abcdef1234567890abcdef1234567\n",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
     ] {
         let project = Project::new();
         let output = project.generate(&["--toolkit-rev", revision]);

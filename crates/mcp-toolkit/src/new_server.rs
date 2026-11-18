@@ -54,7 +54,7 @@ pub enum ToolkitDependencySource {
     Git(String),
     /// Rewrite toolkit dependencies to a Git repository at an immutable commit.
     GitRevision {
-        /// Repository URL, without credentials or control characters.
+        /// Repository URL. Pass a public URL without embedded credentials.
         url: String,
         /// Full 40-character hexadecimal Git commit identifier.
         rev: String,

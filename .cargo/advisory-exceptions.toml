@@ -1,0 +1,12 @@
+# Repository-specific decisions; generated servers must assess their own graph.
+[[exception]]
+advisory = "RUSTSEC-2026-0543"
+package = "chrono"
+versions = ["0.4.45"]
+kind = "unmaintained"
+owner = "SednaLabs maintainers"
+approved_on = 2026-11-18
+expires = 2026-12-18
+work_item = "Ops w19008 (parent w19007)"
+source = "https://rustsec.org/advisories/RUSTSEC-2026-0543.html"
+rationale = "Informational maintenance notice with no patched release. Existing RMCP, oauth2, Arrow and schemars dependencies use chrono APIs; jiff/time migration requires coordinated upstream changes. Track removal under the existing dependency-governance exception policy."

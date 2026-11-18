@@ -212,11 +212,16 @@ fn run_new(args: &[String]) -> Result<(), String> {
     println!("  mcp-toolkit client-config .");
     println!("  cargo fmt --all");
     println!("  cargo test --all-targets --all-features");
-    println!();
-    println!(
-        "For public or portable repos, rerun with `--toolkit-git {}` instead of local path dependencies.",
-        default_toolkit_git_url()
-    );
+    if matches!(
+        options.toolkit_dependency,
+        ToolkitDependencySource::LocalPath(_)
+    ) {
+        println!();
+        println!(
+            "For public or portable repos, use `--toolkit-rev <reviewed-commit>` or `--toolkit-git {}` instead of local path dependencies.",
+            default_toolkit_git_url()
+        );
+    }
 
     Ok(())
 }
