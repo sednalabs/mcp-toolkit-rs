@@ -4,3 +4,5 @@ Cargo.lock
 !/Cargo.lock
 .tmp/
 .build-helper/
+__pycache__/
+*.pyc

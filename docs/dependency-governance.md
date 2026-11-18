@@ -127,7 +127,7 @@ would add source and maintenance risk without completing that migration.
   upstream replacements and remove the exception.
 - Scope: the exact advisory and locked package version in
   `.cargo/advisory-exceptions.toml`; `.cargo/audit.toml`, `deny.toml` and the
-  repository-only `osv-scanner.toml` must match. OSV's `effectiveUntil` uses the
+  repository-only `osv-scanner.toml` must match. The pinned OSV's `ignoreUntil` uses the
   same date, and the UTC gate enforces expiry at the start of that day.
 
 OSV scans the tracked root `Cargo.lock`; its observed Chrono notice is covered
