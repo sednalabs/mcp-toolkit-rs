@@ -1622,12 +1622,12 @@ fn release_preflight_rejects_cargo_local_toolkit_overrides() {
     .expect("generate public stdio template");
 
     let manifest_path = output.join("Cargo.toml");
-    let mut manifest = read(&manifest_path);
+    let mut manifest = read(&manifest_path).replace(
+        "[patch.crates-io]",
+        "[patch.crates-io]\nmcp-toolkit-testing = { path = \"../mcp-toolkit-testing\" }",
+    );
     manifest.push_str(
         r#"
-[patch.crates-io]
-mcp-toolkit-testing = { path = "../mcp-toolkit-testing" }
-
 [replace]
 "mcp-toolkit-core:0.1.0" = { path = "../mcp-toolkit-core" }
 "#,

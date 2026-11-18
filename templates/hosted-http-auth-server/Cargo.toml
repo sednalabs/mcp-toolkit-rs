@@ -22,3 +22,8 @@ tokio = { version = "1.52.3", features = ["macros", "net", "rt-multi-thread", "s
 http-body-util = "0.1.3"
 mcp-toolkit-testing = { path = "../../crates/mcp-toolkit-testing" }
 tower = { version = "0.5.3", features = ["util"] }
+
+# Cargo does not inherit the toolkit root patch into generated applications.
+[patch.crates-io]
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "31e83f4f752001d2afc386254a4d17b5eab5f419" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "31e83f4f752001d2afc386254a4d17b5eab5f419" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.

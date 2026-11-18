@@ -4,13 +4,13 @@ use std::path::PathBuf;
 use std::process;
 
 use mcp_toolkit::client_config::{
-    render_client_config, ClientConfigOptions, ClientConfigTransport,
+    render_client_config, ClientConfigFormat, ClientConfigOptions, ClientConfigTransport,
 };
 use mcp_toolkit::doctor::inspect_project;
 use mcp_toolkit::draft_generator::{inspect_draft_source, DraftGeneratorOptions};
 use mcp_toolkit::new_server::{
     default_template_id, default_toolkit_git_url, default_toolkit_root, generate_new_server,
-    templates, NewServerOptions, ToolkitDependencySource,
+    generate_new_server_preserving_license, templates, NewServerOptions, ToolkitDependencySource,
 };
 use mcp_toolkit::patterns::{
     conformance_findings, find_pattern, manifests_for_pattern, pattern_manifests, patterns,
@@ -68,6 +68,8 @@ fn run_new(args: &[String]) -> Result<(), String> {
     let mut pattern: Option<String> = None;
     let mut toolkit_root: Option<PathBuf> = None;
     let mut toolkit_git: Option<String> = None;
+    let mut toolkit_rev: Option<String> = None;
+    let mut keep_license = false;
     let mut overwrite = false;
     let mut positional = Vec::new();
 
@@ -97,6 +99,10 @@ fn run_new(args: &[String]) -> Result<(), String> {
             "--toolkit-git" => {
                 toolkit_git = Some(take_value(args, &mut index, "--toolkit-git")?);
             }
+            "--toolkit-rev" => {
+                toolkit_rev = Some(take_value(args, &mut index, "--toolkit-rev")?);
+            }
+            "--keep-license" => keep_license = true,
             "--force" => {
                 overwrite = true;
             }
@@ -141,22 +147,35 @@ fn run_new(args: &[String]) -> Result<(), String> {
             .to_string(),
         (None, None) => default_template_id().to_string(),
     };
-    let toolkit_dependency = match (toolkit_root, toolkit_git) {
-        (Some(_), Some(_)) => {
-            return Err("use either --toolkit-root or --toolkit-git, not both".to_string());
+    let toolkit_dependency = match (toolkit_root, toolkit_git, toolkit_rev) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+            return Err(
+                "use either --toolkit-root or --toolkit-git/--toolkit-rev, not both".to_string(),
+            );
         }
-        (Some(root), None) => ToolkitDependencySource::LocalPath(canonical_toolkit_root(root)?),
-        (None, Some(url)) => ToolkitDependencySource::Git(url),
-        (None, None) => ToolkitDependencySource::LocalPath(default_toolkit_root()),
+        (Some(root), None, None) => {
+            ToolkitDependencySource::LocalPath(canonical_toolkit_root(root)?)
+        }
+        (None, url, Some(rev)) => ToolkitDependencySource::GitRevision {
+            url: url.unwrap_or_else(|| default_toolkit_git_url().to_string()),
+            rev,
+        },
+        (None, Some(url), None) => ToolkitDependencySource::Git(url),
+        (None, None, None) => ToolkitDependencySource::LocalPath(default_toolkit_root()),
     };
 
-    let summary = generate_new_server(&NewServerOptions {
+    let options = NewServerOptions {
         template,
         package_name,
         output_dir,
         toolkit_dependency,
         overwrite,
-    })
+    };
+    let summary = if keep_license {
+        generate_new_server_preserving_license(&options)
+    } else {
+        generate_new_server(&options)
+    }
     .map_err(|error| error.to_string())?;
 
     if let Some(pattern) = selected_pattern {
@@ -180,6 +199,11 @@ fn run_new(args: &[String]) -> Result<(), String> {
         "Files: {} created, {} unchanged, {} overwritten",
         summary.created_files, summary.unchanged_files, summary.overwritten_files
     );
+    if keep_license {
+        println!(
+            "Existing LICENSE retained; check the generated Cargo license declaration matches."
+        );
+    }
     println!();
     // Keep commands path-free: generated paths may contain spaces, quotes or
     // shell metacharacters, and quoting rules differ between shells.
@@ -205,6 +229,12 @@ fn run_client_config(args: &[String]) -> Result<(), String> {
     while index < args.len() {
         let arg = &args[index];
         match arg.as_str() {
+            "--format" => {
+                let value = take_value(args, &mut index, "--format")?;
+                options.format = ClientConfigFormat::parse(&value).ok_or_else(|| {
+                    "unknown client-config format; use codex, json, or kiro".to_string()
+                })?;
+            }
             "--name" => {
                 options.server_name = Some(take_value(args, &mut index, "--name")?);
             }
@@ -737,6 +767,8 @@ fn print_new_help() {
     println!("  -o, --output <dir>        Relative output directory (default: package name)");
     println!("      --toolkit-root <dir>  Local mcp-toolkit-rs checkout for path dependencies");
     println!("      --toolkit-git <url>   Git URL for portable toolkit dependencies");
+    println!("      --toolkit-rev <sha>   Pin Git dependencies to a full 40-character commit");
+    println!("      --keep-license       Preserve an existing LICENSE when bootstrapping a clone");
     println!("      --force               Overwrite generated files that differ");
     println!("  -h, --help                Show this help");
     println!();
@@ -785,6 +817,7 @@ fn print_client_config_help() {
     println!("  mcp-toolkit client-config [generated-server-dir] [options]");
     println!();
     println!("Options:");
+    println!("      --format <kind>       codex (default), json, or kiro");
     println!("      --name <server-name>  MCP client server name (default: Cargo package name)");
     println!("      --transport <kind>    stdio or http (default: infer from generated files)");
     println!("      --command <path>      Stdio command path (default: target/release/<package>)");
