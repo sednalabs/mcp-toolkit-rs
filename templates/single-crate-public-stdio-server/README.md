@@ -20,7 +20,7 @@ one:
 - `spec/mcp_probe_stdio_smoke.v1.json` for a portable scripted `mcp-probe`
   smoke scenario;
 - pinned GitHub Actions workflows for baseline validation, CodeQL Advanced,
-  GitHub Code Quality coverage upload, dependency governance, and CodeQL query
+  Cobertura coverage, optional GitHub Code Quality ingestion, dependency governance, and CodeQL query
   pack compilation;
 - a vendored CodeQL Actions workflow-security query pack for downstream reuse;
 - public-safe `.gitignore`, `LICENSE`, `deny.toml`, and governance scripts.
@@ -66,6 +66,12 @@ cargo test --all-targets --all-features
 
 The hosted GitHub workflows in `.github/workflows/` should be the shared proof
 surface for public review and merge.
+
+Coverage generation and the Cobertura artifact are required on every coverage
+run. GitHub Code Quality ingestion is opt-in because new repositories may not
+have that service enabled. After enabling it, set the repository Actions
+variable `ENABLE_GITHUB_CODE_QUALITY` to `true`. The upload then becomes a
+required step in that run; an enabled service failure is not ignored.
 
 ## Native Linux Release Artifacts
 

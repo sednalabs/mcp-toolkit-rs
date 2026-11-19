@@ -14,6 +14,8 @@ usage() {
   cat <<'USAGE'
 Usage: ./scripts/dependency_governance_check.sh [--bootstrap-tools]
 
+Repository preflight: advisory exception scope, ownership, locked versions and UTC expiry.
+
 Checks (per configured workspace):
   0) auth dependency posture -> token mechanics stay crate-backed or reviewed glue
   1) rmcp SDK pinning -> direct rmcp pins match and direct macro pins match runtime pins
@@ -142,6 +144,9 @@ if [[ "${missing_tools}" -ne 0 ]]; then
   echo "tip: rerun with --bootstrap-tools" >&2
   exit 2
 fi
+
+echo "[repo] advisory exception scope and UTC expiry check"
+run_cmd python3 "${ROOT_DIR}/scripts/advisory_exception_check.py"
 
 echo "[repo] [0/5] auth dependency posture check"
 run_cmd python3 "${ROOT_DIR}/scripts/auth_dependency_posture_check.py"

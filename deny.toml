@@ -5,7 +5,9 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Chrono maintenance only; expiry/scope checked by advisory_exception_check.py.
+# Owner: SednaLabs maintainers. Ops w19008. Expires 2026-12-18 00:00 UTC.
+ignore = ["RUSTSEC-2026-0543"]
 
 [licenses]
 version = 2

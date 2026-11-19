@@ -29,6 +29,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Check advisory exception scope and expiry
+        run: |
+          python3 scripts/advisory_exception_check.py
+          python3 -m unittest discover -s scripts -p test_advisory_exception_check.py
+
       - name: Detect dependency-governance-relevant changes
         id: relevance
         env:
@@ -56,6 +61,11 @@ jobs:
               "**/Cargo.toml",
               "**/Cargo.lock",
               "deny.toml",
+              "osv-scanner.toml",
+              ".cargo/audit.toml",
+              ".cargo/advisory-exceptions.toml",
+              "scripts/advisory_exception_check.py",
+              "scripts/test_advisory_exception_check.py",
               "scripts/dependency_governance_check.sh",
               "scripts/rmcp_macro_runtime_pin_check.py",
               "docs/dependency-governance.md",
@@ -179,6 +189,10 @@ jobs:
       - name: Require every governance lane to pass
         shell: bash
         run: |
+          if [[ "${{ needs.dependency-governance-changes.result }}" != "success" ]]; then
+            echo "Dependency governance preflight or exception expiry failed." >&2
+            exit 1
+          fi
           if [[ "${{ needs.dependency-governance-changes.outputs.relevant }}" != "true" ]]; then
             echo "Dependency governance checks were not relevant for this change."
             exit 0

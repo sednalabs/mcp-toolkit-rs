@@ -32,7 +32,7 @@ mcp-toolkit <command>
 | `mcp-toolkit new --name <package>` | Generate a new server from a maintained template. | Run `doctor`, inspect generated files, then run generated tests. |
 | `mcp-toolkit doctor [generated-server-dir]` | Check generated source, proof files, probe files, and baseline workflow. | Fix missing scaffold files or continue to validation. |
 | `mcp-toolkit release-preflight [generated-server-dir]` | Check public-readiness files, workflows, release proof scaffolding, and high-confidence secret markers. | Fix missing public repository evidence before publishing or installing; use `--profile existing-public-stdio` for an established public stdio repo. |
-| `mcp-toolkit client-config [generated-server-dir]` | Print a Codex-style client snippet for the generated transport. | Replace placeholder command paths, URLs, or profiles for the real deployment; use `--installed` for a binary on `PATH`. |
+| `mcp-toolkit client-config [generated-server-dir]` | Print Codex TOML or JSON for Kiro and other MCP clients. | Select `--format kiro`, `--format json`, or the default `codex`; use `--installed` for a binary on `PATH`. |
 | `mcp-toolkit conformance` | Print downstream manifest conformance posture. | Use `--strict` in PRs that change pattern manifests. |
 
 The top-level help is deliberately short:
@@ -91,14 +91,35 @@ Useful options:
 | --- | --- | --- |
 | `--template <id>` or `-t <id>` | You know the exact maintained template. | Current ids are `curated-stdio-intent`, `single-crate-public-stdio`, and `hosted-http-auth`. |
 | `--pattern <id>` or `--archetype <id>` | You want the generator to choose the recommended template for an archetype. | Inspect the archetype first with `mcp-toolkit patterns <id>`. |
-| `--output <dir>` or `-o <dir>` | The output directory should differ from the package name. | The directory must be relative and under the current working directory. |
+| `--output <dir>` or `-o <dir>` | The output directory should differ from the package name. | The directory must be relative and under the current working directory; `--output .` bootstraps the current clone. |
 | `--toolkit-root <dir>` | You want generated manifests to use a local toolkit checkout. | This is the default during toolkit development. |
 | `--toolkit-git <url>` | You want a portable service repository. | Use `https://github.com/sednalabs/mcp-toolkit-rs` for public Git dependencies; `release-preflight` rejects local toolkit path dependencies and committed Cargo path overrides for public-ready output. |
+| `--toolkit-rev <sha>` | You want reproducible Git dependencies from the first commit. | Requires a full 40-character hexadecimal commit. Uses the canonical toolkit URL unless `--toolkit-git` overrides it. |
+| `--keep-license` | The current clone already has a chosen license. | Preserves only an existing regular `LICENSE`; all other conflict and symlink checks still apply. Check the Cargo license declaration against the retained file. |
 | `--force` | You are intentionally replacing generated files. | Without this, changed files are protected from overwrite. |
 
-Do not pass both `--toolkit-root` and `--toolkit-git`. A generated public or
-portable repository should normally be created with `--toolkit-git` from the
-first commit so the manifest does not point at a developer machine path.
+Do not combine `--toolkit-root` with `--toolkit-git` or `--toolkit-rev`: a local
+path dependency cannot enforce a Git revision. For a new public repository,
+use an approved toolkit commit and generate directly into the clone:
+
+```bash
+mcp-toolkit new my-mcp-server --template public-stdio --output . --keep-license --toolkit-rev "$TOOLKIT_REV"
+cargo generate-lockfile
+mcp-toolkit doctor .
+mcp-toolkit client-config . --format kiro
+```
+
+Set `TOOLKIT_REV` to the full reviewed commit before running the command. The
+generator validates its shape without fetching or checking remote existence.
+Every toolkit dependency receives the same `rev` and an explicit exact version
+read from its package manifest when this generator was built. This satisfies
+the generated policy that rejects wildcard version requirements. Use a generator
+built from compatible toolkit package versions; generation does not inspect the
+remote revision. Commit `Cargo.lock` to lock registry dependencies too.
+All templates carry the toolkit's immutable RMCP
+and macro override explicitly because Cargo does not inherit dependency root
+patches. The public template's Git source allowlist follows the selected
+toolkit URL and includes the RMCP fork.
 
 ## Archetype Selection
 
@@ -211,6 +232,7 @@ Overrides:
 
 | Option | Applies to | Purpose |
 | --- | --- | --- |
+| `--format codex\|json\|kiro` | stdio and HTTP | Choose Codex TOML, generic `mcpServers` JSON, or Kiro JSON with no tools auto-approved. |
 | `--name <server-name>` | stdio and HTTP | MCP client server key. |
 | `--transport stdio` | any generated project | Force stdio output when inference is ambiguous. |
 | `--transport http` | any generated project | Force HTTP output when inference is ambiguous. |
@@ -223,6 +245,13 @@ Overrides:
 The default stdio profile is `read_only`. Operator or mutation tools should
 only appear when the generated service explicitly enables an operator profile or
 a stronger service-specific policy gate.
+
+For Kiro, merge the generated `mcpServers` entry into
+`.kiro/settings/mcp.json` or `~/.kiro/settings/mcp.json`; do not replace an
+existing configuration file containing other servers. Kiro output sets
+`disabled: false`, `autoApprove: []`, and `disabledTools: []`. Rendering does
+not install a binary, launch a process, update client settings, or read
+credentials. See [Kiro's configuration reference](https://kiro.dev/docs/mcp/configuration/).
 
 Generated analytics servers should add `mcp-toolkit-scratchpad` when large
 provider results need local DuckDB-backed sessions instead of chat-sized

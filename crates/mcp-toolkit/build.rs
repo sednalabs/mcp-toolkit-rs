@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    // Bind repository inputs to the package Cargo compiled, rather than a mutable
+    // runtime environment variable when the build script is executed.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.join("../..");
     let templates_root = repo_root.join("templates");
     let manifests_root = repo_root.join("docs/pattern-manifests");
@@ -19,12 +21,70 @@ fn main() {
     println!("cargo:rerun-if-changed={}", templates_root.display());
     println!("cargo:rerun-if-changed={}", manifests_root.display());
 
-    let generated = generate_templates_module(&templates_root).expect("generate template module");
+    let mut generated =
+        generate_templates_module(&templates_root).expect("generate template module");
+    generated
+        .push_str(&generate_toolkit_versions_module().expect("embed toolkit package versions"));
     fs::write(templates_out_file, generated).expect("write generated template module");
 
     let generated =
         generate_pattern_registry_module(&manifests_root).expect("generate pattern registry");
     fs::write(pattern_registry_out_file, generated).expect("write generated pattern registry");
+}
+
+fn generate_toolkit_versions_module() -> Result<String, Box<dyn Error>> {
+    // Keep the catalog bound to reviewed source files at compile time. Register
+    // each new toolkit crate here so its actual package version is available to
+    // generated consumers.
+    macro_rules! manifest {
+        ($path:literal) => {
+            ($path, include_str!($path))
+        };
+    }
+    let manifests = [
+        manifest!("Cargo.toml"),
+        manifest!("../mcp-toolkit-auth/Cargo.toml"),
+        manifest!("../mcp-toolkit-core/Cargo.toml"),
+        manifest!("../mcp-toolkit-docs/Cargo.toml"),
+        manifest!("../mcp-toolkit-http/Cargo.toml"),
+        manifest!("../mcp-toolkit-logs/Cargo.toml"),
+        manifest!("../mcp-toolkit-observability/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-conformance/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-core/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-ffi/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-kernel-adapters/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-runtime/Cargo.toml"),
+        manifest!("../mcp-toolkit-postgres/Cargo.toml"),
+        manifest!("../mcp-toolkit-private-artifact/Cargo.toml"),
+        manifest!("../mcp-toolkit-process/Cargo.toml"),
+        manifest!("../mcp-toolkit-provenance/Cargo.toml"),
+        manifest!("../mcp-toolkit-scratchpad/Cargo.toml"),
+        manifest!("../mcp-toolkit-server/Cargo.toml"),
+        manifest!("../mcp-toolkit-tasks/Cargo.toml"),
+        manifest!("../mcp-toolkit-testing/Cargo.toml"),
+    ];
+    let mut module =
+        String::from("\npub(crate) static TOOLKIT_PACKAGE_VERSIONS: &[(&str, &str)] = &[\n");
+    for (path, contents) in manifests {
+        println!("cargo:rerun-if-changed={path}");
+        let manifest = contents.parse::<toml_edit::DocumentMut>()?;
+        let package = manifest
+            .get("package")
+            .ok_or_else(|| manifest_error(format!("{path} has no package table")))?;
+        let name = package
+            .get("name")
+            .and_then(toml_edit::Item::as_str)
+            .ok_or_else(|| manifest_error(format!("{path} has no package name")))?;
+        let version = package
+            .get("version")
+            .and_then(toml_edit::Item::as_str)
+            .ok_or_else(|| {
+                manifest_error(format!("{path} requires an explicit package version"))
+            })?;
+        module.push_str(&format!("    ({name:?}, {version:?}),\n"));
+    }
+    module.push_str("];\n");
+    Ok(module)
 }
 
 fn generate_templates_module(templates_root: &Path) -> io::Result<String> {

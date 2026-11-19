@@ -8,7 +8,7 @@
 //! while keeping the existing templates as the single source of scaffold truth.
 //!
 //! ## Security Boundaries
-//! * Embeds only files from the repository's `templates/` directory.
+//! * Embeds template files and package versions from the toolkit source tree.
 //! * Refuses to overwrite changed files unless the caller explicitly allows it.
 //! * Validates generated relative paths before writing under a relative output
 //!   directory rooted at the caller's current working directory.
@@ -52,6 +52,13 @@ pub enum ToolkitDependencySource {
     LocalPath(PathBuf),
     /// Rewrite toolkit dependencies to a Git repository URL.
     Git(String),
+    /// Rewrite toolkit dependencies to a Git repository at an immutable commit.
+    GitRevision {
+        /// Repository URL. Pass a public URL without embedded credentials.
+        url: String,
+        /// Full 40-character hexadecimal Git commit identifier.
+        rev: String,
+    },
 }
 
 /// Configures a new-server generation run.
@@ -80,7 +87,7 @@ pub struct NewServerSummary {
     pub output_dir: PathBuf,
     /// Count of newly written files.
     pub created_files: usize,
-    /// Count of existing files that already matched generated content.
+    /// Count of existing files that matched generated content or were explicitly preserved.
     pub unchanged_files: usize,
     /// Count of changed files overwritten because `overwrite` was enabled.
     pub overwritten_files: usize,
@@ -93,6 +100,10 @@ pub enum NewServerError {
     UnknownTemplate(String),
     /// The requested package name is not a safe Cargo package name.
     InvalidPackageName(String),
+    /// The Git dependency revision is not a full hexadecimal commit identifier.
+    InvalidToolkitRevision,
+    /// The Git dependency URL is empty or contains control characters.
+    InvalidToolkitGitUrl,
     /// An embedded source template was not found in the generated asset set.
     MissingEmbeddedTemplate(&'static str),
     /// An embedded template path is absolute, empty, or attempts to escape the
@@ -128,6 +139,12 @@ impl fmt::Display for NewServerError {
             Self::InvalidPackageName(package_name) => write!(
                 formatter,
                 "invalid package name `{package_name}`; start with an ASCII letter or `_`, use only letters, numbers, `_`, or `-`, and avoid Rust keywords or `_` alone"
+            ),
+            Self::InvalidToolkitRevision => formatter.write_str(
+                "--toolkit-rev requires a full 40-character hexadecimal commit identifier",
+            ),
+            Self::InvalidToolkitGitUrl => formatter.write_str(
+                "toolkit Git URL must be nonempty and contain no control characters",
             ),
             Self::MissingEmbeddedTemplate(source_dir) => write!(
                 formatter,
@@ -249,7 +266,45 @@ pub fn find_template(name: &str) -> Option<TemplateSpec> {
 /// The generator validates every embedded relative path and only writes below
 /// a relative output directory rooted at the caller's current working directory.
 pub fn generate_new_server(options: &NewServerOptions) -> Result<NewServerSummary, NewServerError> {
+    generate_new_server_inner(options, false)
+}
+
+/// Generates a server while preserving an existing regular `LICENSE` file.
+///
+/// Use this for a repository initialised with a chosen license. The template
+/// license is still written when the destination has none. All other files
+/// retain the normal overwrite checks. Check the generated Cargo license
+/// declaration against the retained legal text before publishing.
+///
+/// # Errors
+/// Returns the same validation and filesystem errors as [`generate_new_server`].
+///
+/// # Security
+/// Preserving `LICENSE` never follows symlinks or relaxes checks for other
+/// generated paths. It takes precedence over `options.overwrite` for that file.
+pub fn generate_new_server_preserving_license(
+    options: &NewServerOptions,
+) -> Result<NewServerSummary, NewServerError> {
+    generate_new_server_inner(options, true)
+}
+
+fn generate_new_server_inner(
+    options: &NewServerOptions,
+    keep_license: bool,
+) -> Result<NewServerSummary, NewServerError> {
     validate_package_name(&options.package_name)?;
+    if let ToolkitDependencySource::GitRevision { rev, .. } = &options.toolkit_dependency {
+        if rev.len() != 40 || !rev.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(NewServerError::InvalidToolkitRevision);
+        }
+    }
+    if let ToolkitDependencySource::Git(url) | ToolkitDependencySource::GitRevision { url, .. } =
+        &options.toolkit_dependency
+    {
+        if url.is_empty() || url.chars().any(char::is_control) {
+            return Err(NewServerError::InvalidToolkitGitUrl);
+        }
+    }
     if let ToolkitDependencySource::LocalPath(root) = &options.toolkit_dependency {
         if root.to_str().is_none() {
             return Err(NewServerError::Io {
@@ -270,7 +325,7 @@ pub fn generate_new_server(options: &NewServerOptions) -> Result<NewServerSummar
         .ok_or(NewServerError::MissingEmbeddedTemplate(template.source_dir))?;
 
     let output_dir = OutputDirectory::new(&options.output_dir)?;
-    let prepared_assets = prepare_assets(embedded, template, options, &output_dir)?;
+    let prepared_assets = prepare_assets(embedded, template, options, &output_dir, keep_license)?;
 
     if !options.overwrite {
         for asset in &prepared_assets {
@@ -323,13 +378,30 @@ fn prepare_assets(
     template: TemplateSpec,
     options: &NewServerOptions,
     output_dir: &OutputDirectory,
+    keep_license: bool,
 ) -> Result<Vec<PreparedAsset>, NewServerError> {
     let mut prepared = Vec::with_capacity(embedded.assets.len());
 
     for asset in embedded.assets {
         let relative = safe_template_relative_path(asset.relative_path)?;
         let destination = output_dir.destination(&relative)?;
-        let content = render_asset(asset.contents, template, options);
+        let mut content =
+            if keep_license && relative == Path::new("LICENSE") && destination.exists() {
+                read_generated(&destination)?
+            } else {
+                render_asset(asset.contents, template, options)
+            };
+        if relative == Path::new("deny.toml") {
+            if let ToolkitDependencySource::Git(url)
+            | ToolkitDependencySource::GitRevision { url, .. } = &options.toolkit_dependency
+            {
+                let rendered = String::from_utf8_lossy(&content).replace(
+                    &format!("\"{DEFAULT_TOOLKIT_GIT}\""),
+                    &toml_edit::Value::from(url.as_str()).to_string(),
+                );
+                content = rendered.into_bytes();
+            }
+        }
         prepared.push(PreparedAsset {
             destination,
             content,
@@ -427,6 +499,15 @@ fn safe_template_relative_path(relative_path: &str) -> Result<PathBuf, NewServer
 }
 
 fn safe_output_relative_path(path: &Path) -> Result<PathBuf, NewServerError> {
+    // An explicit current directory supports bootstrapping an existing clone.
+    // Embedded asset paths still require a nonempty normal component.
+    if !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| component == Component::CurDir)
+    {
+        return Ok(PathBuf::from("."));
+    }
     safe_relative_components(path)
         .map_err(|_| NewServerError::InvalidOutputDirectory(path.to_path_buf()))
 }
@@ -597,13 +678,20 @@ fn rewrite_toolkit_dependencies(
     toolkit_dependency: &ToolkitDependencySource,
 ) -> String {
     let mut rewritten = text.to_string();
+    let packages = toolkit_path_dependencies(text);
 
-    for package in toolkit_path_dependencies(text) {
+    // Versions come from each crate's manifest when the generator is built. Git
+    // source selection alone leaves Cargo's version requirement as `*`, which
+    // conflicts with the generated dependency policy's wildcard prohibition.
+    for (package, version) in embedded_templates::TOOLKIT_PACKAGE_VERSIONS {
+        if !packages.iter().any(|candidate| candidate == package) {
+            continue;
+        }
         rewritten = rewritten.replace(
             &format!("{package} = {{ path = \"../../crates/{package}\""),
             &format!(
                 "{package} = {{ {}",
-                dependency_prefix(&package, toolkit_dependency)
+                dependency_prefix(package, version, toolkit_dependency)
             ),
         );
     }
@@ -614,10 +702,8 @@ fn rewrite_toolkit_dependencies(
 fn toolkit_path_dependencies(text: &str) -> Vec<String> {
     let mut packages = Vec::new();
     let dependency_prefix = " = { path = \"../../crates/";
-
     for line in text.lines() {
-        let line = line.trim_start();
-        let Some((package, path_suffix)) = line.split_once(dependency_prefix) else {
+        let Some((package, path_suffix)) = line.trim_start().split_once(dependency_prefix) else {
             continue;
         };
         let Some(path_package) = path_suffix.split('"').next() else {
@@ -627,23 +713,33 @@ fn toolkit_path_dependencies(text: &str) -> Vec<String> {
             packages.push(package.to_string());
         }
     }
-
     packages.sort();
     packages.dedup();
     packages
 }
 
-fn dependency_prefix(package: &str, toolkit_dependency: &ToolkitDependencySource) -> String {
+fn dependency_prefix(
+    package: &str,
+    version: &str,
+    toolkit_dependency: &ToolkitDependencySource,
+) -> String {
     match toolkit_dependency {
         ToolkitDependencySource::LocalPath(root) => {
             format!("path = {}", toml_path(&root.join("crates").join(package)))
         }
         ToolkitDependencySource::Git(url) => {
             format!(
-                "git = \"{}\"",
-                url.replace('\\', "\\\\").replace('"', "\\\"")
+                "git = {}, version = {}",
+                toml_edit::Value::from(url.as_str()),
+                toml_edit::Value::from(format!("={version}")),
             )
         }
+        ToolkitDependencySource::GitRevision { url, rev } => format!(
+            "git = {}, rev = {}, version = {}",
+            toml_edit::Value::from(url.as_str()),
+            toml_edit::Value::from(rev.to_ascii_lowercase()),
+            toml_edit::Value::from(format!("={version}")),
+        ),
     }
 }
 
@@ -827,11 +923,11 @@ mod tests {
         assert_eq!(
             String::from_utf8(rewritten).expect("utf8"),
             concat!(
-                r#"mcp-toolkit = { git = "https://example.com/toolkit.git", features = ["server-stdio"] }"#,
+                r#"mcp-toolkit = { git = "https://example.com/toolkit.git", version = "=0.1.0", features = ["server-stdio"] }"#,
                 "\n",
-                r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git" }"#,
+                r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git", version = "=0.1.0" }"#,
                 "\n",
-                r#"mcp-toolkit-http = { git = "https://example.com/toolkit.git", features = ["auth"] }"#,
+                r#"mcp-toolkit-http = { git = "https://example.com/toolkit.git", version = "=0.1.0", features = ["auth"] }"#,
             )
         );
     }
@@ -847,7 +943,7 @@ mod tests {
             let source = ToolkitDependencySource::LocalPath(root);
             let manifest = format!(
                 "[dependencies]\nmcp-toolkit = {{ {} }}\n",
-                dependency_prefix("mcp-toolkit", &source)
+                dependency_prefix("mcp-toolkit", "0.1.0", &source)
             )
             .parse::<toml_edit::DocumentMut>()
             .expect("local dependency path must remain valid TOML");
@@ -890,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_rewrite_discovers_only_matching_toolkit_path_dependencies() {
+    fn dependency_rewrite_changes_only_matching_toolkit_path_dependencies() {
         let manifest = concat!(
             r#"mcp-toolkit-server = { path = "../../crates/mcp-toolkit-server" }"#,
             "\n",
@@ -898,10 +994,15 @@ mod tests {
             "\n",
             r#"other-toolkit = { path = "../../crates/other-toolkit" }"#,
         );
-        assert_eq!(
-            toolkit_path_dependencies(manifest),
-            vec!["mcp-toolkit-server".to_string()]
+        let source = ToolkitDependencySource::Git("https://example.com/toolkit.git".to_owned());
+        let rewritten = rewrite_toolkit_dependencies(manifest, &source);
+        assert!(rewritten.contains(
+            r#"mcp-toolkit-server = { git = "https://example.com/toolkit.git", version = "=0.1.0" }"#
+        ));
+        assert!(
+            rewritten.contains(r#"mcp-toolkit-http = { path = "../../crates/mcp-toolkit-core" }"#)
         );
+        assert!(rewritten.contains(r#"other-toolkit = { path = "../../crates/other-toolkit" }"#));
     }
 
     #[test]

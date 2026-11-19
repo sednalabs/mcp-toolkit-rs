@@ -54,6 +54,7 @@ jobs:
             --cobertura --output-path coverage/single-crate-public-stdio-server.xml
 
       - name: Upload coverage to GitHub Code Quality
+        if: ${{ vars.ENABLE_GITHUB_CODE_QUALITY == 'true' }}
         # actions/upload-code-coverage v1
         uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
         with:

@@ -61,6 +61,20 @@ pub enum ClientConfigFormat {
     CodexToml,
     /// A JSON object with an `mcpServers` map.
     McpServersJson,
+    /// Kiro's `mcpServers` JSON, with an explicit empty auto-approval list.
+    KiroJson,
+}
+
+impl ClientConfigFormat {
+    /// Parses a CLI format label without inspecting a client installation.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "codex" | "toml" => Some(Self::CodexToml),
+            "json" | "mcp-servers-json" => Some(Self::McpServersJson),
+            "kiro" => Some(Self::KiroJson),
+            _ => None,
+        }
+    }
 }
 
 /// Reports invalid explicit configuration without echoing caller data.
@@ -159,15 +173,12 @@ pub fn render_executable_client_config(
             }
             Ok(output)
         }
-        ClientConfigFormat::McpServersJson => {
+        ClientConfigFormat::McpServersJson | ClientConfigFormat::KiroJson => {
             let mut server = serde_json::json!({"command": command, "args": []});
             if !env.is_empty() {
                 server["env"] = serde_json::json!(env);
             }
-            // Value serialization is infallible; use its pretty Display formatter
-            // rather than exposing a generic serialization error with input data.
-            let config = serde_json::json!({"mcpServers": {server_name: server}});
-            Ok(format!("{config:#}\n"))
+            Ok(render_json_server(server_name, server, format))
         }
     }
 }
@@ -177,6 +188,8 @@ pub fn render_executable_client_config(
 pub struct ClientConfigOptions {
     /// Generated server project root.
     pub root: PathBuf,
+    /// Output format. Defaults to the existing Codex TOML contract.
+    pub format: ClientConfigFormat,
     /// Optional MCP client server name. Defaults to the Cargo package name.
     pub server_name: Option<String>,
     /// Optional transport override. Defaults to the doctor-inferred shape.
@@ -256,7 +269,7 @@ impl Error for ClientConfigError {
     }
 }
 
-/// Renders a Codex-style TOML MCP client configuration snippet.
+/// Renders a TOML or JSON MCP client configuration snippet.
 ///
 /// # Errors
 /// Returns `ClientConfigError` when the project root is invalid, the Cargo
@@ -357,14 +370,22 @@ fn render_stdio_config(
             .to_string()
     });
 
-    format!(
-        "[mcp_servers.{}]\ncommand = \"{}\"\nargs = []\n\n[mcp_servers.{}.env]\n{} = \"{}\"\n",
-        toml_string(server_name),
-        toml_string_value(&command),
-        toml_string(server_name),
-        env_key,
-        toml_string_value(options.env_value.as_deref().unwrap_or(&options.profile)),
-    )
+    let env_value = options.env_value.as_deref().unwrap_or(&options.profile);
+    match options.format {
+        ClientConfigFormat::CodexToml => format!(
+            "[mcp_servers.{}]\ncommand = \"{}\"\nargs = []\n\n[mcp_servers.{}.env]\n{} = \"{}\"\n",
+            toml_string(server_name),
+            toml_string_value(&command),
+            toml_string(server_name),
+            env_key,
+            toml_string_value(env_value),
+        ),
+        ClientConfigFormat::McpServersJson | ClientConfigFormat::KiroJson => render_json_server(
+            server_name,
+            serde_json::json!({"command": command, "args": [], "env": {env_key: env_value}}),
+            options.format,
+        ),
+    }
 }
 
 fn profile_env_key(package_name: &str) -> String {
@@ -402,11 +423,31 @@ fn render_hosted_http_config(options: &ClientConfigOptions, server_name: &str) -
         .clone()
         .unwrap_or_else(|| DEFAULT_HOSTED_HTTP_MCP_URL.to_string());
 
-    format!(
-        "[mcp_servers.{}]\nurl = \"{}\"\n",
-        toml_string(server_name),
-        toml_string_value(&url),
-    )
+    match options.format {
+        ClientConfigFormat::CodexToml => format!(
+            "[mcp_servers.{}]\nurl = \"{}\"\n",
+            toml_string(server_name),
+            toml_string_value(&url),
+        ),
+        ClientConfigFormat::McpServersJson | ClientConfigFormat::KiroJson => {
+            render_json_server(server_name, serde_json::json!({"url": url}), options.format)
+        }
+    }
+}
+
+fn render_json_server(
+    server_name: &str,
+    mut server: serde_json::Value,
+    format: ClientConfigFormat,
+) -> String {
+    if format == ClientConfigFormat::KiroJson {
+        server["disabled"] = serde_json::json!(false);
+        server["autoApprove"] = serde_json::json!([]);
+        server["disabledTools"] = serde_json::json!([]);
+    }
+    // Value serialization is infallible and never exposes inputs through errors.
+    let config = serde_json::json!({"mcpServers": {server_name: server}});
+    format!("{config:#}\n")
 }
 
 fn package_name_from_manifest(root: &Path) -> Result<String, ClientConfigError> {
@@ -468,6 +509,7 @@ impl Default for ClientConfigOptions {
     fn default() -> Self {
         Self {
             root: PathBuf::from("."),
+            format: ClientConfigFormat::CodexToml,
             server_name: None,
             transport: None,
             command: None,
@@ -492,6 +534,7 @@ mod tests {
         for format in [
             ClientConfigFormat::CodexToml,
             ClientConfigFormat::McpServersJson,
+            ClientConfigFormat::KiroJson,
         ] {
             let rendered = render_executable_client_config(name, command, format, &[]).unwrap();
             match format {
@@ -502,7 +545,7 @@ mod tests {
                     assert!(server["args"].as_array().unwrap().is_empty());
                     assert!(server.get("env").is_none());
                 }
-                ClientConfigFormat::McpServersJson => {
+                ClientConfigFormat::McpServersJson | ClientConfigFormat::KiroJson => {
                     let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
                     let server = &parsed["mcpServers"][name];
                     assert_eq!(server["command"].as_str(), command.to_str());
@@ -549,6 +592,7 @@ mod tests {
         for format in [
             ClientConfigFormat::CodexToml,
             ClientConfigFormat::McpServersJson,
+            ClientConfigFormat::KiroJson,
         ] {
             for (name, path, env) in [
                 ("", "archive", vec![]),

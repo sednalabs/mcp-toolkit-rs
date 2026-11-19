@@ -33,6 +33,12 @@ the exact template id. Use
 `--toolkit-git https://github.com/sednalabs/mcp-toolkit-rs` for portable Git
 dependencies, `--pattern <id>` to let the generator choose the recommended
 template, and `--force` only when replacing generated files intentionally.
+Add `--toolkit-rev <full-commit-sha>` to pin every toolkit crate to a reviewed
+commit; by itself it selects the canonical public toolkit URL. For a clone
+initialised with a license, use `--output . --keep-license` to generate in
+place while retaining that file and protecting every other existing file.
+The templates include the root RMCP patch explicitly so its source pin is not
+lost when the generated application becomes its own workspace.
 
 Every maintained starter ships `scripts/workflow_runner_policy_check.py` as a
 byte-identical copy of the canonical root helper. Template-integrity tests and
@@ -51,9 +57,10 @@ including `cargo run -- --doctor`, `cargo run -- --print-tools`,
 repository.
 
 Run `mcp-toolkit client-config <generated-server-dir>` when you are ready to
-wire the scaffold into an MCP client. It renders a Codex-style TOML snippet for
-the inferred transport, with `--transport`, `--name`, `--command`, `--url`, and
-`--profile` overrides for real deployment paths.
+wire the scaffold into an MCP client. It renders Codex TOML by default;
+`--format kiro` emits Kiro JSON with an empty `autoApprove` list and
+`--format json` emits generic `mcpServers` JSON. Use `--transport`, `--name`,
+`--command`, `--url`, and `--profile` overrides for real deployment paths.
 
 Run `mcp-toolkit release-preflight <generated-server-dir>` before publishing or
 installing a generated repository. It is stricter than doctor: the standalone
@@ -64,6 +71,11 @@ should fail until they add a license file, CodeQL or equivalent static analysis,
 dependency governance, coverage, release metadata, and public-ready docs. The
 checked-in templates use local path dependencies for toolkit development and
 are not the public-portability proof surface.
+
+The public starter always generates coverage and uploads its Cobertura artifact.
+Optional ingestion by GitHub Code Quality runs only when the repository Actions
+variable `ENABLE_GITHUB_CODE_QUALITY` is `true`; enable the service before setting
+that variable. Coverage generation remains a required gate in a fresh repository.
 
 ## Curated Stdio Intent Server
 

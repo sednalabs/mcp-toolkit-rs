@@ -1,0 +1,3 @@
+# Keep release input bytes identical across native runner checkouts.
+/Cargo.toml text eol=lf
+/Cargo.lock text eol=lf

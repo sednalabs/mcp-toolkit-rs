@@ -277,11 +277,22 @@ generation:
 
 ```bash
 mcp-toolkit client-config ./my-mcp-server
+mcp-toolkit client-config ./my-mcp-server --format kiro
 ```
 
 From inside a maintained generated starter, `cargo run -- --print-client-config`
 prints the same kind of client snippet without requiring the operator to find
 the toolkit binary first.
+
+The toolkit CLI keeps Codex TOML as its default. `--format json` emits a generic
+`mcpServers` object; `--format kiro` also supplies empty tool approval and
+disabled-tool lists. Merge the Kiro entry into `.kiro/settings/mcp.json` or
+`~/.kiro/settings/mcp.json` without overwriting other server entries. See the
+[official Kiro configuration reference](https://kiro.dev/docs/mcp/configuration/).
+Applications can use `render_executable_client_config` with
+`ClientConfigFormat::KiroJson` to provide the same output from an installed
+binary without needing its source checkout. No renderer discovers credentials
+or modifies the client's configuration.
 
 Use `--transport stdio` or `--transport http` if the scaffold is incomplete and
 the transport cannot be inferred yet. Use `--command`, `--url`, `--name`, and
