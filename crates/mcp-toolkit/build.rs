@@ -23,9 +23,8 @@ fn main() {
 
     let mut generated =
         generate_templates_module(&templates_root).expect("generate template module");
-    generated.push_str(
-        &generate_toolkit_versions_module(&repo_root).expect("embed toolkit package versions"),
-    );
+    generated
+        .push_str(&generate_toolkit_versions_module().expect("embed toolkit package versions"));
     fs::write(templates_out_file, generated).expect("write generated template module");
 
     let generated =
@@ -33,37 +32,54 @@ fn main() {
     fs::write(pattern_registry_out_file, generated).expect("write generated pattern registry");
 }
 
-fn generate_toolkit_versions_module(repo_root: &Path) -> Result<String, Box<dyn Error>> {
+fn generate_toolkit_versions_module() -> Result<String, Box<dyn Error>> {
+    // Keep the catalog bound to reviewed source files at compile time. Register
+    // each new toolkit crate here so its actual package version is available to
+    // generated consumers.
+    macro_rules! manifest {
+        ($path:literal) => {
+            ($path, include_str!($path))
+        };
+    }
+    let manifests = [
+        manifest!("Cargo.toml"),
+        manifest!("../mcp-toolkit-auth/Cargo.toml"),
+        manifest!("../mcp-toolkit-core/Cargo.toml"),
+        manifest!("../mcp-toolkit-docs/Cargo.toml"),
+        manifest!("../mcp-toolkit-http/Cargo.toml"),
+        manifest!("../mcp-toolkit-logs/Cargo.toml"),
+        manifest!("../mcp-toolkit-observability/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-conformance/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-core/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-ffi/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-kernel-adapters/Cargo.toml"),
+        manifest!("../mcp-toolkit-policy-runtime/Cargo.toml"),
+        manifest!("../mcp-toolkit-postgres/Cargo.toml"),
+        manifest!("../mcp-toolkit-private-artifact/Cargo.toml"),
+        manifest!("../mcp-toolkit-process/Cargo.toml"),
+        manifest!("../mcp-toolkit-provenance/Cargo.toml"),
+        manifest!("../mcp-toolkit-scratchpad/Cargo.toml"),
+        manifest!("../mcp-toolkit-server/Cargo.toml"),
+        manifest!("../mcp-toolkit-tasks/Cargo.toml"),
+        manifest!("../mcp-toolkit-testing/Cargo.toml"),
+    ];
     let mut module =
         String::from("\npub(crate) static TOOLKIT_PACKAGE_VERSIONS: &[(&str, &str)] = &[\n");
-    for entry in sorted_entries(&repo_root.join("crates"))? {
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let path = entry.path().join("Cargo.toml");
-        if !path.is_file() {
-            continue;
-        }
-        println!("cargo:rerun-if-changed={}", path.display());
-        let manifest = fs::read_to_string(&path)?.parse::<toml_edit::DocumentMut>()?;
+    for (path, contents) in manifests {
+        println!("cargo:rerun-if-changed={path}");
+        let manifest = contents.parse::<toml_edit::DocumentMut>()?;
         let package = manifest
             .get("package")
-            .ok_or_else(|| manifest_error(format!("{} has no package table", path.display())))?;
+            .ok_or_else(|| manifest_error(format!("{path} has no package table")))?;
         let name = package
             .get("name")
             .and_then(toml_edit::Item::as_str)
-            .ok_or_else(|| manifest_error(format!("{} has no package name", path.display())))?;
-        if !name.starts_with("mcp-toolkit") {
-            continue;
-        }
+            .ok_or_else(|| manifest_error(format!("{path} has no package name")))?;
         let version = package
             .get("version")
             .and_then(toml_edit::Item::as_str)
             .ok_or_else(|| {
-                manifest_error(format!(
-                    "{} requires an explicit package version",
-                    path.display()
-                ))
+                manifest_error(format!("{path} requires an explicit package version"))
             })?;
         module.push_str(&format!("    ({name:?}, {version:?}),\n"));
     }
