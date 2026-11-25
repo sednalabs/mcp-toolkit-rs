@@ -1,0 +1,396 @@
+name: crates-io-first-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact lowercase 40-hex commit currently expected at protected main
+        required: true
+        type: string
+      confirmation:
+        description: Type the exact first-release confirmation value
+        required: true
+        type: string
+      release_tag:
+        description: The release tag contract; this bootstrap accepts only v0.1.0
+        required: true
+        type: string
+
+concurrency:
+  group: crates-io-first-release-${{ inputs.expected_main_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+
+jobs:
+  preflight:
+    name: First-release deterministic preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected main only
+        # actions/checkout v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate dispatch contract and exact main candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "sednalabs/mcp-toolkit-rs" ]] || {
+            echo "This workflow is authorized only in the canonical public repository." >&2
+            exit 1
+          }
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || {
+            echo "This workflow must execute from protected main." >&2
+            exit 1
+          }
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "expected_main_sha must be a lowercase 40-hex SHA." >&2
+            exit 1
+          }
+          [[ "$RELEASE_CONFIRMATION" == "PUBLISH_MCP_TOOLKIT_V0_1_0" ]] || {
+            echo "The exact first-release confirmation value is required." >&2
+            exit 1
+          }
+          [[ "$RELEASE_TAG" == "v0.1.0" ]] || {
+            echo "This bootstrap accepts only release tag v0.1.0." >&2
+            exit 1
+          }
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_MAIN_SHA" || {
+            echo "protected main moved after the expected SHA was selected; refusing to continue" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$EXPECTED_MAIN_SHA^{tree}")"
+          git diff-tree --check "$EXPECTED_MAIN_SHA"
+          {
+            echo "### First-release deterministic preflight"
+            echo
+            echo "- Protected main SHA: `$EXPECTED_MAIN_SHA`"
+            echo "- Release tag contract: `$RELEASE_TAG`"
+            echo "- Publication mode: `first-release bootstrap token, manual dispatch only`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate exact first-wave manifest posture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/cargo_package_readiness.py --manifest-only
+          python3 scripts/crates_io_first_release.py validate-manifests \
+            --repo-root . \
+            --expected-source "$EXPECTED_MAIN_SHA"
+
+      - name: Write immutable preflight receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN_TREE="$(git rev-parse 'HEAD^{tree}')" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "main_sha": os.environ["EXPECTED_MAIN_SHA"],
+              "main_tree": os.environ["MAIN_TREE"],
+              "release_tag": os.environ["RELEASE_TAG"],
+              "packages": [
+                  "mcp-toolkit-core",
+                  "mcp-toolkit-observability",
+                  "mcp-toolkit-policy-core",
+                  "mcp-toolkit-http",
+                  "mcp-toolkit-scratchpad",
+                  "mcp-toolkit-testing",
+                  "mcp-toolkit-policy-conformance",
+                  "mcp-toolkit-auth",
+                  "mcp-toolkit-server",
+              ],
+              "publication_authority": "environment-scoped CARGO_REGISTRY_TOKEN only",
+              "live_registry_mutation": False,
+          }
+          Path("first-release-preflight.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload immutable preflight receipt
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: crates-io-first-release-preflight-${{ github.run_id }}
+          path: first-release-preflight.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish exact nine crates in dependency order
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment:
+      name: crates-io
+      url: https://crates.io/
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected main only
+        # actions/checkout v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate exact main candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "sednalabs/mcp-toolkit-rs" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN_SHA" || {
+            echo "protected main moved after preflight; refusing to publish" >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$EXPECTED_MAIN_SHA^{tree}")"
+
+      - name: Install pinned Rust toolchain
+        # dtolnay/rust-toolchain 1.88.0 (the workspace MSRV)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.88.0
+
+      - name: Download deterministic preflight receipt
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: crates-io-first-release-preflight-${{ github.run_id }}
+          path: preflight
+
+      - name: Publish or safely resume the exact first wave
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$CARGO_REGISTRY_TOKEN" ]] || {
+            echo "The crates-io environment must provide CARGO_REGISTRY_TOKEN." >&2
+            exit 1
+          }
+          test "$(python3 -c 'import json; print(json.load(open("preflight/first-release-preflight.json"))["main_sha"])')" = "$EXPECTED_MAIN_SHA"
+
+          # Static order is intentional: every item is reviewed and cannot be
+          # selected by a dispatch input or matrix value.
+          publish_order=(
+            mcp-toolkit-core
+            mcp-toolkit-observability
+            mcp-toolkit-policy-core
+            mcp-toolkit-http
+            mcp-toolkit-scratchpad
+            mcp-toolkit-testing
+            mcp-toolkit-policy-conformance
+            mcp-toolkit-auth
+            mcp-toolkit-server
+          )
+          mkdir -p release-evidence/crates release-evidence/registry
+
+          for package in "${publish_order[@]}"; do
+            archive="target/package/${package}-0.1.0.crate"
+            cargo package --locked --package "$package"
+            test -f "$archive"
+
+            set +e
+            python3 scripts/crates_io_first_release.py inspect \
+              --name "$package" \
+              --version 0.1.0 \
+              --local-crate "$archive" \
+              --expected-source "$EXPECTED_MAIN_SHA" \
+              --token-env CARGO_REGISTRY_TOKEN \
+              > "release-evidence/registry/${package}-before.json"
+            inspect_status=$?
+            set -e
+
+            case "$inspect_status" in
+              0)
+                echo "$package 0.1.0 already exists and exactly matches the local artifact; resuming."
+                ;;
+              3)
+                echo "$package 0.1.0 is absent; publishing exactly once."
+                cargo publish --locked --dry-run --package "$package"
+                cargo publish --locked --package "$package"
+                python3 scripts/crates_io_first_release.py wait \
+                  --name "$package" \
+                  --version 0.1.0 \
+                  --local-crate "$archive" \
+                  --expected-source "$EXPECTED_MAIN_SHA" \
+                  --token-env CARGO_REGISTRY_TOKEN \
+                  --timeout-seconds 900 \
+                  --interval-seconds 15 \
+                  > "release-evidence/registry/${package}-after.json"
+                ;;
+              *)
+                echo "$package 0.1.0 is present or indeterminate but cannot be proven identical; stopping without publish or yank." >&2
+                exit "$inspect_status"
+                ;;
+            esac
+
+            python3 scripts/crates_io_first_release.py inspect \
+              --name "$package" \
+              --version 0.1.0 \
+              --local-crate "$archive" \
+              --expected-source "$EXPECTED_MAIN_SHA" \
+              --token-env CARGO_REGISTRY_TOKEN \
+              > "release-evidence/registry/${package}-accepted.json"
+            cp "$archive" "release-evidence/crates/"
+          done
+
+          MAIN_TREE="$(git rev-parse 'HEAD^{tree}')" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          order = [
+              "mcp-toolkit-core",
+              "mcp-toolkit-observability",
+              "mcp-toolkit-policy-core",
+              "mcp-toolkit-http",
+              "mcp-toolkit-scratchpad",
+              "mcp-toolkit-testing",
+              "mcp-toolkit-policy-conformance",
+              "mcp-toolkit-auth",
+              "mcp-toolkit-server",
+          ]
+          evidence = []
+          for name in order:
+              path = Path("release-evidence/registry") / f"{name}-accepted.json"
+              value = json.loads(path.read_text(encoding="utf-8"))
+              if value.get("state") != "accepted" or value.get("name") != name or value.get("version") != "0.1.0":
+                  raise SystemExit(f"{name}: final registry evidence is not accepted")
+              evidence.append(value)
+          receipt = {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "main_sha": os.environ["EXPECTED_MAIN_SHA"],
+              "main_tree": os.environ["MAIN_TREE"],
+              "release_tag": os.environ["RELEASE_TAG"],
+              "package_order": order,
+              "accepted": evidence,
+              "live_registry_mutation": True,
+              "tag_or_release_created": False,
+          }
+          Path("release-evidence/accepted.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload exact registry acceptance evidence
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: crates-io-first-release-evidence-${{ github.run_id }}
+          path: release-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  provenance:
+    name: Record accepted-source provenance
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout protected main only
+        # actions/checkout v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate exact accepted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "sednalabs/mcp-toolkit-rs" ]]
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN_SHA" || {
+            echo "protected main moved before provenance; refusing to continue" >&2
+            exit 1
+          }
+
+      - name: Download exact registry acceptance evidence
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: crates-io-first-release-evidence-${{ github.run_id }}
+          path: release-evidence
+
+      - name: Peel and verify any existing v0.1.0 tag without creating one
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(python3 -c 'import json; print(json.load(open("release-evidence/accepted.json"))["main_sha"])')" = "$EXPECTED_MAIN_SHA"
+          if git ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            peeled="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+            test "$peeled" = "$EXPECTED_MAIN_SHA" || {
+              echo "existing $RELEASE_TAG does not peel to the accepted source commit" >&2
+              exit 1
+            }
+            tag_status=verified-existing
+          else
+            tag_status=not-created
+          fi
+          python3 - "$tag_status" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          path = Path("release-evidence/accepted.json")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          receipt["tag_status"] = sys.argv[1]
+          receipt["release_status"] = "not-created-by-bootstrap"
+          receipt["release_reason"] = (
+              "The bootstrap records provenance only. GitHub's default GITHUB_TOKEN cannot create a release "
+              "for a commit that changes workflow files; a separately authorized maintainer must create the "
+              "tag/release after this receipt and verify the peeled commit."
+          )
+          path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Attest accepted source and registry evidence
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            release-evidence/accepted.json
+            release-evidence/crates/*.crate
+
+      - name: Upload final provenance receipt
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: crates-io-first-release-provenance-${{ github.run_id }}
+          path: release-evidence/accepted.json
+          if-no-files-found: error
+          retention-days: 90
