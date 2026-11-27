@@ -5,6 +5,10 @@ are approved for publication.
 
 ## Unreleased
 
+- Pin workspace, generated templates, baseline and release builds to stable Rust
+  1.100.0; retain the declared 1.99 compatibility floor and explicitly select
+  its compiler in the independent MSRV lane.
+
 - Added bounded concurrent subprocess capture over the existing process manager,
   with explicit environment, redacted diagnostics and root-only lifecycle evidence.
 
