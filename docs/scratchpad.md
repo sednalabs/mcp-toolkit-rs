@@ -105,8 +105,8 @@ response when the scratchpad path is selected.
   permissions.
 - Require custom scratchpad root directories to be absolute, already present,
   and free of parent-directory components.
-- Salt session database filenames per manager so two managers using the same
-  custom root and session id do not reuse the same DuckDB file.
+- Allocate a fresh private session directory for every database generation, so
+  manager/tenant/session names cannot collide and reopening cannot reuse stale data.
 - Keep scratchpad tools out of the default `read_only` profile unless the
   server explicitly chooses a combined profile.
 - Reject mutating or file-reading SQL before it reaches DuckDB.
@@ -132,3 +132,27 @@ response when the scratchpad path is selected.
 The strongest current references are `sednalabs/ga4-mcp` and
 `sednalabs/google-search-console-mcp`; use their manifests and
 `docs/pattern-recipes.md#analytics-scratchpad` when starting a new adoption.
+
+## Identity-scoped sessions for hosted servers
+
+Use the root `ScratchpadSessionManager` only inside trusted server wiring.
+Derive a `ScratchpadScope` from the **verified** MCP principal (issuer and
+subject, or an equivalent stable identity) and verified upstream provider/account
+identity, then obtain a request-specific view with
+`root.for_scope(scope, max_sessions_per_principal)`. Never take either identity
+component or quota from a tool argument. Do not pass the root manager to a
+hosted data tool.
+
+All scoped views share the root's total session quota, and a principal also
+shares its per-principal quota across upstream accounts. Scoped session lookup,
+queries, ingest, listing and release use exact namespace equality; an unscoped
+view sees only unscoped sessions. Scope values are not included in database paths
+or debug output. Scoped views cannot rebind themselves, change runtime quotas,
+or request registry-wide expiry counts. The trusted root can prune expired
+sessions across the registry. Enumeration does not renew session TTLs.
+
+This is a storage boundary, not an authentication mechanism. The application
+must authenticate every request, validate the upstream identity and credential
+binding, enforce administrative access, prevent raw connection/SQL policy
+bypass, and handle revocation. It is local process state, not a distributed
+store or proof of tenant-safe HTTP deployment.
