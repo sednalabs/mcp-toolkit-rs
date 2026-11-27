@@ -107,6 +107,11 @@ struct Code<C> {
     credentials: Arc<C>,
     expires: Instant,
 }
+// Retain every spent refresh digest until absolute grant expiry. A hard cap
+// bounds memory; exhausting it requires a new authorization, never eviction
+// of replay evidence from a still-active grant.
+const MAX_REFRESH_ROTATIONS: usize = 128;
+
 struct Grant<C> {
     subject: String,
     client_id: String,
@@ -114,6 +119,7 @@ struct Grant<C> {
     credentials: Arc<C>,
     access_digest: String,
     refresh_digest: String,
+    spent_refresh_digests: BTreeSet<String>,
     access_expires: Instant,
     access_exp_unix: u64,
     expires: Instant,
@@ -453,6 +459,7 @@ impl<C> NativeOAuthStore<C> {
                 credentials: code.credentials,
                 access_digest: digest(&access),
                 refresh_digest: digest(&refresh),
+                spent_refresh_digests: BTreeSet::new(),
                 access_expires: now + self.config.limits.access_ttl,
                 access_exp_unix,
                 expires: now + self.config.limits.grant_ttl,
@@ -468,6 +475,8 @@ impl<C> NativeOAuthStore<C> {
 
     /// Rotate the current local refresh token and its access token. A grant's
     /// absolute lifetime never extends. Requested scopes may only narrow.
+    /// Reuse of any spent refresh token revokes the complete grant family.
+    /// Exhausting the bounded rotation history requires fresh authorization.
     ///
     /// # Errors
     /// Rejects wrong client/resource, expired, replayed or widened grants.
@@ -488,6 +497,18 @@ impl<C> NativeOAuthStore<C> {
         let now = Instant::now();
         state.prune(now);
         let key = digest(refresh_token);
+        // Replay detection and revocation share the rotation lock. Never
+        // permit a rotated refresh token to leave its successor usable.
+        let before = state.grants.len();
+        state.grants.retain(|_, grant| {
+            !(grant.client_id == client_id
+                && (grant.spent_refresh_digests.contains(&key)
+                    || (grant.refresh_digest == key
+                        && grant.spent_refresh_digests.len() >= MAX_REFRESH_ROTATIONS)))
+        });
+        if state.grants.len() != before {
+            return Err(NativeOAuthError::InvalidGrant);
+        }
         let grant = state
             .grants
             .values_mut()
@@ -513,6 +534,7 @@ impl<C> NativeOAuthStore<C> {
         let access = fresh_secret();
         let refresh = fresh_secret();
         grant.access_digest = digest(&access);
+        grant.spent_refresh_digests.insert(key);
         grant.refresh_digest = digest(&refresh);
         grant.access_expires = now + access_ttl;
         grant.access_exp_unix = exp;
@@ -545,7 +567,9 @@ impl<C> NativeOAuthStore<C> {
         let key = digest(token);
         state.grants.retain(|_, grant| {
             !(grant.client_id == client_id
-                && (grant.access_digest == key || grant.refresh_digest == key))
+                && (grant.access_digest == key
+                    || grant.refresh_digest == key
+                    || grant.spent_refresh_digests.contains(&key)))
         });
         Ok(())
     }
@@ -733,7 +757,7 @@ mod tests {
             )
             .unwrap();
         assert!(store
-            .refresh("fixture", RESOURCE, old.refresh_token.expose_secret(), None)
+            .refresh("other", RESOURCE, old.refresh_token.expose_secret(), None)
             .is_err());
         assert!(store
             .verified_grant(old.access_token.expose_secret())
@@ -762,6 +786,63 @@ mod tests {
             .refresh("fixture", RESOURCE, new.refresh_token.expose_secret(), None)
             .is_err());
     }
+    #[test]
+    fn spent_refresh_replay_revokes_only_its_grant_family() {
+        let store = fixture();
+        let first_code = code(&store);
+        let first = store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &first_code, VERIFIER)
+            .unwrap();
+        let other_code = code(&store);
+        let other = store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &other_code, VERIFIER)
+            .unwrap();
+        let second = store
+            .refresh("fixture", RESOURCE, first.refresh_token.expose_secret(), None)
+            .unwrap();
+        let third = store
+            .refresh("fixture", RESOURCE, second.refresh_token.expose_secret(), None)
+            .unwrap();
+        assert!(store
+            .refresh("other", RESOURCE, first.refresh_token.expose_secret(), None)
+            .is_err());
+        assert!(store
+            .verified_grant(third.access_token.expose_secret())
+            .is_ok());
+        assert!(store
+            .refresh("fixture", RESOURCE, first.refresh_token.expose_secret(), None)
+            .is_err());
+        assert!(store
+            .verified_grant(third.access_token.expose_secret())
+            .is_err());
+        assert!(store
+            .refresh("fixture", RESOURCE, third.refresh_token.expose_secret(), None)
+            .is_err());
+        assert!(store
+            .verified_grant(other.access_token.expose_secret())
+            .is_ok());
+    }
+
+    #[test]
+    fn refresh_history_capacity_requires_fresh_authorization() {
+        let store = fixture();
+        let code = code(&store);
+        let mut tokens = store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &code, VERIFIER)
+            .unwrap();
+        for _ in 0..MAX_REFRESH_ROTATIONS {
+            tokens = store
+                .refresh("fixture", RESOURCE, tokens.refresh_token.expose_secret(), None)
+                .unwrap();
+        }
+        assert!(store
+            .refresh("fixture", RESOURCE, tokens.refresh_token.expose_secret(), None)
+            .is_err());
+        assert!(store
+            .verified_grant(tokens.access_token.expose_secret())
+            .is_err());
+    }
+
     #[tokio::test]
     async fn common_authenticator_checks_local_access_claims_without_fallback() {
         let store = Arc::new(fixture());
