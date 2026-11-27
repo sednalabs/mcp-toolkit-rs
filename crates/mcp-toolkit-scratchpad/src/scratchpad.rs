@@ -1371,10 +1371,12 @@ impl ScratchpadSessionManager {
                 let mut builder = tempfile::Builder::new();
                 builder.prefix("session-");
                 set_private_tempdir_permissions(&mut builder);
-                let directory = builder.tempdir_in(&self.config.root_dir).map_err(|_| {
-                    ScratchpadError::ScratchpadEngine(
-                        "failed to allocate scratchpad session storage".to_string(),
-                    )
+                let directory = builder.tempdir_in(&self.config.root_dir).map_err(|err| {
+                    ScratchpadError::ScratchpadEngine(format!(
+                        "failed to allocate scratchpad session storage: {:?} (OS code {:?})",
+                        err.kind(),
+                        err.raw_os_error()
+                    ))
                 })?;
                 let db_path = directory.path().join("session.duckdb");
                 Ok(entry.insert(SessionEntry {
