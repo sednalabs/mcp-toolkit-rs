@@ -14,7 +14,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::Url;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::{upstream_oauth::SecretString, AuthError};
 
@@ -201,10 +200,7 @@ fn digest(value: &str) -> String {
 }
 
 fn fresh_secret() -> String {
-    let mut bytes = [0_u8; 32];
-    bytes[..16].copy_from_slice(Uuid::new_v4().as_bytes());
-    bytes[16..].copy_from_slice(Uuid::new_v4().as_bytes());
-    URL_SAFE_NO_PAD.encode(bytes)
+    URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>())
 }
 
 fn valid_secret(token: &str) -> bool {
@@ -403,7 +399,7 @@ impl<C> NativeOAuthStore<C> {
         code: &str,
         verifier: &str,
     ) -> Result<NativeTokenResponse, NativeOAuthError> {
-        if !valid_secret(code) || !valid_pkce(verifier) || resource != self.config.resource {
+        if !valid_secret(code) {
             return Err(NativeOAuthError::InvalidGrant);
         }
         let mut state = self
@@ -413,24 +409,24 @@ impl<C> NativeOAuthStore<C> {
         let now = Instant::now();
         state.prune(now);
         let key = digest(code);
-        let item = state
+        // Consume any recognized code on its first exchange attempt, including
+        // malformed PKCE, wrong client or resource, and capacity failures.
+        let code = state
             .codes
-            .get(&key)
+            .remove(&key)
             .ok_or(NativeOAuthError::InvalidGrant)?;
-        if item.request.client_id != client_id
-            || item.request.redirect_uri != redirect_uri
-            || item.request.resource != resource
-            || item.request.s256_challenge != digest(verifier)
+        if !valid_pkce(verifier)
+            || resource != self.config.resource
+            || code.request.client_id != client_id
+            || code.request.redirect_uri != redirect_uri
+            || code.request.resource != resource
+            || code.request.s256_challenge != digest(verifier)
         {
             return Err(NativeOAuthError::InvalidGrant);
         }
         if state.grants.len() >= self.config.limits.max_grants {
             return Err(NativeOAuthError::Capacity);
         }
-        let code = state
-            .codes
-            .remove(&key)
-            .ok_or(NativeOAuthError::InvalidGrant)?;
         let access = fresh_secret();
         let refresh = fresh_secret();
         let id = fresh_secret();
@@ -681,13 +677,22 @@ mod tests {
         let mut bad = request();
         bad.resource = "https://other.example/mcp".into();
         assert!(store.begin(bad).is_err());
+        for (client, redirect, resource, verifier) in [
+            ("other", CALLBACK, RESOURCE, VERIFIER),
+            ("fixture", "https://evil.example/callback", RESOURCE, VERIFIER),
+            ("fixture", CALLBACK, "https://other.example/mcp", VERIFIER),
+            ("fixture", CALLBACK, RESOURCE, "short"),
+            ("fixture", CALLBACK, RESOURCE, &"x".repeat(43)),
+        ] {
+            let rejected = code(&store);
+            assert!(store
+                .exchange_code(client, redirect, resource, &rejected, verifier)
+                .is_err());
+            assert!(store
+                .exchange_code("fixture", CALLBACK, RESOURCE, &rejected, VERIFIER)
+                .is_err());
+        }
         let code = code(&store);
-        assert!(store
-            .exchange_code("other", CALLBACK, RESOURCE, &code, VERIFIER)
-            .is_err());
-        assert!(store
-            .exchange_code("fixture", CALLBACK, RESOURCE, &code, &"x".repeat(43))
-            .is_err());
         let tokens = store
             .exchange_code("fixture", CALLBACK, RESOURCE, &code, VERIFIER)
             .unwrap();
