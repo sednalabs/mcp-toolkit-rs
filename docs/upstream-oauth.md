@@ -184,3 +184,23 @@ a reusable provider seam:
 
 Generated servers should default to read-only scopes when available, avoid raw
 HTTP pass-through tools, and require review before exposing mutating operations.
+
+## Native MCP OAuth grant custody
+
+The `native_oauth::NativeOAuthStore<C>` supplies a bounded local OAuth
+state machine for application-owned HTTPS authorization/token/revocation routes.
+It uses static exact public-client registrations, resource-bound S256 PKCE,
+single-use expiring authorization codes, opaque MCP access/refresh tokens,
+atomic refresh rotation, scope narrowing, immediate local revocation and
+separate typed upstream credential custody. `Authenticator::new_with_local_token_verifier`
+reuses the common issuer/audience/scope checks and request-bound auth surface
+without remote-introspection fallback or caching. Do not issue Google access
+or refresh tokens to MCP clients.
+
+The HTTP integration must enforce unique fields, request limits, registered
+redirects, verified upstream identity and explicit user consent, correct
+metadata and no-store token responses, TLS, and upstream credential refresh
+and revocation. The trusted application calls `complete` only after its own
+provider callback verifies identity and consent. This store is process-local;
+restart invalidates its tokens. Dynamic registration, durable multi-replica
+custody and provider-specific login routes are not implemented by this module.
