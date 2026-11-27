@@ -26,7 +26,7 @@ pub use error::ScratchpadError;
 pub use scratchpad::{
     DuckDbEngine, ScratchpadCancelToken, ScratchpadDropTableStats, ScratchpadEngine,
     ScratchpadExecutionHooks, ScratchpadIngestColumn, ScratchpadIngestMode, ScratchpadIngestStats,
-    ScratchpadQueryProjection, ScratchpadSessionConfig, ScratchpadSessionInfo,
+    ScratchpadQueryProjection, ScratchpadScope, ScratchpadSessionConfig, ScratchpadSessionInfo,
     ScratchpadSessionManager, ScratchpadSessionSnapshot, ScratchpadTableColumnInfo,
     ScratchpadTableInfo, SessionDatabaseConfig, SharedScratchpadEngine,
     SharedScratchpadSessionManager,
