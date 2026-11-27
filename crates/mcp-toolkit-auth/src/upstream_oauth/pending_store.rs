@@ -235,6 +235,10 @@ impl PendingOAuthStore {
             .entries
             .lock()
             .map_err(|_| PendingOAuthStoreError::Unavailable)?;
+        let now = now.max(Instant::now());
+        if expires_at <= now {
+            return Err(PendingOAuthStoreError::InvalidTransaction);
+        }
         entries.retain(|_, entry| entry.live_at(now));
         if entries.contains_key(&correlation) {
             return Err(PendingOAuthStoreError::Collision);
@@ -311,9 +315,7 @@ impl PendingOAuthStore {
         now: Instant,
         matches: impl FnOnce(&BoundPendingOAuthAuthorization) -> bool,
     ) -> Result<BoundPendingOAuthAuthorization, PendingOAuthStoreError> {
-        if state.is_empty()
-            || state.len() > MAX_STATE_BYTES
-            || state.chars().any(char::is_control)
+        if state.is_empty() || state.len() > MAX_STATE_BYTES || state.chars().any(char::is_control)
         {
             return Err(PendingOAuthStoreError::InvalidTransaction);
         }
@@ -322,6 +324,7 @@ impl PendingOAuthStore {
             .entries
             .lock()
             .map_err(|_| PendingOAuthStoreError::Unavailable)?;
+        let now = now.max(Instant::now());
         entries.retain(|_, entry| entry.live_at(now));
         if !entries
             .get(&correlation)
@@ -342,10 +345,7 @@ impl PendingOAuthStore {
     /// # Security
     /// Derive the scope from verified state. This cancels only pending local
     /// transactions; it does not revoke already-exchanged upstream credentials.
-    pub fn cancel_scope(
-        &self,
-        scope: &PendingOAuthScope,
-    ) -> Result<usize, PendingOAuthStoreError> {
+    pub fn cancel_scope(&self, scope: &PendingOAuthScope) -> Result<usize, PendingOAuthStoreError> {
         let now = Instant::now();
         let mut entries = self
             .entries
@@ -376,7 +376,9 @@ impl PendingOAuthStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::upstream_oauth::{prepare_authorization, OAuthAuthorizationOptions, OAuthClientConfig};
+    use crate::upstream_oauth::{
+        prepare_authorization, OAuthAuthorizationOptions, OAuthClientConfig,
+    };
 
     const CALLBACK: &str = "https://mcp.example/oauth/callback";
 
@@ -426,9 +428,7 @@ mod tests {
         let a = scope("issuer/a", "flow-a");
         let url = store.insert(a.clone(), prepare()).expect("insert");
         let state = state(&url);
-        assert!(store
-            .consume_callback(&state, "flow-b", CALLBACK)
-            .is_err());
+        assert!(store.consume_callback(&state, "flow-b", CALLBACK).is_err());
         assert!(store
             .consume_callback(&state, "flow-a", "https://mcp.example/other")
             .is_err());
@@ -441,7 +441,10 @@ mod tests {
         let (original, prepared) = bound.into_parts();
         assert_eq!(original, a);
         assert_eq!(original.principal(), "issuer/a");
-        assert_eq!(prepared.correlation_key(), oauth_callback_correlation_key(&state));
+        assert_eq!(
+            prepared.correlation_key(),
+            oauth_callback_correlation_key(&state)
+        );
         assert!(store.consume_callback(&state, "flow-a", CALLBACK).is_err());
         assert!(!format!("{url:?}").contains(&state));
         assert!(!format!("{original:?}").contains("issuer/a"));
@@ -473,19 +476,17 @@ mod tests {
         let store = store();
         let a = scope("a", "one");
         let now = Instant::now();
-        let url = store
-            .insert_at(a.clone(), prepare(), now)
-            .expect("insert");
+        let url = store.insert_at(a.clone(), prepare(), now).expect("insert");
         assert!(store
             .consume_at(&state(&url), now + Duration::from_secs(60), |_| true)
             .is_err());
         let url = store.insert(a.clone(), prepare()).expect("reinsert");
         assert_eq!(store.cancel_scope(&scope("a", "two")).expect("cancel"), 0);
         assert_eq!(store.cancel_scope(&a).expect("cancel"), 1);
+        assert!(store.consume_for_scope(&state(&url), &a, CALLBACK).is_err());
         assert!(store
-            .consume_for_scope(&state(&url), &a, CALLBACK)
+            .consume_callback(&"x".repeat(4097), "one", CALLBACK)
             .is_err());
-        assert!(store.consume_callback(&"x".repeat(4097), "one", CALLBACK).is_err());
         assert!(PendingOAuthScope::new(" ", "flow").is_err());
     }
 
