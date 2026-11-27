@@ -117,6 +117,7 @@ struct Grant<C> {
     client_id: String,
     scopes: BTreeSet<String>,
     credentials: Arc<C>,
+    authorization_code_digest: String,
     access_digest: String,
     refresh_digest: String,
     spent_refresh_digests: BTreeSet<String>,
@@ -417,10 +418,16 @@ impl<C> NativeOAuthStore<C> {
         let key = digest(code);
         // Consume any recognized code on its first exchange attempt, including
         // malformed PKCE, wrong client or resource, and capacity failures.
-        let code = state
-            .codes
-            .remove(&key)
-            .ok_or(NativeOAuthError::InvalidGrant)?;
+        let Some(code) = state.codes.remove(&key) else {
+            // RFC 6749: deny reuse and revoke credentials issued from the code.
+            // Keep the digest for the full grant lifetime, including rotations.
+            if resource == self.config.resource {
+                state.grants.retain(|_, grant| {
+                    !(grant.client_id == client_id && grant.authorization_code_digest == key)
+                });
+            }
+            return Err(NativeOAuthError::InvalidGrant);
+        };
         if !valid_pkce(verifier)
             || resource != self.config.resource
             || code.request.client_id != client_id
@@ -457,6 +464,7 @@ impl<C> NativeOAuthStore<C> {
                 client_id: code.request.client_id,
                 scopes: code.request.scopes,
                 credentials: code.credentials,
+                authorization_code_digest: key,
                 access_digest: digest(&access),
                 refresh_digest: digest(&refresh),
                 spent_refresh_digests: BTreeSet::new(),
@@ -726,9 +734,6 @@ mod tests {
             .exchange_code("fixture", CALLBACK, RESOURCE, &code, VERIFIER)
             .unwrap();
         assert!(store
-            .exchange_code("fixture", CALLBACK, RESOURCE, &code, VERIFIER)
-            .is_err());
-        assert!(store
             .verified_grant(tokens.refresh_token.expose_secret())
             .is_err());
         assert_eq!(
@@ -739,6 +744,12 @@ mod tests {
             "upstream-private"
         );
         assert!(!format!("{tokens:?}").contains(tokens.access_token.expose_secret()));
+        assert!(store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &code, VERIFIER)
+            .is_err());
+        assert!(store
+            .verified_grant(tokens.access_token.expose_secret())
+            .is_err());
     }
     #[test]
     fn refresh_rotation_and_revocation_are_immediate() {
@@ -835,6 +846,50 @@ mod tests {
                 "fixture",
                 RESOURCE,
                 third.refresh_token.expose_secret(),
+                None
+            )
+            .is_err());
+        assert!(store
+            .verified_grant(other.access_token.expose_secret())
+            .is_ok());
+    }
+
+    #[test]
+    fn authorization_code_replay_revokes_rotated_family_only() {
+        let store = fixture();
+        let first_code = code(&store);
+        let first = store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &first_code, VERIFIER)
+            .unwrap();
+        let other_code = code(&store);
+        let other = store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &other_code, VERIFIER)
+            .unwrap();
+        let rotated = store
+            .refresh(
+                "fixture",
+                RESOURCE,
+                first.refresh_token.expose_secret(),
+                None,
+            )
+            .unwrap();
+        assert!(store
+            .exchange_code("other", CALLBACK, RESOURCE, &first_code, VERIFIER)
+            .is_err());
+        assert!(store
+            .verified_grant(rotated.access_token.expose_secret())
+            .is_ok());
+        assert!(store
+            .exchange_code("fixture", CALLBACK, RESOURCE, &first_code, VERIFIER)
+            .is_err());
+        assert!(store
+            .verified_grant(rotated.access_token.expose_secret())
+            .is_err());
+        assert!(store
+            .refresh(
+                "fixture",
+                RESOURCE,
+                rotated.refresh_token.expose_secret(),
                 None
             )
             .is_err());
