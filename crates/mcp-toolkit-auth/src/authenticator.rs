@@ -48,6 +48,7 @@ impl<S: ReplayStore + Send + ?Sized> ReplayStore for ConfirmationBoundReplayStor
 #[derive(Debug, Clone)]
 pub struct Authenticator {
     pub(crate) config: Arc<AuthConfig>,
+    local_token_verifier: Option<Arc<dyn crate::native_oauth::LocalTokenVerifier>>,
     pub(crate) jti_replay_store: Option<SharedJtiReplayStore>,
     pub(crate) introspection_cache: Option<Arc<RwLock<IntrospectionCache>>>,
     pub(crate) jwks_cache: Option<Arc<JwksCache>>,
@@ -57,7 +58,7 @@ pub struct Authenticator {
 
 impl Authenticator {
     pub fn new(config: AuthConfig) -> Result<Self, AuthError> {
-        Self::new_with_optional_jti_replay_store(config, None)
+        Self::new_with_optional_jti_replay_store(config, None, None)
     }
 
     /// Builds an authenticator with a caller-owned JTI replay store.
@@ -80,12 +81,43 @@ impl Authenticator {
         config: AuthConfig,
         jti_replay_store: SharedJtiReplayStore,
     ) -> Result<Self, AuthError> {
-        Self::new_with_optional_jti_replay_store(config, Some(jti_replay_store))
+        Self::new_with_optional_jti_replay_store(config, Some(jti_replay_store), None)
+    }
+
+    /// Build a resource authenticator backed by a trusted in-process opaque-token
+    /// store rather than remote introspection. Issuer, audience and scopes are
+    /// still checked by the common authenticator. No external fallback or
+    /// introspection cache is permitted.
+    ///
+    /// # Errors
+    /// Rejects an incompatible auth configuration.
+    /// # Security
+    /// The verifier must return claims only for currently valid access tokens.
+    /// Never implement it using model-provided claims or a client-supplied JWT.
+    pub fn new_with_local_token_verifier(
+        config: AuthConfig,
+        verifier: Arc<dyn crate::native_oauth::LocalTokenVerifier>,
+    ) -> Result<Self, AuthError> {
+        if config.mode != AuthMode::Introspection
+            || !config.strict_oauth
+            || config.introspection_url.is_some()
+            || config.introspection_cache_ttl_s != 0.0
+            || config.issuer.as_deref().is_none_or(|value| value.trim().is_empty())
+            || config.audience.as_deref().is_none_or(|value| value.trim().is_empty())
+            || config.actor_claim != "sub"
+            || config.required_scopes.is_empty()
+        {
+            return Err(AuthError::ConfigError(
+                "local opaque-token verification requires strict introspection posture, issuer, audience, subject and scopes without remote introspection or caching".to_string(),
+            ));
+        }
+        Self::new_with_optional_jti_replay_store(config, None, Some(verifier))
     }
 
     fn new_with_optional_jti_replay_store(
         config: AuthConfig,
         jti_replay_store: Option<SharedJtiReplayStore>,
+        local_token_verifier: Option<Arc<dyn crate::native_oauth::LocalTokenVerifier>>,
     ) -> Result<Self, AuthError> {
         if matches!(config.mode, AuthMode::Jwks) {
             if config.jwks_url.is_none() || config.issuer.is_none() || config.audience.is_none() {
@@ -102,7 +134,7 @@ impl Authenticator {
                 ));
             }
         } else if matches!(config.mode, AuthMode::Introspection) {
-            if config.introspection_url.is_none() {
+            if config.introspection_url.is_none() && local_token_verifier.is_none() {
                 return Err(AuthError::ConfigError(
                     "Introspection mode requires introspection_url.".to_string(),
                 ));
@@ -175,6 +207,7 @@ impl Authenticator {
 
         Ok(Self {
             config: Arc::new(config),
+            local_token_verifier,
             jti_replay_store,
             introspection_cache,
             jwks_cache,
@@ -316,7 +349,15 @@ impl Authenticator {
                     self.decode_with_jwks(token).await?
                 }
             }
-            AuthMode::Introspection => self.introspect_token(token).await?,
+            AuthMode::Introspection => {
+                if let Some(verifier) = &self.local_token_verifier {
+                    let claims = verifier.claims_for_access_token(token)?;
+                    validate_issuer_audience(&claims, &self.config)?;
+                    claims
+                } else {
+                    self.introspect_token(token).await?
+                }
+            }
         };
 
         let subject_hint = claims
