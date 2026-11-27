@@ -679,7 +679,12 @@ mod tests {
         assert!(store.begin(bad).is_err());
         for (client, redirect, resource, verifier) in [
             ("other", CALLBACK, RESOURCE, VERIFIER),
-            ("fixture", "https://evil.example/callback", RESOURCE, VERIFIER),
+            (
+                "fixture",
+                "https://evil.example/callback",
+                RESOURCE,
+                VERIFIER,
+            ),
             ("fixture", CALLBACK, "https://other.example/mcp", VERIFIER),
             ("fixture", CALLBACK, RESOURCE, "short"),
             ("fixture", CALLBACK, RESOURCE, &"x".repeat(43)),
