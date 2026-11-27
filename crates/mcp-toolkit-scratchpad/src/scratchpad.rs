@@ -2,9 +2,8 @@
 //!
 //! DuckDB engine adapter and session lifecycle manager for DuckDB scratchpad workflows.
 
-use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -27,7 +26,7 @@ const DEFAULT_QUERY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_MAX_SQL_BYTES: usize = 65_536;
 const DEFAULT_INTERRUPT_POLL_INTERVAL_MS: u64 = 5;
 const MAX_TABLE_SCHEMA_COLUMNS_PREVIEW: usize = 32;
-static SESSION_MANAGER_COUNTER: AtomicUsize = AtomicUsize::new(0);
+const MAX_SCOPE_COMPONENT_BYTES: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct SessionDatabaseConfig {
@@ -428,17 +427,74 @@ impl ScratchpadExecutionHooks {
     }
 }
 
-#[derive(Debug)]
+/// Exact application-owned identity boundary for scratchpad data.
+///
+/// # Security
+/// Both components must come from trusted, verified state: the authenticated
+/// MCP principal (including issuer) and the upstream provider/account identity.
+/// Never construct this value from model-supplied tool arguments. Identity is
+/// compared exactly, never normalized, logged or embedded in filenames.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScratchpadScope {
+    principal: Arc<str>,
+    upstream_identity: Arc<str>,
+}
+
+impl ScratchpadScope {
+    /// Constructs an exact, bounded identity namespace.
+    ///
+    /// # Errors
+    /// Returns an error for empty, blank, oversized or control-containing components.
+    /// # Security
+    /// This validates representation, not authentication; callers must supply
+    /// both components from verified state.
+    pub fn new(
+        principal: impl Into<String>,
+        upstream_identity: impl Into<String>,
+    ) -> Result<Self, ScratchpadError> {
+        let principal = principal.into();
+        let upstream_identity = upstream_identity.into();
+        for component in [&principal, &upstream_identity] {
+            if component.trim().is_empty()
+                || component.len() > MAX_SCOPE_COMPONENT_BYTES
+                || component.chars().any(char::is_control)
+            {
+                return Err(ScratchpadError::invalid(
+                    "scope",
+                    "invalid scratchpad identity component",
+                ));
+            }
+        }
+        Ok(Self {
+            principal: Arc::from(principal),
+            upstream_identity: Arc::from(upstream_identity),
+        })
+    }
+}
+
+impl std::fmt::Debug for ScratchpadScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ScratchpadScope(<redacted>)")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SessionKey {
+    scope: Option<ScratchpadScope>,
+    session_id: String,
+}
+
 struct SessionEntry {
+    directory: tempfile::TempDir,
     db_path: PathBuf,
     last_touched: Instant,
     tables_used: usize,
     rows_used: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct SessionState {
-    sessions: HashMap<String, SessionEntry>,
+    sessions: HashMap<SessionKey, SessionEntry>,
 }
 
 #[derive(Clone)]
@@ -447,7 +503,8 @@ pub struct ScratchpadSessionManager {
     config: ScratchpadSessionConfig,
     runtime_max_sessions: Arc<AtomicUsize>,
     runtime_max_tables_per_session: Arc<AtomicUsize>,
-    database_namespace: usize,
+    scope: Option<ScratchpadScope>,
+    principal_session_limit: Option<usize>,
     state: Arc<Mutex<SessionState>>,
 }
 
@@ -459,7 +516,6 @@ impl ScratchpadSessionManager {
         config.validate()?;
         let root_dir = prepare_scratchpad_root_dir(&config.root_dir, config.create_root_dir)?;
         config.root_dir = root_dir;
-        let database_namespace = SESSION_MANAGER_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         Ok(Self {
             engine,
@@ -467,10 +523,76 @@ impl ScratchpadSessionManager {
             runtime_max_tables_per_session: Arc::new(AtomicUsize::new(
                 config.max_tables_per_session,
             )),
-            database_namespace,
+            scope: None,
+            principal_session_limit: None,
             config,
             state: Arc::new(Mutex::new(SessionState::default())),
         })
+    }
+
+    /// Returns an identity-bound view of this manager's shared session registry.
+    ///
+    /// Every session operation (including inventory) is restricted to the exact
+    /// scope. All views share the manager's global session budget. The supplied
+    /// per-principal limit also applies across that principal's upstream accounts.
+    ///
+    /// # Errors
+    /// Returns an error if this view is already scoped or the limit is zero.
+    /// # Security
+    /// Only trusted server wiring may derive a scope from verified identity and
+    /// choose the quota. Do not expose the root manager or this constructor to
+    /// untrusted callers. A scoped view cannot rebind or change runtime limits.
+    ///
+    /// ```no_run
+    /// use std::{sync::Arc, time::Duration};
+    /// use mcp_toolkit_scratchpad::{
+    ///     DuckDbEngine, ScratchpadScope, ScratchpadSessionConfig,
+    ///     ScratchpadSessionManager, ScratchpadError,
+    /// };
+    ///
+    /// # fn example() -> Result<(), ScratchpadError> {
+    /// let engine = Arc::new(DuckDbEngine::new()?);
+    /// let root = ScratchpadSessionManager::new(
+    ///     engine, ScratchpadSessionConfig::new(Duration::from_secs(60), 8, 4, 100, 128),
+    /// )?;
+    /// // In a server, derive these from verified authentication and provider identity.
+    /// let view = root.for_scope(ScratchpadScope::new("issuer/user", "provider/account")?, 2)?;
+    /// view.open_session("analysis")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn for_scope(
+        &self,
+        scope: ScratchpadScope,
+        max_sessions_per_principal: usize,
+    ) -> Result<Self, ScratchpadError> {
+        if self.scope.is_some() || max_sessions_per_principal == 0 {
+            return Err(ScratchpadError::invalid(
+                "scope",
+                "scope must be bound once by the root manager with a positive quota",
+            ));
+        }
+        let mut view = self.clone();
+        view.scope = Some(scope);
+        view.principal_session_limit = Some(max_sessions_per_principal);
+        Ok(view)
+    }
+
+    fn session_key(&self, session_id: &str) -> SessionKey {
+        SessionKey {
+            scope: self.scope.clone(),
+            session_id: session_id.to_string(),
+        }
+    }
+
+    fn require_root(&self) -> Result<(), ScratchpadError> {
+        if self.scope.is_some() {
+            return Err(ScratchpadError::invalid(
+                "scope",
+                "operation requires the trusted root manager",
+            ));
+        }
+        Ok(())
     }
 
     pub fn config(&self) -> &ScratchpadSessionConfig {
@@ -478,10 +600,13 @@ impl ScratchpadSessionManager {
     }
 
     pub fn max_sessions_limit(&self) -> usize {
-        self.runtime_max_sessions.load(Ordering::SeqCst)
+        let global = self.runtime_max_sessions.load(Ordering::SeqCst);
+        self.principal_session_limit
+            .map_or(global, |limit| limit.min(global))
     }
 
     pub fn set_max_sessions_limit(&self, max_sessions: usize) -> Result<(), ScratchpadError> {
+        self.require_root()?;
         if max_sessions == 0 {
             return Err(ScratchpadError::invalid(
                 "max_sessions",
@@ -501,6 +626,7 @@ impl ScratchpadSessionManager {
         &self,
         max_tables_per_session: usize,
     ) -> Result<(), ScratchpadError> {
+        self.require_root()?;
         if max_tables_per_session == 0 {
             return Err(ScratchpadError::invalid(
                 "max_tables_per_session",
@@ -515,7 +641,11 @@ impl ScratchpadSessionManager {
     pub fn active_session_count(&self) -> Result<usize, ScratchpadError> {
         let mut state = self.lock_state()?;
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
-        let count = state.sessions.len();
+        let count = state
+            .sessions
+            .keys()
+            .filter(|key| key.scope == self.scope)
+            .count();
         drop(state);
         cleanup_paths(removed_paths);
         Ok(count)
@@ -536,7 +666,7 @@ impl ScratchpadSessionManager {
 
         let info = state
             .sessions
-            .get_mut(&session_id)
+            .get_mut(&self.session_key(&session_id))
             .map(|entry| {
                 entry.last_touched = now;
                 session_info_from_entry(
@@ -573,11 +703,11 @@ impl ScratchpadSessionManager {
 
         let mut sessions = state
             .sessions
-            .iter_mut()
-            .map(|(session_id, entry)| {
-                entry.last_touched = now;
+            .iter()
+            .filter(|(key, _)| key.scope == self.scope)
+            .map(|(key, entry)| {
                 session_info_from_entry(
-                    session_id,
+                    &key.session_id,
                     entry,
                     max_tables_per_session,
                     self.config.max_rows_per_session,
@@ -1145,14 +1275,17 @@ impl ScratchpadSessionManager {
         let mut state = self.lock_state()?;
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
         let max_tables_per_session = self.max_tables_per_session_limit();
-        let snapshot = state.sessions.get_mut(&session_id).map(|entry| {
-            entry.last_touched = Instant::now();
-            snapshot_from_entry(
-                entry,
-                max_tables_per_session,
-                self.config.max_rows_per_session,
-            )
-        });
+        let snapshot = state
+            .sessions
+            .get_mut(&self.session_key(&session_id))
+            .map(|entry| {
+                entry.last_touched = Instant::now();
+                snapshot_from_entry(
+                    entry,
+                    max_tables_per_session,
+                    self.config.max_rows_per_session,
+                )
+            });
 
         drop(state);
         cleanup_paths(removed_paths);
@@ -1166,8 +1299,8 @@ impl ScratchpadSessionManager {
 
         let removed = state
             .sessions
-            .remove(&session_id)
-            .map(|entry| entry.db_path);
+            .remove(&self.session_key(&session_id))
+            .map(|entry| entry.directory);
 
         drop(state);
         cleanup_paths(removed_paths);
@@ -1179,6 +1312,7 @@ impl ScratchpadSessionManager {
     }
 
     pub fn cleanup_expired(&self) -> Result<usize, ScratchpadError> {
+        self.require_root()?;
         let mut state = self.lock_state()?;
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
         let removed = removed_paths.len();
@@ -1199,29 +1333,61 @@ impl ScratchpadSessionManager {
         session_id: &str,
         state: &'a mut SessionState,
     ) -> Result<&'a mut SessionEntry, ScratchpadError> {
-        let max_sessions_limit = self.max_sessions_limit();
-        if !state.sessions.contains_key(session_id) && state.sessions.len() >= max_sessions_limit {
-            emit_scratchpad_quota_breach(session_id, "sessions", max_sessions_limit);
-            return Err(ScratchpadError::scratchpad_limit(
-                "sessions",
-                format!("max active sessions exceeded ({max_sessions_limit})"),
-            ));
+        let key = self.session_key(session_id);
+        let global_limit = self.runtime_max_sessions.load(Ordering::SeqCst);
+        if !state.sessions.contains_key(&key) {
+            if state.sessions.len() >= global_limit {
+                emit_scratchpad_quota_breach(session_id, "sessions", global_limit);
+                return Err(ScratchpadError::scratchpad_limit(
+                    "sessions",
+                    "scratchpad session capacity exhausted",
+                ));
+            }
+            if let (Some(scope), Some(limit)) = (&self.scope, self.principal_session_limit) {
+                let principal_count = state
+                    .sessions
+                    .keys()
+                    .filter(|key| {
+                        key.scope
+                            .as_ref()
+                            .is_some_and(|other| other.principal == scope.principal)
+                    })
+                    .count();
+                if principal_count >= limit {
+                    emit_scratchpad_quota_breach(session_id, "sessions", limit);
+                    return Err(ScratchpadError::scratchpad_limit(
+                        "sessions",
+                        "principal session capacity exhausted",
+                    ));
+                }
+            }
         }
 
-        let now = Instant::now();
-        Ok(state
-            .sessions
-            .entry(session_id.to_string())
-            .or_insert_with(|| SessionEntry {
-                db_path: session_db_path(
-                    &self.config.root_dir,
-                    session_id,
-                    self.database_namespace,
-                ),
-                last_touched: now,
-                tables_used: 0,
-                rows_used: 0,
-            }))
+        match state.sessions.entry(key) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                // A fresh, privately allocated directory per generation prevents
+                // filename hash collisions and stale database reuse after expiry.
+                let mut builder = tempfile::Builder::new();
+                builder.prefix("session-");
+                set_private_tempdir_permissions(&mut builder);
+                let directory = builder.tempdir_in(&self.config.root_dir).map_err(|err| {
+                    ScratchpadError::ScratchpadEngine(format!(
+                        "failed to allocate scratchpad session storage: {:?} (OS code {:?})",
+                        err.kind(),
+                        err.raw_os_error()
+                    ))
+                })?;
+                let db_path = directory.path().join("session.duckdb");
+                Ok(entry.insert(SessionEntry {
+                    directory,
+                    db_path,
+                    last_touched: Instant::now(),
+                    tables_used: 0,
+                    rows_used: 0,
+                }))
+            }
+        }
     }
 
     fn reserve_ingest_capacity(
@@ -1234,7 +1400,7 @@ impl ScratchpadSessionManager {
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
         let entry = state
             .sessions
-            .get_mut(session_id)
+            .get_mut(&self.session_key(session_id))
             .ok_or_else(|| ScratchpadError::scratchpad_session_not_found(session_id.to_string()))?;
         let max_tables_per_session = self.max_tables_per_session_limit();
 
@@ -1289,7 +1455,7 @@ impl ScratchpadSessionManager {
             return;
         };
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
-        if let Some(entry) = state.sessions.get_mut(session_id) {
+        if let Some(entry) = state.sessions.get_mut(&self.session_key(session_id)) {
             if mode == ScratchpadIngestMode::Create {
                 entry.tables_used = entry.tables_used.saturating_sub(1);
             }
@@ -1397,7 +1563,7 @@ impl ScratchpadSessionManager {
         let now = Instant::now();
         let path = state
             .sessions
-            .get_mut(session_id)
+            .get_mut(&self.session_key(session_id))
             .map(|entry| {
                 entry.last_touched = now;
                 entry.db_path.clone()
@@ -2109,15 +2275,7 @@ fn normalize_session_id(raw: &str) -> Result<String, ScratchpadError> {
     Ok(session_id.to_string())
 }
 
-fn session_db_path(root_dir: &Path, session_id: &str, database_namespace: usize) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    session_id.hash(&mut hasher);
-    std::process::id().hash(&mut hasher);
-    database_namespace.hash(&mut hasher);
-    root_dir.join(format!("session-{:016x}.duckdb", hasher.finish()))
-}
-
-fn prune_expired_locked(state: &mut SessionState, ttl: Duration) -> Vec<PathBuf> {
+fn prune_expired_locked(state: &mut SessionState, ttl: Duration) -> Vec<tempfile::TempDir> {
     let now = Instant::now();
     let mut expired_ids = Vec::new();
 
@@ -2133,7 +2291,7 @@ fn prune_expired_locked(state: &mut SessionState, ttl: Duration) -> Vec<PathBuf>
             state
                 .sessions
                 .remove(&session_id)
-                .map(|entry| entry.db_path)
+                .map(|entry| entry.directory)
         })
         .collect()
 }
@@ -2172,22 +2330,19 @@ fn session_info_from_entry(
     }
 }
 
-fn cleanup_paths(paths: Vec<PathBuf>) {
-    for path in paths {
-        cleanup_path(path);
+fn cleanup_paths(paths: Vec<tempfile::TempDir>) {
+    for directory in paths {
+        cleanup_path(directory);
     }
 }
 
-fn cleanup_path(path: PathBuf) {
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
+fn cleanup_path(directory: tempfile::TempDir) {
+    if let Err(err) = directory.close() {
+        if err.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(
                 target: "mcp_toolkit::scratchpad",
                 error = %err,
-                path = %path.display(),
-                "failed to remove scratchpad database file"
+                "failed to remove scratchpad session storage"
             );
         }
     }
@@ -2329,14 +2484,7 @@ mod tests {
         let databases = fs::read_dir(&root)
             .expect("read scratchpad root")
             .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .map(|extension| extension == "duckdb")
-                    .unwrap_or(false)
-            })
+            .filter(|entry| entry.path().join("session.duckdb").is_file())
             .count();
         assert_eq!(databases, 2, "manager namespace should avoid DB collisions");
 
@@ -2393,6 +2541,93 @@ mod tests {
     fn duckdb_engine_probe_succeeds() {
         let engine = DuckDbEngine::new().expect("engine should initialize");
         engine.probe().expect("probe must pass");
+    }
+
+    #[test]
+    fn scoped_sessions_isolate_data_inventory_and_release() {
+        let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let root = ScratchpadSessionManager::new(engine, test_config("scoped")).expect("root");
+        let a_scope = ScratchpadScope::new("issuer/a", "google/account-a").expect("scope a");
+        let b_scope = ScratchpadScope::new("issuer/b", "google/account-a").expect("scope b");
+        let a = root.for_scope(a_scope.clone(), 2).expect("view a");
+        let b = root.for_scope(b_scope, 2).expect("view b");
+        a.open_connection("shared")
+            .expect("connection a")
+            .execute_batch("CREATE TABLE private_data AS SELECT 11 AS value")
+            .expect("seed a");
+        b.open_connection("shared")
+            .expect("connection b")
+            .execute_batch("CREATE TABLE private_data AS SELECT 22 AS value")
+            .expect("seed b");
+        assert_eq!(
+            a.query_rows("shared", "SELECT value FROM private_data", 0, 1)
+                .expect("query a")
+                .rows[0]["value"],
+            json!(11)
+        );
+        assert_eq!(
+            b.query_rows("shared", "SELECT value FROM private_data", 0, 1)
+                .expect("query b")
+                .rows[0]["value"],
+            json!(22)
+        );
+        a.open_session("only_a").expect("private session");
+        assert_eq!(a.list_sessions(10).expect("list a").len(), 2);
+        assert_eq!(b.list_sessions(10).expect("list b").len(), 1);
+        assert_eq!(b.active_session_count().expect("count b"), 1);
+        assert!(b.session_info("only_a").is_err());
+        assert!(root.list_sessions(10).expect("root list").is_empty());
+        assert!(!root.release_session("shared").expect("root release"));
+        assert!(!b.release_session("only_a").expect("cross-scope release"));
+        assert!(a.release_session("shared").expect("release a"));
+        assert_eq!(b.list_tables("shared", 10).expect("b table").len(), 1);
+        assert!(a.list_tables("shared", 10).is_err());
+        let a_again = root.for_scope(a_scope, 2).expect("view a again");
+        assert_eq!(a_again.active_session_count().expect("count a"), 1);
+        a_again.open_session("shared").expect("new generation");
+        assert!(a_again
+            .list_tables("shared", 10)
+            .expect("empty new generation")
+            .is_empty());
+    }
+
+    #[test]
+    fn scoped_sessions_enforce_global_and_cross_account_principal_quotas() {
+        let engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new().expect("engine"));
+        let config = ScratchpadSessionConfig::new(Duration::from_secs(60), 2, 3, 100, 128);
+        let root = ScratchpadSessionManager::new(engine, config).expect("root");
+        let scope = ScratchpadScope::new("principal", "provider/a").expect("scope");
+        let a = root.for_scope(scope.clone(), 1).expect("view a");
+        let a_other = root
+            .for_scope(
+                ScratchpadScope::new("principal", "provider/b").expect("scope"),
+                1,
+            )
+            .expect("other account");
+        let b = root
+            .for_scope(
+                ScratchpadScope::new("other", "provider/a").expect("scope"),
+                1,
+            )
+            .expect("view b");
+        a.open_session("one").expect("first");
+        assert!(a_other.open_session("two").is_err());
+        assert!(a.open_session("two").is_err());
+        b.open_session("one").expect("second principal");
+        assert!(root.open_session("global_overflow").is_err());
+        assert!(a.set_max_sessions_limit(100).is_err());
+        assert!(a.set_max_tables_per_session_limit(100).is_err());
+        assert!(a.cleanup_expired().is_err());
+        assert!(a.for_scope(scope, 100).is_err());
+        assert!(a.release_session("one").expect("release"));
+        a_other.open_session("two").expect("budget reclaimed");
+        assert!(ScratchpadScope::new("", "provider").is_err());
+        assert!(ScratchpadScope::new("principal", "bad\nidentity").is_err());
+        assert!(!format!(
+            "{:?}",
+            ScratchpadScope::new("secret-principal", "secret-account").expect("scope")
+        )
+        .contains("secret"));
     }
 
     #[test]
