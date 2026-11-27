@@ -102,8 +102,14 @@ impl Authenticator {
             || !config.strict_oauth
             || config.introspection_url.is_some()
             || config.introspection_cache_ttl_s != 0.0
-            || config.issuer.as_deref().is_none_or(|value| value.trim().is_empty())
-            || config.audience.as_deref().is_none_or(|value| value.trim().is_empty())
+            || config
+                .issuer
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            || config
+                .audience
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
             || config.actor_claim != "sub"
             || config.required_scopes.is_empty()
         {

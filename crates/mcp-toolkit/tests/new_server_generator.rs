@@ -1882,7 +1882,7 @@ fn generator_emits_doctor_and_appropriate_client_config_commands_for_every_templ
         .unwrap_or_else(|error| panic!("generate template {}: {error}", template.id));
 
         let toolchain = read(&output.join("rust-toolchain.toml"));
-        assert!(toolchain.contains("channel = \"1.99.0\""));
+        assert!(toolchain.contains("channel = \"1.100.0\""));
         assert!(toolchain.contains("clippy"));
         assert!(toolchain.contains("rustfmt"));
 

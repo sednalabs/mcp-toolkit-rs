@@ -205,7 +205,7 @@ local pack without depending on private paths or ad hoc copy steps. The
 
 ## Portable first run
 
-The emitted `rust-toolchain.toml` selects Rust 1.99.0, including rustfmt and
+The emitted `rust-toolchain.toml` selects Rust 1.100.0, including rustfmt and
 Clippy. Run Cargo from this directory; rustup can install that toolchain on first
 use. After the initial dependency resolution, retain `Cargo.lock` and use
 `cargo test --locked` for repeatable builds.

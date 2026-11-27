@@ -1,7 +1,7 @@
 # The next small service
 
 Start with the maintained lean template, not a copy of provider-specific glue.
-From the toolkit checkout (Rust 1.99.0):
+From the toolkit checkout (Rust 1.100.0):
 
 ```sh
 cargo run --locked -p mcp-toolkit --bin mcp-toolkit -- new \
@@ -14,7 +14,7 @@ cargo run -- --print-client-config
 ```
 
 The CLI resolves `--toolkit-root .` before writing dependencies. The generated
-`rust-toolchain.toml` selects Rust 1.99.0 even outside the toolkit checkout;
+`rust-toolchain.toml` selects Rust 1.100.0 even outside the toolkit checkout;
 rustup may download it on first use. Keep the generated `Cargo.lock` after the
 first resolution, then use `cargo test --locked`. No credentials or live backend
 are needed for the starter tests. For a published toolkit dependency, generate with `--toolkit-git URL` instead

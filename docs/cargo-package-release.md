@@ -146,7 +146,7 @@ The native stdio workflows provide a separate, hosted-only proof archive for
 the checked-in public template. They build the five declared target archives,
 bind each archive to the exact candidate, manifest and lockfile digests, and
 compare the canonical tool inventory and schema before generating the trusted
-authorization receipt. These workflows use the pinned Rust 1.99.0 toolchain
+authorization receipt. These workflows use the pinned Rust 1.100.0 toolchain
 and remain publish-disabled: they do not create tags, invoke `cargo publish`,
 or change a registry, environment, secret, or release configuration. A green
 native archive proof cannot substitute for package-readiness evidence for any
@@ -168,8 +168,8 @@ keeps crates.io and docs.rs aligned and makes optional feature documentation
 visible unless a crate has a documented reason to build docs with a smaller
 feature set.
 
-All first-wave manifests use `rust-version = "1.99"`, matching the workspace
-compatibility floor and the hosted package and baseline lanes.
+All first-wave manifests use `rust-version = "1.99"`, matching the workspace compatibility floor. Release and baseline builds use
+Rust 1.100.0; the separate MSRV lane continues to check Rust 1.99.0.
 No homepage is declared: the repository URL is already the canonical project
 link, and an unresolved `sednalabs.io` homepage is deliberately rejected by the
 readiness verifier.
