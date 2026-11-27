@@ -17,7 +17,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ("single-crate-public-stdio", "curated-stdio-intent", "hosted-http-auth")
-GENERATED_RUST_TOOLCHAIN = "1.99.0"
+GENERATED_RUST_TOOLCHAIN = "1.100.0"
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str]) -> None:

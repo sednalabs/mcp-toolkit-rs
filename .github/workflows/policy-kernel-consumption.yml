@@ -235,8 +235,10 @@ jobs:
 
       - name: Install Rust toolchain
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
-        # dtolnay/rust-toolchain stable
+        # dtolnay/rust-toolchain 1.100.0
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.100.0
 
       - name: Cache cargo artifacts
         if: ${{ env.SKIP_POLICY_KERNEL_CONSUMPTION != '1' }}
