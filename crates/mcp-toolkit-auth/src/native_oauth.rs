@@ -798,10 +798,20 @@ mod tests {
             .exchange_code("fixture", CALLBACK, RESOURCE, &other_code, VERIFIER)
             .unwrap();
         let second = store
-            .refresh("fixture", RESOURCE, first.refresh_token.expose_secret(), None)
+            .refresh(
+                "fixture",
+                RESOURCE,
+                first.refresh_token.expose_secret(),
+                None,
+            )
             .unwrap();
         let third = store
-            .refresh("fixture", RESOURCE, second.refresh_token.expose_secret(), None)
+            .refresh(
+                "fixture",
+                RESOURCE,
+                second.refresh_token.expose_secret(),
+                None,
+            )
             .unwrap();
         assert!(store
             .refresh("other", RESOURCE, first.refresh_token.expose_secret(), None)
@@ -810,13 +820,23 @@ mod tests {
             .verified_grant(third.access_token.expose_secret())
             .is_ok());
         assert!(store
-            .refresh("fixture", RESOURCE, first.refresh_token.expose_secret(), None)
+            .refresh(
+                "fixture",
+                RESOURCE,
+                first.refresh_token.expose_secret(),
+                None
+            )
             .is_err());
         assert!(store
             .verified_grant(third.access_token.expose_secret())
             .is_err());
         assert!(store
-            .refresh("fixture", RESOURCE, third.refresh_token.expose_secret(), None)
+            .refresh(
+                "fixture",
+                RESOURCE,
+                third.refresh_token.expose_secret(),
+                None
+            )
             .is_err());
         assert!(store
             .verified_grant(other.access_token.expose_secret())
@@ -832,11 +852,21 @@ mod tests {
             .unwrap();
         for _ in 0..MAX_REFRESH_ROTATIONS {
             tokens = store
-                .refresh("fixture", RESOURCE, tokens.refresh_token.expose_secret(), None)
+                .refresh(
+                    "fixture",
+                    RESOURCE,
+                    tokens.refresh_token.expose_secret(),
+                    None,
+                )
                 .unwrap();
         }
         assert!(store
-            .refresh("fixture", RESOURCE, tokens.refresh_token.expose_secret(), None)
+            .refresh(
+                "fixture",
+                RESOURCE,
+                tokens.refresh_token.expose_secret(),
+                None
+            )
             .is_err());
         assert!(store
             .verified_grant(tokens.access_token.expose_secret())
