@@ -5,7 +5,7 @@
 //! authorization. It does not authenticate requests, issue MCP access tokens,
 //! or provide a distributed credential store.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry as MapEntry, HashMap};
 use std::fmt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -217,7 +217,7 @@ impl PendingOAuthStore {
     fn insert_at(
         &self,
         scope: PendingOAuthScope,
-        authorization: PendingOAuthAuthorization,
+        mut authorization: PendingOAuthAuthorization,
         now: Instant,
     ) -> Result<SecretString, PendingOAuthStoreError> {
         let deadline = now
@@ -240,30 +240,29 @@ impl PendingOAuthStore {
             return Err(PendingOAuthStoreError::InvalidTransaction);
         }
         entries.retain(|_, entry| entry.live_at(now));
-        if entries.contains_key(&correlation) {
-            return Err(PendingOAuthStoreError::Collision);
-        }
-        if entries.len() >= self.limits.max_pending
+        let at_capacity = entries.len() >= self.limits.max_pending
             || entries
                 .values()
                 .filter(|entry| entry.bound.scope.principal == scope.principal)
                 .count()
-                >= self.limits.max_pending_per_principal
-        {
-            return Err(PendingOAuthStoreError::CapacityReached);
+                >= self.limits.max_pending_per_principal;
+        match entries.entry(correlation) {
+            MapEntry::Occupied(_) => Err(PendingOAuthStoreError::Collision),
+            MapEntry::Vacant(_) if at_capacity => Err(PendingOAuthStoreError::CapacityReached),
+            MapEntry::Vacant(vacant) => {
+                // Keep the store's deadline authoritative even after claiming.
+                authorization.expires_at = expires_at;
+                let url = SecretString::new(authorization.authorization_url());
+                vacant.insert(Entry {
+                    bound: BoundPendingOAuthAuthorization {
+                        scope,
+                        authorization,
+                    },
+                    expires_at,
+                });
+                Ok(url)
+            }
         }
-        let url = SecretString::new(authorization.authorization_url());
-        entries.insert(
-            correlation,
-            Entry {
-                bound: BoundPendingOAuthAuthorization {
-                    scope,
-                    authorization,
-                },
-                expires_at,
-            },
-        );
-        Ok(url)
     }
 
     /// Atomically consume a transaction for a browser callback.
@@ -326,16 +325,12 @@ impl PendingOAuthStore {
             .map_err(|_| PendingOAuthStoreError::Unavailable)?;
         let now = now.max(Instant::now());
         entries.retain(|_, entry| entry.live_at(now));
-        if !entries
-            .get(&correlation)
-            .is_some_and(|entry| matches(&entry.bound))
-        {
-            return Err(PendingOAuthStoreError::InvalidTransaction);
+        if let MapEntry::Occupied(occupied) = entries.entry(correlation) {
+            if matches(&occupied.get().bound) {
+                return Ok(occupied.remove().bound);
+            }
         }
-        entries
-            .remove(&correlation)
-            .map(|entry| entry.bound)
-            .ok_or(PendingOAuthStoreError::InvalidTransaction)
+        Err(PendingOAuthStoreError::InvalidTransaction)
     }
 
     /// Remove pending transactions for one exact verified scope.
@@ -351,10 +346,18 @@ impl PendingOAuthStore {
             .entries
             .lock()
             .map_err(|_| PendingOAuthStoreError::Unavailable)?;
-        entries.retain(|_, entry| entry.live_at(now));
-        let before = entries.len();
-        entries.retain(|_, entry| &entry.bound.scope != scope);
-        Ok(before - entries.len())
+        let now = now.max(Instant::now());
+        let mut cancelled = 0;
+        entries.retain(|_, entry| {
+            let live = entry.live_at(now);
+            if live && &entry.bound.scope == scope {
+                cancelled += 1;
+                false
+            } else {
+                live
+            }
+        });
+        Ok(cancelled)
     }
 
     /// Remove expired transactions and reclaim their capacity.
@@ -367,6 +370,7 @@ impl PendingOAuthStore {
             .entries
             .lock()
             .map_err(|_| PendingOAuthStoreError::Unavailable)?;
+        let now = now.max(Instant::now());
         let before = entries.len();
         entries.retain(|_, entry| entry.live_at(now));
         Ok(before - entries.len())
@@ -488,6 +492,20 @@ mod tests {
             .consume_callback(&"x".repeat(4097), "one", CALLBACK)
             .is_err());
         assert!(PendingOAuthScope::new(" ", "flow").is_err());
+    }
+
+    #[test]
+    fn consumed_authorization_keeps_the_store_deadline() {
+        let store = store();
+        let now = Instant::now();
+        let url = store
+            .insert_at(scope("a", "one"), prepare(), now)
+            .expect("insert");
+        let (_, authorization) = store
+            .consume_callback(&state(&url), "one", CALLBACK)
+            .expect("claim")
+            .into_parts();
+        assert!(authorization.expires_at <= now + Duration::from_secs(60));
     }
 
     #[test]
