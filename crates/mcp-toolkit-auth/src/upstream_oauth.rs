@@ -19,6 +19,8 @@
 //! * RFC 6749: OAuth 2.0 Authorization Framework.
 //! * RFC 7636: Proof Key for Code Exchange.
 
+pub mod pending_store;
+
 use oauth2::basic::{BasicErrorResponse, BasicTokenType};
 use oauth2::{
     AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet,

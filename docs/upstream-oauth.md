@@ -61,13 +61,20 @@ For Google upstream APIs, the toolkit provides:
   provider-issued replacement refresh tokens.
 
 Provider-neutral hosted deployments can use `prepare_authorization` with
-`OAuthAuthorizationOptions` instead of binding a loopback listener. Store the
-returned `PendingOAuthAuthorization` in a bounded, principal-scoped transaction
-store keyed by `correlation_key()`, remove it atomically when the callback
-arrives, and call `finish` with the callback code, state, and error fields. The
-transaction is single-use, expires after its configured timeout, and keeps the
-PKCE verifier and raw state out of formatted output. Hash an incoming state with
-`oauth_callback_correlation_key` before looking up the transaction.
+`OAuthAuthorizationOptions` instead of binding a loopback listener. Use
+`upstream_oauth::pending_store::PendingOAuthStore` to bind each transaction to
+the verified initiating principal and trusted provider-flow configuration.
+The store enforces global and per-principal capacity, an absolute lifetime
+cap, bounded browser URL size, hashed state correlation and atomic single-use
+consumption. Wrong-route and wrong-scope callbacks fail without consuming a
+valid transaction. Use `consume_callback` with the expected flow and redirect
+URI from trusted route configuration; the consumed transaction retains the
+original initiating scope. If the callback is itself authenticated, use
+`consume_for_scope` instead. Call `finish` with the original callback code,
+state, and error fields, and persist credentials only under the bound scope.
+Do not log the browser URL, state, or returned tokens, and never send tokens
+back in the browser response. Cancellation removes pending local transactions
+only, not previously exchanged provider credentials.
 
 `PendingOAuthAuthorization` is intentionally an in-process value: it contains
 the PKCE verifier and monotonic expiry state and is not serializable. A
