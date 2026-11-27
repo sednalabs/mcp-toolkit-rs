@@ -601,7 +601,8 @@ impl ScratchpadSessionManager {
 
     pub fn max_sessions_limit(&self) -> usize {
         let global = self.runtime_max_sessions.load(Ordering::SeqCst);
-        self.principal_session_limit.map_or(global, |limit| limit.min(global))
+        self.principal_session_limit
+            .map_or(global, |limit| limit.min(global))
     }
 
     pub fn set_max_sessions_limit(&self, max_sessions: usize) -> Result<(), ScratchpadError> {
@@ -640,7 +641,11 @@ impl ScratchpadSessionManager {
     pub fn active_session_count(&self) -> Result<usize, ScratchpadError> {
         let mut state = self.lock_state()?;
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
-        let count = state.sessions.keys().filter(|key| key.scope == self.scope).count();
+        let count = state
+            .sessions
+            .keys()
+            .filter(|key| key.scope == self.scope)
+            .count();
         drop(state);
         cleanup_paths(removed_paths);
         Ok(count)
@@ -1270,14 +1275,17 @@ impl ScratchpadSessionManager {
         let mut state = self.lock_state()?;
         let removed_paths = prune_expired_locked(&mut state, self.config.session_ttl);
         let max_tables_per_session = self.max_tables_per_session_limit();
-        let snapshot = state.sessions.get_mut(&self.session_key(&session_id)).map(|entry| {
-            entry.last_touched = Instant::now();
-            snapshot_from_entry(
-                entry,
-                max_tables_per_session,
-                self.config.max_rows_per_session,
-            )
-        });
+        let snapshot = state
+            .sessions
+            .get_mut(&self.session_key(&session_id))
+            .map(|entry| {
+                entry.last_touched = Instant::now();
+                snapshot_from_entry(
+                    entry,
+                    max_tables_per_session,
+                    self.config.max_rows_per_session,
+                )
+            });
 
         drop(state);
         cleanup_paths(removed_paths);
@@ -2575,7 +2583,10 @@ mod tests {
         let a_again = root.for_scope(a_scope, 2).expect("view a again");
         assert_eq!(a_again.active_session_count().expect("count a"), 1);
         a_again.open_session("shared").expect("new generation");
-        assert!(a_again.list_tables("shared", 10).expect("empty new generation").is_empty());
+        assert!(a_again
+            .list_tables("shared", 10)
+            .expect("empty new generation")
+            .is_empty());
     }
 
     #[test]
@@ -2586,10 +2597,16 @@ mod tests {
         let scope = ScratchpadScope::new("principal", "provider/a").expect("scope");
         let a = root.for_scope(scope.clone(), 1).expect("view a");
         let a_other = root
-            .for_scope(ScratchpadScope::new("principal", "provider/b").expect("scope"), 1)
+            .for_scope(
+                ScratchpadScope::new("principal", "provider/b").expect("scope"),
+                1,
+            )
             .expect("other account");
         let b = root
-            .for_scope(ScratchpadScope::new("other", "provider/a").expect("scope"), 1)
+            .for_scope(
+                ScratchpadScope::new("other", "provider/a").expect("scope"),
+                1,
+            )
             .expect("view b");
         a.open_session("one").expect("first");
         assert!(a_other.open_session("two").is_err());
@@ -2604,7 +2621,11 @@ mod tests {
         a_other.open_session("two").expect("budget reclaimed");
         assert!(ScratchpadScope::new("", "provider").is_err());
         assert!(ScratchpadScope::new("principal", "bad\nidentity").is_err());
-        assert!(!format!("{:?}", ScratchpadScope::new("secret-principal", "secret-account").expect("scope")).contains("secret"));
+        assert!(!format!(
+            "{:?}",
+            ScratchpadScope::new("secret-principal", "secret-account").expect("scope")
+        )
+        .contains("secret"));
     }
 
     #[test]
